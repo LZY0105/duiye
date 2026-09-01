@@ -1028,6 +1028,7 @@
   border-radius: var(--pill-radius);
   font-weight: 600;
   font-size: 0.78rem;
+  line-height: 1;
 }
 .pdf-slot-btn.is-answer-action:hover { background: rgba(10, 96, 255, 0.16); }
 .pdf-ws-slot.is-narrow .pdf-slot-btn-text,
@@ -1078,9 +1079,7 @@
    sits in. A label on a control never wraps: it shortens, or it goes. */
 .pdf-slot-btn.is-answer-action {
   flex: 0 0 auto;
-  height: 30px;
   white-space: nowrap;
-  line-height: 1;
 }
 .pdf-slot-btn.is-answer-action svg { flex: 0 0 auto; }
 .pdf-slot-btn-text { white-space: nowrap; }
@@ -1135,12 +1134,31 @@
    the work durable — it is what lets someone see that it is. It is enabled only
    while there is something unwritten, which turns "disabled" into a status:
    greyed out means already safe. */
+/* Both labelled pills sit IN the row, not on top of it.
+ 
+   They were 30px tall next to 32px siblings, kept the base button's glass
+   hairline underneath their own flat fill — a second edge reading as a seam —
+   and inherited a hover that translates the button up by a pixel and adds a
+   drop shadow. Between the three, the save control looked like it belonged to
+   a different layer than the toolbar it is part of. Same height, one edge, and
+   a hover that changes colour instead of elevation. */
+.pdf-slot-btn.is-save-action,
+.pdf-slot-btn.is-answer-action {
+  height: 2rem;
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+.pdf-slot-btn.is-save-action:hover:not(:disabled),
+.pdf-slot-btn.is-answer-action:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+}
+
 .pdf-slot-btn.is-save-action {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   width: auto;
-  height: 30px;
   padding: 0 10px;
   border-radius: var(--pill-radius);
   white-space: nowrap;

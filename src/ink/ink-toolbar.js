@@ -98,6 +98,8 @@ const metaFor = (tool) => TOOL_META.find(t => t.tool === tool) || TOOL_META[0];
 const iconFor = (tool, size) => icon(metaFor(tool).icon, size);
 const labelFor = (tool) => metaFor(tool).label;
 
+const clampNumber = (v, lo, hi) => (hi < lo ? (lo + hi) / 2 : Math.min(hi, Math.max(lo, v)));
+
 /** Honour the OS reduced-motion setting, per §8.3. */
 function prefersReducedMotion() {
   try {
@@ -267,6 +269,9 @@ export class InkToolbar {
     `;
 
     this._bindToolbar();
+    // Placement was computed from the PREVIOUS contents, so the bar's real size
+    // is only known now. Clamp once it exists.
+    this._clampIntoHost();
     if (!this._keepCard) this._renderCard();
   }
 
@@ -282,6 +287,51 @@ export class InkToolbar {
     } else {
       s[edge] = '10px';
       s.left = `${offset * 100}%`;
+      s.transform = 'translateX(-50%)';
+    }
+  }
+
+  /**
+   * Keeps the whole bar — and above all its handle — inside the workspace.
+   *
+   * Placement is an edge plus a fraction along it, applied as a percentage with
+   * a -50% translate, so the fraction addresses the bar's CENTRE. Nothing
+   * accounted for the bar's own length: a tall vertical bar at offset 0.13 in a
+   * 730px host puts its centre at 94px and its top at -126px, and the drag
+   * handle — which lives at the top — ends up above the viewport.
+   *
+   * The result was a toolbar that could not be dragged, because the only thing
+   * you may drag it by was off screen. It was reachable by luck, depending on
+   * how tall the bar happened to be and where it was last released.
+   */
+  _clampIntoHost() {
+    const host = this.host;
+    if (!host) return;
+    const hostW = host.clientWidth;
+    const hostH = host.clientHeight;
+    const barW = this.root.offsetWidth;
+    const barH = this.root.offsetHeight;
+    if (!hostW || !hostH || !barW || !barH) return;
+
+    const M = 8;   // never flush against the edge; the rim needs room to read
+    const s = this.root.style;
+    const vertical = this.state.edge === EDGES.LEFT || this.state.edge === EDGES.RIGHT;
+
+    if (vertical) {
+      const half = barH / 2;
+      // A bar taller than the host cannot be fully shown; centre it and let it
+      // overflow evenly rather than hiding one end.
+      const centre = barH + M * 2 >= hostH
+        ? hostH / 2
+        : clampNumber(this.state.offset * hostH, half + M, hostH - half - M);
+      s.top = `${centre}px`;
+      s.transform = 'translateY(-50%)';
+    } else {
+      const half = barW / 2;
+      const centre = barW + M * 2 >= hostW
+        ? hostW / 2
+        : clampNumber(this.state.offset * hostW, half + M, hostW - half - M);
+      s.left = `${centre}px`;
       s.transform = 'translateX(-50%)';
     }
   }
