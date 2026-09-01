@@ -46,7 +46,7 @@
   border-color: var(--accent);
   background: var(--accent-light);
   transform: translateY(-2px);
-  box-shadow: 0 10px 30px rgba(0, 122, 255, 0.12);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.054);
 }
 .drop-zone input { display: none; }
 .drop-zone .icon { margin-bottom: 0.6rem; color: var(--accent); font-size: 2.4rem; opacity: 0.85; filter: drop-shadow(0 4px 10px rgba(0, 122, 255, 0.2)); }
@@ -276,7 +276,7 @@ pre.result-code {
   background: linear-gradient(135deg, var(--accent), #5856D6);
   display: flex; align-items: center; justify-content: center;
   color: #fff; flex-shrink: 0;
-  box-shadow: 0 4px 16px rgba(0, 122, 255, 0.3);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.135);
 }
 .pdf-range-title {
   font-size: 1.15rem; font-weight: 700; color: var(--fg); letter-spacing: -0.01em;
@@ -325,9 +325,9 @@ pre.result-code {
 .pdf-range-btn.secondary:hover { background: var(--card-bg); }
 .pdf-range-btn.primary {
   background: var(--accent);
-  color: #fff; box-shadow: 0 4px 16px rgba(0, 122, 255, 0.35);
+  color: #fff; box-shadow: 0 4px 16px rgba(15, 23, 42, 0.158);
 }
-.pdf-range-btn.primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(0, 122, 255, 0.45); }
+.pdf-range-btn.primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(15, 23, 42, 0.18); }
 .pdf-range-btn:active { transform: scale(0.96); }
 
 /* ── PDF page browser ── */
@@ -344,7 +344,7 @@ pre.result-code {
   border: 2px solid var(--border-color); cursor: pointer;
   object-fit: cover; opacity: 0.6; transition: opacity 0.2s, border-color 0.2s, transform 0.2s;
 }
-.pdf-thumb.active { border-color: var(--accent); opacity: 1; transform: scale(1.04); box-shadow: 0 4px 12px rgba(0, 122, 255, 0.25); }
+.pdf-thumb.active { border-color: var(--accent); opacity: 1; transform: scale(1.04); box-shadow: 0 4px 12px rgba(15, 23, 42, 0.113); }
 .pdf-thumb:hover { opacity: 0.9; }
 
 /* ── Export dropdown ── */

@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="对页">
+  <title>对页</title>
+  <!--
+    对页 — the app icon.
+
+    Metaphor: two facing pages that fit each other.
+
+    The whole product is one idea — a workbook on one side, its answer key on
+    the other, and the app working out which entry belongs to the question in
+    front of you. So the mark is the two panes, and the seam between them is
+    where the meaning is: the left page carries a notch, the right page carries
+    the tab that fills it. They interlock across the centre line.
+
+    That is the matching engine drawn as geometry, and it is also the divider
+    the user actually drags. Nothing here is a pencil, a formula or a graduation
+    cap; those describe the subject, not the tool.
+
+    Negative space does the work, so it survives being shrunk: at 40px the
+    notch and tab read as two pages that belong together, and at 1024px the
+    construction is still exact — both circles are r=26 centred on x=256.
+  -->
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2f74ff"/>
+      <stop offset="1" stop-color="#0a4fdc"/>
+    </linearGradient>
+    <!-- The notch is cut, not drawn: the page is one shape with a bite taken. -->
+    <mask id="notch">
+      <rect width="512" height="512" fill="#fff"/>
+      <circle cx="230" cy="256" r="26" fill="#000"/>
+    </mask>
+  </defs>
+
+  <rect width="512" height="512" rx="114" fill="url(#ground)"/>
+
+  <!-- left page: the workbook, notched -->
+  <rect x="96" y="128" width="134" height="256" rx="22" fill="#fff" mask="url(#notch)"/>
+
+  <!-- right page: the answer key, with the tab that fills the notch -->
+  <g fill="#fff">
+    <rect x="282" y="128" width="134" height="256" rx="22"/>
+    <circle cx="282" cy="256" r="26"/>
+  </g>
+</svg>

@@ -1,23 +1,25 @@
 {
-  "name": "LaTeXSnipper - Formula OCR",
-  "short_name": "LaTeXSnipper",
-  "description": "Offline formula OCR app — ONNX Runtime in-browser recognition",
+  "name": "对页 — 教材手写批注与对题",
+  "short_name": "对页",
+  "description": "练习册与答案册同屏手写批注，自动对题。全部处理在设备内完成。",
+  "lang": "zh-CN",
   "start_url": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#0f111a",
-  "theme_color": "#2563eb",
+  "background_color": "#f4f6f9",
+  "theme_color": "#0a60ff",
   "icons": [
     {
-      "src": "/icon.png",
-      "sizes": "192x192",
-      "type": "image/png"
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
     },
     {
-      "src": "/icon.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any maskable"
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
     }
   ]
 }

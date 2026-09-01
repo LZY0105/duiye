@@ -7,9 +7,10 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#2563eb">
   <meta name="version" content="0.0.0"><!-- auto-replaced by vite build -->
-  <meta name="description" content="LaTeXSnipper — 公式识别 — 离线 ONNX 公式 OCR 识别">
-  <title>LaTeXSnipper — 公式识别</title>
-  <link rel="icon" type="image/png" href="/icon.png">
+  <meta name="description" content="对页 — 练习册与答案册同屏手写批注，自动对题">
+  <title>对页 — 教材手写批注与对题</title>
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="apple-touch-icon" href="/icon.svg">
   <link rel="manifest" href="/manifest.json">
   <link rel="stylesheet" href="/vendor/mathlive/mathlive-fonts.css">
 </head>
@@ -21,8 +22,15 @@
   <nav class="top-nav">
     <div class="inner">
       <span class="brand-link">
-        <span class="brand-math-symbol">∑</span>
-        <span>LaTeXSnipper</span>
+        <span class="brand-math-symbol" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor">
+            <mask id="brand-notch"><rect width="24" height="24" fill="#fff"/><circle cx="11" cy="12" r="2.1" fill="#000"/></mask>
+            <rect x="2.5" y="4.5" width="8.5" height="15" rx="1.9" mask="url(#brand-notch)"/>
+            <rect x="13" y="4.5" width="8.5" height="15" rx="1.9"/>
+            <circle cx="13" cy="12" r="2.1"/>
+          </svg>
+        </span>
+        <span>对页</span>
       </span>
       <div class="top-nav-actions">
       </div>
@@ -35,9 +43,9 @@
   <div class="splash" id="splash">
     <div class="splash-inner">
       <div class="splash-icon">
-        <img src="/icon.png" alt="LaTeXSnipper" width="72" height="72" style="border-radius:18px;">
+        <img src="/icon.svg" alt="对页" width="72" height="72" style="border-radius:18px;">
       </div>
-      <div class="splash-title">LaTeXSnipper</div>
+      <div class="splash-title">对页</div>
       <div class="splash-subtitle">公式识别</div>
       <div class="splash-progress-wrap">
         <div class="splash-progress-track">

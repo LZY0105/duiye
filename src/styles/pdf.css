@@ -138,7 +138,7 @@
 
 .pdf-ws-slot.is-active {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-light), 0 6px 24px rgba(0, 122, 255, 0.14);
+  box-shadow: 0 0 0 2px var(--accent-light), 0 6px 24px rgba(15, 23, 42, 0.063);
 }
 
 .pdf-ws-slot[hidden] { display: none; }
@@ -183,7 +183,7 @@
   align-items: center;
   justify-content: center;
   margin: 0 auto 1.25rem;
-  box-shadow: 0 4px 16px rgba(0, 122, 255, 0.15);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.068);
 }
 
 .pdf-empty-title {
@@ -222,12 +222,12 @@
 .pdf-empty-btn.primary {
   background: var(--accent);
   color: #fff;
-  box-shadow: 0 4px 14px rgba(0, 122, 255, 0.3);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.135);
 }
 
 .pdf-empty-btn.primary:hover {
   transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(0, 122, 255, 0.4);
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.18);
 }
 
 .pdf-empty-btn.secondary {
@@ -307,7 +307,7 @@
   height: 60px;
   background: var(--accent);
   border-color: transparent;
-  box-shadow: 0 0 16px rgba(0, 122, 255, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.6);
 }
 
 .pdf-workspace.is-column .pdf-ws-divider:hover .pdf-ws-divider-grip,
@@ -417,7 +417,7 @@
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
-  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.35);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.158);
 }
 
 .pdf-slot-sep {

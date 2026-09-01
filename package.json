@@ -1,8 +1,8 @@
 {
-  "name": "latexsnipper-mobile",
+  "name": "duiye",
   "private": true,
   "version": "1.3.0",
-  "description": "Handwriting note-taking app for textbooks — annotate PDFs and match answers on-device",
+  "description": "对页 — handwriting annotation for textbooks, with automatic answer matching",
   "type": "module",
   "scripts": {
     "dev": "vite",
