@@ -215,6 +215,13 @@ export class PdfWorkspace {
       // mirrored, or dragging the divider would move it away from the finger.
       if (this.state.swapped) raw = 1 - raw;
 
+      // Edge magnetism. Inside the closing zone the divider stops tracking the
+      // finger and goes the rest of the way on its own, so the pane visibly
+      // collapses to nothing rather than being held at a 3% sliver while the
+      // user tries to decide. The pull IS the answer to "will this close?".
+      if (raw <= CLOSE_THRESHOLD) raw = 0;
+      else if (raw >= 1 - CLOSE_THRESHOLD) raw = 1;
+
       // Free drag. There used to be magnetic detents at 0.3, 0.5 and 0.7 —
       // the three preset buttons wearing a different hat. They are gone with
       // the buttons: the divider now rests wherever it is put, anywhere in
@@ -286,10 +293,12 @@ export class PdfWorkspace {
         : r >= 1 - CLOSE_THRESHOLD ? (this.state.swapped ? SLOTS.PRIMARY : SLOTS.SECONDARY)
           : null;
       if (closing) {
-        // Put the divider back to centre first, so the surviving document does
-        // not inherit a ratio that means "closed".
-        this._setState(setDividerRatio(this.state, 0.5));
-        this.closeSlot(closing);
+        this._absorbPane(closing, () => {
+          // Put the divider back to centre first, so the surviving document
+          // does not inherit a ratio that means "closed".
+          this._setState(setDividerRatio(this.state, 0.5));
+          this.closeSlot(closing);
+        });
         return;
       }
       try { if (pointerId !== null) this.elDivider.releasePointerCapture(pointerId); } catch (_) { /* gone */ }
@@ -507,6 +516,34 @@ export class PdfWorkspace {
       e.stopPropagation();
       this.swapPanes();
     });
+  }
+
+  /**
+   * Plays a pane being absorbed into the edge before it closes.
+   *
+   * Closing used to be instantaneous: the pane was there, and then the other
+   * document filled the screen. Nothing said which one had gone or where it
+   * went, which on a two-document workspace is exactly the thing the user needs
+   * to see. It collapses toward the edge it was dragged into, and the close
+   * lands when the motion does.
+   *
+   * The callback runs on finish OR on failure, so a browser that cannot animate
+   * still closes the pane — the animation reports the state change, it does not
+   * own it.
+   */
+  _absorbPane(slot, done) {
+    const el = this.elSlots[slot];
+    if (!el || typeof el.animate !== 'function' || prefersReducedMotion()) { done(); return; }
+
+    const toLeft = (slot === SLOTS.PRIMARY) !== !!this.state.swapped;
+    const anim = el.animate(
+      [
+        { transform: 'none', opacity: 1 },
+        { transform: `translateX(${toLeft ? -18 : 18}px) scaleX(0.86)`, opacity: 0 },
+      ],
+      { duration: 260, easing: 'cubic-bezier(0.4, 0, 1, 1)' },
+    );
+    anim.finished.then(done, done);
   }
 
   _showRatioBadge(ratio) {

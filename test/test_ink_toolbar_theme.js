@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   CARDS, EDGES, ERASER_TOOL, ORIENTATION, TOOLBAR_PHASE,
-  closeCard, createToolbarState, endDrag, isEraser, moveDrag, nearestEdge,
+  closeCard, createToolbarState, endDrag, isEraser, isCornerPoint, moveDrag, nearestEdge,
   openCard, orientationFor, orientationOf, selectTool, serializeToolbarState,
   setColor, setEraserMode, setEraserWidth, setOpacity, setWidth, startDrag,
 } from '../src/ink/toolbar-state.js';
@@ -303,6 +303,63 @@ ok(
   /\.pdf-workspace\s*\{[^}]*position:\s*relative/s.test($read('src/styles/pdf.css')),
   'the workspace anchors the floating overlay',
 );
+
+// ═══════════════════════════════════════════════════════════════
+group('9. Corner docking');
+
+check('a release in a corner docks to that corner, not to the nearer edge', () => {
+  const V = { width: 1000, height: 800 };
+  // Deep in a corner both edges are equally close, so nearest-edge alone
+  // resolves it on a rounding tie. A corner has one answer.
+  const tl = nearestEdge({ x: 20, y: 24 }, V);
+  assert.equal(tl.corner, true);
+  assert.equal(tl.edge, EDGES.LEFT);
+  assert.equal(tl.offset, 0, 'the top of the left edge IS the top-left corner');
+
+  const br = nearestEdge({ x: 985, y: 780 }, V);
+  assert.equal(br.corner, true);
+  assert.equal(br.edge, EDGES.RIGHT);
+  assert.equal(br.offset, 1);
+});
+
+check('all four corners are reachable and distinct', () => {
+  const V = { width: 1000, height: 800 };
+  const seen = new Set();
+  for (const [x, y] of [[10, 10], [990, 10], [10, 790], [990, 790]]) {
+    const r = nearestEdge({ x, y }, V);
+    assert.equal(r.corner, true, 'must read as a corner: ' + x + ',' + y);
+    seen.add(r.edge + ':' + r.offset);
+  }
+  assert.equal(seen.size, 4, 'each corner must be its own destination');
+});
+
+check('the middle of an edge is still an edge', () => {
+  const V = { width: 1000, height: 800 };
+  const mid = nearestEdge({ x: 6, y: 400 }, V);
+  assert.equal(mid.corner, false);
+  assert.equal(mid.edge, EDGES.LEFT);
+  assert.ok(mid.offset > 0.4 && mid.offset < 0.6);
+});
+
+check('isCornerPoint agrees with nearestEdge', () => {
+  const V = { width: 1000, height: 800 };
+  assert.equal(isCornerPoint({ x: 12, y: 12 }, V), true);
+  assert.equal(isCornerPoint({ x: 500, y: 12 }, V), false);
+  assert.equal(isCornerPoint(null, V), false);
+});
+
+check('a corner dock still carries every ink setting across', () => {
+  let s0 = createToolbarState({ tool: 'highlighter', color: '#16a34a', width: 7 });
+  const V = { width: 1000, height: 800 };
+  s0 = startDrag(s0, { x: 500, y: 400 });
+  s0 = moveDrag(s0, { x: 12, y: 12 });
+  const after = endDrag(s0, { x: 12, y: 12 }, V);
+  assert.equal(after.edge, EDGES.LEFT);
+  assert.equal(after.offset, 0);
+  assert.equal(after.tool, 'highlighter', 'movement never changes the tool');
+  assert.equal(after.color, '#16a34a');
+  assert.equal(after.width, 7);
+});
 
 console.log('\n═══════════════════════════════════════════════════════════════');
 console.log(`  ${PASS} passed, ${FAIL} failed`);

@@ -98,3 +98,56 @@
   .top-nav .inner { gap: 0.6rem; }
   [data-skin="liquid-math"] .top-nav .inner { padding: 0 0.6rem; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Tablet
+   ══════════════════════════════════════════════════════════════════════════
+   This app is used on a tablet, held, with a stylus in one hand and the other
+   hand resting on the glass. That is a different set of assumptions from a
+   phone or a desktop, and these are the ones worth stating.
+*/
+
+/* A palm resting on the screen must not select text, raise the callout menu, or
+   leave a tap highlight on whatever it landed on. The workspace is a drawing
+   surface; only real text content stays selectable. */
+.pdf-workspace,
+.pdf-page-bar,
+.pdf-slot-toolbar,
+.ink-toolbar,
+.ink-card,
+.bottom-nav,
+.top-nav {
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+.answer-panel,
+.answer-value,
+.pdf-outline-panel {
+  user-select: text;   /* an answer is for reading, and for copying */
+}
+
+/* Nothing outside the panes scrolls. A pan that runs past the edge of a page
+   should stop there, not drag the whole app and expose the background. */
+html, body { overscroll-behavior: none; }
+.pdf-pane-viewport { overscroll-behavior: contain; }
+
+/* Landscape is the working posture: two books side by side. Portrait stacks
+   them, and the workspace already switches orientation on its own — what it
+   needs from CSS is for the chrome not to eat the height. */
+@media (orientation: portrait) and (min-width: 600px) {
+  .pdf-page-bar { padding-block: 0.4rem; }
+  .pdf-slot-toolbar { padding-block: 0.2rem; }
+}
+
+/* A stylus reports hover on some tablets and not others, so hover states must
+   never be the only way to find a control. The swap handle on the divider is
+   the one that was hover-revealed; on a touch tablet it stays visible. */
+@media (hover: none) {
+  .pdf-ws-swap { opacity: 0.85; }
+}
+
+/* Wide tablets in landscape: give the pages the width and keep the chrome thin. */
+@media (min-width: 1024px) and (orientation: landscape) {
+  .pdf-workspace { padding: 6px; gap: 3px; }
+}

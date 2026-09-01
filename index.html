@@ -2,7 +2,12 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5, viewport-fit=cover">
+  <!-- Tablet: the page itself must not zoom. Pinch belongs to the PDF pane, which
+       handles it explicitly; browser page-zoom on top of that gives two zooms
+       fighting over one gesture, and double-tap-to-zoom steals the second tap of
+       a double tap on a tool. `interactive-widget` keeps the workspace from
+       being resized out from under a stylus when a keyboard appears. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#2563eb">
@@ -106,9 +111,7 @@
               <div class="set-section-title" data-i18n="settings.skin">皮肤</div>
               <div class="set-select-wrap">
                 <select class="set-select" id="setSkinSelect">
-                  <option value="liquid-math">✨ 数学 · 真液态玻璃 (Math Liquid Glass)</option>
-                  <option value="default">Apple 原生玻璃 (iOS Glass)</option>
-                  <option value="warm">暖咖纸墨</option>
+                  <option value="liquid-math">对页 · 液态玻璃</option>
                   <option value="minimal">极简纤白</option>
                 </select>
               </div>

@@ -22,6 +22,7 @@ import {
   closeCard,
   createToolbarState,
   endDrag,
+  isCornerPoint,
   isEraser,
   moveDrag,
   openCard,
@@ -336,6 +337,45 @@ export class InkToolbar {
     }
   }
 
+  /**
+   * Plays the token being pulled into its dock and unfolding there.
+   *
+   * FLIP, and transform-only: the bar is already laid out where it belongs, so
+   * this animates it FROM where the token was — a translate for the travel and
+   * a scale for the difference between a 3rem circle and a full bar. The
+   * resting position is therefore correct whether or not a single frame is ever
+   * painted, which matters at the end of a gesture the user may have finished
+   * by lifting the stylus clear of the screen.
+   *
+   * A corner release lands harder: same motion, given a spring that overshoots
+   * slightly, so "absorbed into the corner" reads differently from "placed on
+   * an edge".
+   */
+  _absorb(from, corner) {
+    const el = this.root;
+    if (!from || typeof el.animate !== 'function' || prefersReducedMotion()) return;
+    const to = el.getBoundingClientRect();
+    if (!to.width || !to.height || !from.width || !from.height) return;
+
+    const dx = (from.left + from.width / 2) - (to.left + to.width / 2);
+    const dy = (from.top + from.height / 2) - (to.top + to.height / 2);
+    const sx = Math.max(0.15, from.width / to.width);
+    const sy = Math.max(0.15, from.height / to.height);
+
+    el.animate(
+      [
+        { transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, opacity: 0.9 },
+        { transform: 'none', opacity: 1 },
+      ],
+      {
+        duration: corner ? 420 : 320,
+        easing: corner
+          ? 'cubic-bezier(0.22, 1.2, 0.36, 1)'
+          : 'cubic-bezier(0.32, 0.72, 0, 1)',
+      },
+    );
+  }
+
   _positionToken() {
     const point = this.state.dragPoint;
     if (!point) return;
@@ -424,7 +464,15 @@ export class InkToolbar {
     this._onDragMove = (e) => {
       if (this._drag.pointerId !== e.pointerId) return;
       e.stopPropagation();
-      this._set(moveDrag(this.state, toHostPoint(e)), { pushTools: false });
+      const point = toHostPoint(e);
+      this._set(moveDrag(this.state, point), { pushTools: false });
+
+      // Magnetism has to be visible before the finger lifts, or it is just a
+      // surprise on release. Inside a corner zone the token swells and its cast
+      // deepens — the language of something being pulled toward a magnet.
+      const rect = this.host.getBoundingClientRect();
+      const armed = isCornerPoint(point, { width: rect.width, height: rect.height });
+      this.root.classList.toggle('is-corner-armed', armed);
     };
 
     /**
@@ -439,10 +487,15 @@ export class InkToolbar {
       this._drag.pointerId = null;
       try { this.root.releasePointerCapture(pointerId); } catch (_) { /* already released */ }
       const rect = this.host.getBoundingClientRect();
-      this._set(
-        endDrag(this.state, toHostPoint(e), { width: rect.width, height: rect.height }),
-        { pushTools: false },
-      );
+      const point = toHostPoint(e);
+      const viewport = { width: rect.width, height: rect.height };
+      const corner = isCornerPoint(point, viewport);
+      // Where the token is right now, before the expanded bar replaces it.
+      const from = this.root.getBoundingClientRect();
+
+      this.root.classList.remove('is-corner-armed');
+      this._set(endDrag(this.state, point, viewport), { pushTools: false });
+      this._absorb(from, corner);
     };
 
     this.root.addEventListener('pointerdown', this._onDragStart);

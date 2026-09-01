@@ -16,6 +16,14 @@
 import { INK_TOOLS, TOOL_DEFAULTS } from './stroke.js';
 import { ERASER_MODES } from './ink-eraser.js';
 
+/**
+ * How far into the workspace a corner reaches, as a fraction of each axis.
+ *
+ * Large enough that aiming at a corner does not require precision with a
+ * stylus in one hand, small enough that the middle of an edge is still an edge.
+ */
+export const CORNER_ZONE = 0.18;
+
 export const EDGES = Object.freeze({
   LEFT: 'left',
   RIGHT: 'right',
@@ -208,6 +216,27 @@ export function nearestEdge(point, viewport) {
   const x = Math.min(width, Math.max(0, point.x));
   const y = Math.min(height, Math.max(0, point.y));
 
+  // Corners first.
+  //
+  // Judging a corner by nearest edge alone cannot work: at a corner both edges
+  // are equally close, so the result flips on a pixel and the bar lands on
+  // whichever side won the rounding. A corner is its own destination — release
+  // inside the zone and the bar goes to the END of the vertical edge, which
+  // puts it in that corner and orients it the way a corner has room for.
+  const zoneX = width * CORNER_ZONE;
+  const zoneY = height * CORNER_ZONE;
+  const nearLeft = x <= zoneX;
+  const nearRight = x >= width - zoneX;
+  const nearTop = y <= zoneY;
+  const nearBottom = y >= height - zoneY;
+  if ((nearLeft || nearRight) && (nearTop || nearBottom)) {
+    return {
+      edge: nearLeft ? EDGES.LEFT : EDGES.RIGHT,
+      offset: nearTop ? 0 : 1,
+      corner: true,
+    };
+  }
+
   const distances = [
     { edge: EDGES.LEFT, distance: x, offset: y / height },
     { edge: EDGES.RIGHT, distance: width - x, offset: y / height },
@@ -216,7 +245,13 @@ export function nearestEdge(point, viewport) {
   ];
   distances.sort((a, b) => a.distance - b.distance);
   const best = distances[0];
-  return { edge: best.edge, offset: clamp01(best.offset) };
+  return { edge: best.edge, offset: clamp01(best.offset), corner: false };
+}
+
+/** Whether a release point would dock the bar into a corner. */
+export function isCornerPoint(point, viewport) {
+  if (!point || !viewport) return false;
+  return nearestEdge(point, viewport).corner === true;
 }
 
 // ── tool state ──────────────────────────────────────────────────────────────

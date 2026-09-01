@@ -1174,3 +1174,58 @@
 }
 .pdf-slot-btn.is-save-action:disabled { opacity: 0.55; cursor: default; }
 .pdf-slot-btn.is-save-action svg { flex: 0 0 auto; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Press rebound
+   ══════════════════════════════════════════════════════════════════════════
+   Pill controls compress under the finger and spring back past their resting
+   size before settling. The curve is a real damped spring — response 0.34s,
+   damping fraction 0.52, sampled as `linear()` — rather than an ease that only
+   looks springy. It peaks at 1.147 of the travel, which on a 6% compression is
+   about a 1% overshoot: felt, not watched.
+
+   Springs, not fixed easing, is the Apple motion rule; `linear()` is how a
+   spring is expressed in CSS without running one in JavaScript. */
+:root {
+  --spring-rebound: linear(0, 0.0465, 0.1637, 0.321, 0.4932, 0.6608, 0.8104,
+    0.934, 1.0281, 1.0928, 1.1309, 1.1466, 1.1449, 1.1309, 1.1094, 1.0844,
+    1.0591, 1.0358, 1.0161, 1.0005, 0.9894, 0.9823, 0.9789, 0.9783, 1);
+}
+
+.answer-goto,
+.pdf-slot-btn.is-save-action,
+.pdf-slot-btn.is-answer-action,
+.pdf-bar-btn,
+.ocr-btn,
+.answer-close {
+  /* The rebound belongs to the RELEASE. Going down is immediate — a control
+     that eases into being pressed feels unresponsive — so the spring is on the
+     default state and the pressed state snaps. */
+  transition: transform 320ms var(--spring-rebound),
+              background 140ms ease,
+              color 140ms ease;
+}
+.answer-goto:active,
+.pdf-slot-btn.is-save-action:active:not(:disabled),
+.pdf-slot-btn.is-answer-action:active,
+.pdf-bar-btn:active,
+.ocr-btn:active,
+.answer-close:active {
+  transform: scale(0.94);
+  transition: transform 60ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .answer-goto,
+  .pdf-slot-btn.is-save-action,
+  .pdf-slot-btn.is-answer-action,
+  .pdf-bar-btn,
+  .ocr-btn,
+  .answer-close { transition: background 140ms ease, color 140ms ease; }
+  .answer-goto:active,
+  .pdf-slot-btn.is-save-action:active:not(:disabled),
+  .pdf-slot-btn.is-answer-action:active,
+  .pdf-bar-btn:active,
+  .ocr-btn:active,
+  .answer-close:active { transform: none; }
+}
