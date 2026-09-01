@@ -1,0 +1,703 @@
+/* Floating Ink toolbar — a slab of glass the stylus can move.
+   Everything here is an overlay: nothing in this file participates in the
+   workspace layout, so opening a card or moving the bar cannot resize the
+   document panes. */
+
+.ink-toolbar,
+.ink-card-layer {
+  position: absolute;
+  z-index: 35;
+}
+
+/* The bar sits above its own card layer. Both were z-index 35, and the layer
+   spans the whole workspace, so which one a stylus reached at the overlap
+   depended on document order alone. */
+.ink-toolbar { z-index: 36; }
+
+.ink-card-layer {
+  inset: 0;
+  /* The layer itself is inert; only the card inside it takes pointer events,
+     so the rest of the page stays reachable by the stylus. */
+  pointer-events: none;
+}
+
+.ink-card-layer > * { pointer-events: auto; }
+
+/* ── the bar ──────────────────────────────────────────────────────────────── */
+
+.ink-toolbar {
+  --ink-hit: 44px;      /* the touch target a stylus or fingertip needs */
+  --ink-icon: 22px;
+  --ink-gap: 2px;
+
+  /* A control surface carries a legibility floor that a decorative one does
+     not: it is read while it sits over unknown content. Both are local
+     overrides of the shared material rather than edits to it, because a card
+     the size of a page can afford transparency this bar cannot.
+
+     The glint is sized to the surface too. At the 84px it inherits, a single
+     catchlight covered a third of a bar this short and read as a smear. */
+  --glass-bg: rgba(255, 255, 255, 0.28);
+  --glass-glint-size: 62px;
+  --glass-glint-core: rgba(255, 255, 255, 0.42);
+
+  display: flex;
+  align-items: center;
+  gap: var(--ink-gap);
+  padding: 5px;
+  border-radius: var(--pill-radius, 999px);
+  background: var(--glass-bg, rgba(255, 255, 255, 0.72));
+  backdrop-filter: var(--glass-blur, blur(20px) saturate(200%));
+  -webkit-backdrop-filter: var(--glass-blur, blur(20px) saturate(200%));
+  box-shadow: var(--glass-shadow, 0 8px 32px rgba(0, 0, 0, 0.12));
+  border: var(--glass-border, 0.5px solid rgba(255, 255, 255, 0.7));
+  user-select: none;
+  isolation: isolate;
+
+  /* `manipulation`, not `none`. `none` on the bar cancelled touch scrolling for
+     everything inside it, which meant a vertical bar holding more tools than
+     fit could not be scrolled at all — the overflow rule below was dead. The
+     drag handle still takes `none` for itself, where it is actually needed. */
+  touch-action: manipulation;
+
+  /* Never `all`. The bar's left/top/transform are written directly by
+     _positionExpanded() and _positionToken(); transitioning them meant the
+     collapsed token eased toward the stylus over 240ms instead of tracking it,
+     so the drag felt like it was on elastic, and re-docking to a new edge
+     played as a slide across the whole workspace. */
+  transition:
+    background 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    box-shadow 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    padding 200ms cubic-bezier(0.32, 0.72, 0, 1),
+    border-radius 200ms cubic-bezier(0.32, 0.72, 0, 1),
+    scale 140ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.ink-toolbar[data-orientation='vertical'] { flex-direction: column; }
+.ink-toolbar[data-orientation='horizontal'] { flex-direction: row; }
+
+.ink-toolbar.no-motion,
+.ink-toolbar.no-motion * { transition: none !important; animation: none !important; }
+
+.ink-tools,
+.ink-swatches {
+  display: flex;
+  gap: var(--ink-gap);
+  align-items: center;
+}
+
+.ink-toolbar[data-orientation='vertical'] .ink-tools,
+.ink-toolbar[data-orientation='vertical'] .ink-swatches { flex-direction: column; }
+
+/* A vertical bar can hold more tools than fit; scroll smoothly rather than
+   clip. The mask is the affordance: with the scrollbar hidden and nothing
+   else to see, a clipped last tool looked like the end of the list. Fading
+   the cut edge says there is more below without spending any width. */
+.ink-toolbar[data-orientation='vertical'] .ink-tools {
+  max-height: 48vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
+          mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
+}
+.ink-toolbar[data-orientation='vertical'] .ink-tools::-webkit-scrollbar { display: none; }
+
+/* ── group separators ─────────────────────────────────────────────────────── */
+
+/* Brightest in the middle, gone at both ends — an edge seen through glass,
+   not a ruled line. */
+.ink-sep {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 1px;
+  height: 22px;
+  margin: 0 3px;
+  border-radius: 1px;
+  background: linear-gradient(to bottom,
+    transparent, rgba(15, 23, 42, 0.16) 32%, rgba(15, 23, 42, 0.16) 68%, transparent);
+}
+
+.ink-toolbar[data-orientation='vertical'] .ink-sep {
+  width: 22px;
+  height: 1px;
+  margin: 3px 0;
+  background: linear-gradient(to right,
+    transparent, rgba(15, 23, 42, 0.16) 32%, rgba(15, 23, 42, 0.16) 68%, transparent);
+}
+/* ── the grab handle ──────────────────────────────────────────────────────── */
+
+.ink-handle {
+  flex: 0 0 auto;
+  width: var(--ink-hit);
+  height: var(--ink-hit);
+  border: 0;
+  background: none;
+  color: var(--fg);
+  opacity: 0.4;
+  cursor: grab;
+  padding: 0;
+  /* The handle is the one element that genuinely needs the whole gesture. */
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: opacity 180ms cubic-bezier(0.32, 0.72, 0, 1),
+              color 180ms cubic-bezier(0.32, 0.72, 0, 1),
+              background 180ms cubic-bezier(0.32, 0.72, 0, 1),
+              scale 140ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.ink-handle .ink-icon { --ink-icon: 20px; }
+.ink-overflow .ink-icon { --ink-icon: 20px; }
+.ink-swatch.is-custom .ink-icon { --ink-icon: 18px; }
+
+.ink-handle:hover { opacity: 0.85; color: var(--fg); background: rgba(15, 23, 42, 0.05); }
+.ink-handle:active { cursor: grabbing; scale: 0.94; }
+/* ── tools ────────────────────────────────────────────────────────────────── */
+
+.ink-tool,
+.ink-overflow {
+  position: relative;
+  flex: 0 0 auto;
+  width: var(--ink-hit);
+  height: var(--ink-hit);
+  padding: 0;
+  border-radius: 50%;
+  border: 0;
+  background: transparent;
+  /* Foreground, not `--muted`. This bar floats over whatever the document
+     happens to show — a printed page, a photographed problem set, a colour
+     plate — and a slate-gray icon on glass this transparent measured close to
+     2:1 against a saturated backdrop. There are only two states to tell apart
+     here, idle and selected, and the accent plus the lens already carry the
+     difference; the idle icon does not have to be dim as well. */
+  color: var(--fg);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* `scale` and `color` only. The old rule transitioned `all`, so `transform`
+     was animated too — and because :hover set translateY while .is-selected
+     set scale, hovering a selected tool replaced its scale outright and the
+     selection visibly deflated under the pointer. */
+  transition: color 200ms cubic-bezier(0.32, 0.72, 0, 1),
+              background 200ms cubic-bezier(0.32, 0.72, 0, 1),
+              scale 160ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Sized here, not by the attributes in the markup, so the pointer query below
+   moves the icon and its target together. z-index keeps the glyph above the
+   selection lens without depending on negative-z paint order. */
+.ink-icon {
+  display: block;
+  width: var(--ink-icon, 22px);
+  height: var(--ink-icon, 22px);
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.ink-tool:hover,
+.ink-overflow:hover {
+  color: var(--fg);
+  background: rgba(15, 23, 42, 0.05);
+}
+.ink-tool:active,
+.ink-overflow:active { scale: 0.92; }
+
+/* Selection is a lens, matching the sliding pill the segmented controls use,
+   rather than the accent ring it was. A ring drawn outside a round button on
+   a translucent bar has nothing to sit against and read as a halo; a piece of
+   glass under the icon reads as the tool being picked up. */
+.ink-tool.is-selected {
+  color: var(--accent);
+  background: transparent;
+}
+
+.ink-tool.is-selected::before {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+  box-shadow:
+    0 1px 1px rgba(15, 23, 42, 0.05),
+    0 4px 10px -3px rgba(15, 23, 42, 0.14),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.92),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.36),
+    inset 0 -5px 7px -6px rgba(15, 23, 42, 0.16);
+  backdrop-filter: blur(6px) saturate(240%) brightness(110%);
+  -webkit-backdrop-filter: blur(6px) saturate(240%) brightness(110%);
+  animation: ink-lens-in 220ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@keyframes ink-lens-in {
+  from { opacity: 0; scale: 0.72; }
+  to   { opacity: 1; scale: 1; }
+}
+/* ── colour swatches ──────────────────────────────────────────────────────── */
+
+.ink-swatch {
+  position: relative;
+  flex: 0 0 auto;
+  /* Square hit area at the same rhythm as the tools, with a smaller disc drawn
+     inside it. The swatches were 20px targets on a bar meant for a stylus —
+     under half the size a finger can reliably hit, and the smallest controls
+     in the app by a wide margin. */
+  width: calc(var(--ink-hit) - 10px);
+  height: var(--ink-hit);
+  padding: 0;
+  border: 0;
+  background: none;
+  border-radius: 999px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  transition: scale 160ms cubic-bezier(0.32, 0.72, 0, 1),
+              color 180ms ease;
+}
+
+.ink-swatch-fill {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: inherit;
+  /* An inner hairline instead of an outer border, so a white swatch keeps an
+     edge on light glass and a black one keeps an edge on dark glass without
+     either being ringed in a colour that is not in the palette. */
+  box-shadow:
+    inset 0 0 0 1px rgba(15, 23, 42, 0.18),
+    inset 0 1px 1px rgba(255, 255, 255, 0.45),
+    0 1px 2px rgba(15, 23, 42, 0.14);
+  transition: box-shadow 180ms cubic-bezier(0.32, 0.72, 0, 1),
+              scale 180ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.ink-swatch:hover .ink-swatch-fill { scale: 1.1; }
+.ink-swatch:active { scale: 0.94; }
+
+/* The selected colour is marked by a gap and a ring, so the mark survives
+   whatever colour sits underneath it — including one that matches the ring. */
+.ink-swatch.is-selected .ink-swatch-fill {
+  scale: 0.86;
+  box-shadow:
+    inset 0 0 0 1px rgba(15, 23, 42, 0.18),
+    0 0 0 3px rgba(255, 255, 255, 0.92),
+    0 0 0 4.5px var(--accent),
+    0 1px 3px rgba(15, 23, 42, 0.2);
+}
+.ink-toolbar[data-orientation='vertical'] .ink-swatch {
+  width: var(--ink-hit);
+  height: calc(var(--ink-hit) - 10px);
+}
+
+.ink-swatch.is-custom {
+  color: var(--fg);
+  opacity: 0.55;
+  border-radius: 50%;
+}
+.ink-swatch.is-custom:hover { opacity: 1; }
+.ink-swatch.is-custom:hover { color: var(--accent); background: rgba(15, 23, 42, 0.05); }
+/* Keyboard focus, in the palette rather than the browser's blue. This bar had
+   no visible focus state at all: the outline that the reset removed was never
+   replaced, so a keyboard or switch user could not see where they were. */
+.ink-handle:focus-visible,
+.ink-tool:focus-visible,
+.ink-overflow:focus-visible,
+.ink-swatch:focus-visible,
+.ink-seg-btn:focus-visible,
+.ink-palette-dot:focus-visible,
+.ink-danger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── collapsed drag token ─────────────────────────────────────────────────── */
+
+.ink-toolbar.is-dragging {
+  padding: 0;
+  border-radius: 50%;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.ink-token {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 50%;
+  background: var(--glass-bg, rgba(255, 255, 255, 0.8));
+  backdrop-filter: blur(20px) saturate(200%) brightness(106%);
+  -webkit-backdrop-filter: blur(20px) saturate(200%) brightness(106%);
+  color: var(--accent);
+  /* Lifted higher than the docked bar: it is in the air, and the cast is the
+     only thing that says so. */
+  box-shadow:
+    0 2px 3px rgba(15, 23, 42, 0.08),
+    0 14px 28px -6px rgba(15, 23, 42, 0.20),
+    0 28px 48px -18px rgba(120, 165, 245, 0.28),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.95),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.42);
+  display: grid;
+  place-items: center;
+  position: relative;
+  animation: tokenPop 0.18s cubic-bezier(0.32, 0.72, 0, 1);
+}
+@keyframes tokenPop {
+  from { transform: scale(0.7); opacity: 0.5; }
+  to   { transform: scale(1); opacity: 1; }
+}
+
+.ink-token-glyph { display: grid; place-items: center; line-height: 0; }
+
+.ink-token-dot {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 50%;
+  border: 2px solid var(--card-bg, #fff);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+/* ── setting cards ────────────────────────────────────────────────────────── */
+
+.ink-card {
+  position: absolute;
+  min-width: 16rem;
+  max-width: 20rem;
+  padding: 0.85rem 1rem;
+  border-radius: var(--card-radius, 18px);
+  background: var(--card-bg, rgba(255, 255, 255, 0.82));
+  backdrop-filter: var(--glass-blur, blur(20px) saturate(200%));
+  -webkit-backdrop-filter: var(--glass-blur, blur(20px) saturate(200%));
+  border: var(--glass-border, 0.5px solid rgba(255, 255, 255, 0.75));
+  box-shadow: var(--glass-shadow, 0 8px 32px rgba(0, 0, 0, 0.18));
+  isolation: isolate;
+  animation: ink-card-in 200ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@keyframes ink-card-in {
+  from { opacity: 0; translate: 0 -6px; scale: 0.96; }
+  to   { opacity: 1; translate: 0 0; scale: 1; }
+}
+
+/* The app-wide reduced-motion rule in base.css collapses these durations
+   already; this only stops the card's entrance from starting six pixels off
+   its resting position, since that offset is in the keyframes rather than in
+   the duration. */
+@media (prefers-reduced-motion: reduce) {
+  .ink-card { animation: none; }
+}
+
+.ink-card-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 0.6rem;
+  color: var(--fg);
+  letter-spacing: -0.01em;
+}
+
+.ink-preview {
+  height: 2.2rem;
+  display: grid;
+  place-items: center;
+  /* Paper, not glass. This is the one well in the card whose job is to show a
+     stroke of ink truthfully, and it cannot do that over a moving backdrop —
+     on the transparent fill it briefly had, a dark stroke over dark content
+     simply vanished. */
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.10);
+  border-radius: 10px;
+  margin-bottom: 0.65rem;
+}
+.ink-preview-line {
+  display: block;
+  width: 82%;
+  border-radius: 999px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.ink-field {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--fg);
+  margin-bottom: 0.65rem;
+}
+
+.ink-field span { display: block; margin-bottom: 0.25rem; color: var(--muted); }
+.ink-field input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+  /* A 4px-tall native range track is not a stylus target. */
+  height: 28px;
+  /* And a slider must own its whole gesture.
+  
+     Without this the browser is free to read a drag across the track as a
+     scroll or a pan and hand it to an ancestor, which is why the width and
+     opacity sliders could be dragged with a mouse but not with a stylus or a
+     finger — on the device this app actually ships to. The same rule applies to
+     every tool's card: pen, marker, highlighter and eraser all use .ink-field. */
+  touch-action: none;
+}
+
+.ink-card-swatches,
+.ink-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.ink-palette { margin-bottom: 0.7rem; }
+
+/* Swatches inside a card carry their colour as a direct background rather than
+   through a fill span, so they take the ring on themselves. */
+.ink-card-swatches .ink-swatch,
+.ink-palette-dot {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 10px;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+  box-shadow:
+    inset 0 0 0 1px rgba(15, 23, 42, 0.16),
+    inset 0 1px 1px rgba(255, 255, 255, 0.4);
+  transition: scale 180ms cubic-bezier(0.32, 0.72, 0, 1),
+              box-shadow 180ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.ink-card-swatches .ink-swatch:hover,
+.ink-palette-dot:hover { scale: 1.08; }
+.ink-card-swatches .ink-swatch:active,
+.ink-palette-dot:active { scale: 0.95; }
+
+.ink-card-swatches .ink-swatch.is-selected,
+.ink-palette-dot.is-selected {
+  scale: 1.06;
+  box-shadow:
+    inset 0 0 0 1px rgba(15, 23, 42, 0.16),
+    0 0 0 2px var(--card-bg, #fff),
+    0 0 0 3.5px var(--accent);
+}
+
+.ink-seg {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--glass-bg-subtle, rgba(0,0,0,0.04));
+  border-radius: 12px;
+  margin-bottom: 0.7rem;
+  border: var(--glass-border-subtle);
+}
+
+.ink-seg-btn {
+  flex: 1 1 auto;
+  padding: 0.5rem;
+  border-radius: 9px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.ink-seg-btn:hover { color: var(--fg); }
+
+.ink-seg-btn.is-selected {
+  background: var(--card-bg, #fff);
+  color: var(--accent);
+  font-weight: 600;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.ink-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--fg);
+  margin-bottom: 0.6rem;
+  cursor: pointer;
+  user-select: none;
+  min-height: 32px;
+}
+
+.ink-check input[type='checkbox'] {
+  accent-color: var(--accent);
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.ink-danger {
+  width: 100%;
+  padding: 0.6rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 59, 48, 0.25);
+  background: rgba(255, 59, 48, 0.08);
+  color: #d70015;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--transition-fast), color var(--transition-fast),
+              scale 140ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.ink-danger:hover { background: #d70015; color: #fff; }
+.ink-danger:active { scale: 0.98; }
+
+.ink-note {
+  margin: 0.5rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* Sizing follows the input device, not the viewport. The old query shrank the
+   controls to 1.9rem below 560px — the narrow tablet split view, which is
+   exactly where the stylus is in use and the targets most need their size. */
+@media (pointer: fine) {
+  .ink-toolbar { --ink-hit: 36px; --ink-icon: 20px; }
+  .ink-swatch-fill { width: 17px; height: 17px; }
+}
+
+@media (max-width: 560px) {
+  .ink-card { min-width: 13rem; max-width: 16rem; }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Skin: Math Liquid Glass
+   ══════════════════════════════════════════════════════════════ */
+
+[data-skin="liquid-math"] .ink-toolbar,
+[data-skin="liquid-math"] .ink-card {
+  background: var(--glass-bg);
+  border: 0;
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+
+  /* No `position` here. It used to say `relative`, which beat the
+     `position: absolute` at the top of this file on specificity — so under
+     this skin, and only under this skin, the floating toolbar and its cards
+     dropped into normal flow: the bar stretched the full width of the
+     workspace, pinned to the top, and neither the edge it was docked to nor
+     the offset it was dragged to had any effect. The absolute positioning it
+     inherits already establishes the containing block the rim and glint need.
+
+     `filter: url(#apple-liquid-card)` used to sit here, and it was the single
+     reason this bar did not read as glass. A CSS `filter` applies to the
+     element's OWN rendering, so a displacement map with scale 26 warped the
+     icons, the separators and the antialiased edge of the pill — the toolbar
+     smeared, and the scene behind it, which is the only thing a lens can
+     actually bend, stayed perfectly straight. Refraction lives on the
+     backdrop; the rim and glint below carry the rest.
+
+     It also cost: the filter chained two 3x3 feConvolveMatrix passes, re-run
+     on every pointer frame, on the surface that floats over the inking canvas.
+
+     `overflow: hidden` went with it. It was needed to contain that filter, and
+     it clipped the selected tool's lens and every tap ripple to the pill. */
+}
+
+/* The rim: one Fresnel ring, brightest where it faces the light, swinging as
+   the pointer moves. Replaces `1px solid rgba(255,255,255,.85)`, which lit all
+   four sides identically and read as a cut-out rather than an edge. */
+[data-skin="liquid-math"] .ink-toolbar::after,
+[data-skin="liquid-math"] .ink-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: var(--glass-rim-width, 1.25px);
+  background:
+    conic-gradient(from calc(var(--glass-angle, 135deg) - 100deg),
+      var(--glass-rim-bright)  0deg,
+      var(--glass-rim-mid)    58deg,
+      var(--glass-rim-dim)   126deg,
+      var(--glass-rim-dim)   190deg,
+      var(--glass-rim-mid)   258deg,
+      var(--glass-rim-bright) 330deg,
+      var(--glass-rim-bright) 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask-composite: exclude;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* The glint: one small catchlight tracking the pointer, plus a hot core. The
+   previous 260x180px radial at 0.55 white covered most of a toolbar this size,
+   which is not a highlight — it is a fog that hides whatever is behind. */
+[data-skin="liquid-math"] .ink-toolbar::before,
+[data-skin="liquid-math"] .ink-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(circle var(--glass-glint-size, 84px) at var(--glass-x, 30%) var(--glass-y, 20%),
+      var(--glass-glint-core, rgba(255, 255, 255, 0.5)) 0%,
+      rgba(255, 255, 255, 0.07) 42%,
+      transparent 76%),
+    radial-gradient(circle 14px at var(--glass-x, 30%) var(--glass-y, 20%),
+      rgba(255, 255, 255, 0.26) 0%,
+      transparent 100%);
+  mix-blend-mode: screen;
+  pointer-events: none;
+  z-index: 1;
+}
+
+[data-skin="liquid-math"] .ink-toolbar { --glass-rim-width: 1px; }
+/* The card is read, not just seen: it carries labels, numeric readouts and a
+   colour well. It takes the same legibility floor as the bar, and a glint kept
+   well under the toolbar's — a catchlight travelling across a settings panel
+   is a distraction where the same light on a control bar is depth. */
+[data-skin="liquid-math"] .ink-card {
+  --glass-bg: rgba(255, 255, 255, 0.42);
+  --glass-glint-size: 110px;
+  --glass-glint-core: rgba(255, 255, 255, 0.24);
+}
+[data-skin="liquid-math"] .ink-toolbar.is-dragging {
+  background: transparent;
+  box-shadow: none;
+}
+[data-skin="liquid-math"] .ink-toolbar.is-dragging::before,
+[data-skin="liquid-math"] .ink-toolbar.is-dragging::after { display: none; }
+
+[data-skin="liquid-math"] .ink-token {
+  background: rgba(255, 255, 255, 0.24);
+  box-shadow:
+    0 2px 3px rgba(15, 23, 42, 0.08),
+    0 14px 28px -6px rgba(15, 23, 42, 0.18),
+    0 28px 48px -18px rgba(120, 165, 245, 0.30),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.95),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.42),
+    inset 0 -7px 9px -8px rgba(15, 23, 42, 0.16);
+  backdrop-filter: blur(14px) saturate(220%) brightness(108%);
+  -webkit-backdrop-filter: blur(14px) saturate(220%) brightness(108%);
+}
+
+[data-skin="liquid-math"] .ink-seg-btn.is-selected {
+  background: rgba(255, 255, 255, 0.28);
+  color: var(--accent);
+  font-weight: 600;
+  backdrop-filter: blur(8px) saturate(230%) brightness(108%);
+  -webkit-backdrop-filter: blur(8px) saturate(230%) brightness(108%);
+  box-shadow:
+    0 2px 6px -2px rgba(15, 23, 42, 0.14),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.9),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.35);
+}

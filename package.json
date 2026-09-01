@@ -1,0 +1,55 @@
+{
+  "name": "latexsnipper-mobile",
+  "private": true,
+  "version": "1.3.0",
+  "description": "Handwriting note-taking app for textbooks — annotate PDFs and match answers on-device",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "sync:android": "cap sync android",
+    "build:android": "npm run build && npm run sync:android",
+    "preview": "vite preview",
+    "test:answers": "node test/test_answer_matching.js",
+    "test:pdf-open": "node test/test_pdf_open_performance.js",
+    "test:ink-drag": "node test/test_ink_toolbar_drag_dom.js",
+    "test:glass-motion": "node test/test_liquid_glass_motion.js",
+    "test": "npm run test:answers && npm run test:pdf-open && npm run test:ink-drag && npm run test:ink-active && npm run test:glass-motion && npm run test:matcher && npm run test:index && npm run test:engine && npm run test:structure && npm run test:no-bookmarks && npm run test:real-pdfs && npm run test:corpus",
+    "test:matcher": "node test/test_question_matcher.js",
+    "test:index": "node test/test_answer_index.js",
+    "test:engine": "node test/test_matching_engine.js",
+    "test:structure": "node test/test_structure.js",
+    "test:no-bookmarks": "node test/test_no_bookmarks.js",
+    "test:real-pdfs": "node test/test_real_pdfs.js",
+    "test:corpus": "node test/test_corpus_regression.js",
+    "test:ink-active": "node test/test_ink_active_pane.js"
+  },
+  "dependencies": {
+    "@capacitor/app": "^8.1.0",
+    "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/share": "^8.0.1",
+    "idb": "^8.0.0",
+    "jszip": "^3.10.1",
+    "katex": "^0.17.0",
+    "mathjax": "^3.2.2",
+    "mathlive": "^0.104.0",
+    "onnxruntime-web": "1.21.0",
+    "pandoc-wasm": "^1.0.1",
+    "pdfjs-dist": "4.2.67",
+    "pngjs": "^7.0.0",
+    "tesseract.js": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^8.3.4",
+    "@capacitor/cli": "^8.3.4",
+    "@capacitor/core": "^8.3.4",
+    "@capacitor/ios": "^8.3.4",
+    "jsdom": "^30.0.1",
+    "sharp": "^0.34.5",
+    "vite": "^8.0.16",
+    "vite-plugin-pwa": "^1.3.0"
+  },
+  "overrides": {
+    "tar": "^7.5.16"
+  }
+}

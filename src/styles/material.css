@@ -1,0 +1,1158 @@
+/* material.css — the material tier system.
+ *
+ * Loaded last, on purpose. This file does not invent a new look; it decides
+ * WHICH LAYER each surface belongs to, and it is the authority on that one
+ * question. Everything before it supplies palette, geometry and layout.
+ *
+ * The problem it fixes
+ * ────────────────────
+ * The app had 153 `backdrop-filter` declarations. Apple's rule is the opposite:
+ * glass belongs to the NAVIGATION layer, content stays sharp beneath it
+ * (HIG Materials; WWDC25 "Meet Liquid Glass"). Blurring content as well as
+ * chrome destroys the one cue that made the chrome read as floating — the
+ * contrast between a sharp content plane and a blurred one — and every blurred
+ * element costs its own GPU compositing layer, which on a tablet also running a
+ * 120 Hz stylus pipeline is budget taken straight from ink.
+ *
+ * Worse, several surfaces were glass sitting ON glass: keypad buttons inside a
+ * glass keypad, library rows inside a glass drawer, the theme toggle inside the
+ * glass nav. A backdrop-filter whose backdrop is itself a backdrop-filter does
+ * not compound — it blurs already-blurred pixels into milk.
+ *
+ * The three tiers
+ * ───────────────
+ *   1. CHROME   floats above content and gets real glass: blur, rim, bevel,
+ *               cast shadow. Navigation, toolbars, sheets, popovers, HUDs.
+ *   2. CONTENT  is what the user came for. Opaque, sharp, quiet. Cards, rows,
+ *               editors, drop zones. Never blurred.
+ *   3. CONTROL  sits ON tier 1 or tier 2. It is a fill and a hairline, never
+ *               its own pane of glass.
+ *
+ * Demoting a surface means two changes, not one: the blur comes off AND the
+ * fill goes opaque. A 13%-white fill is only legible because a blur is
+ * concentrating light behind it; removing the blur alone would leave the text
+ * floating on the workspace grid. Every demotion below carries its own surface.
+ *
+ * On `!important`
+ * ───────────────
+ * The eight skins declare their glass through selectors like
+ * `[data-skin="liquid-math"][data-theme="dark"] .ocr-btn`, which outrank any
+ * plain class selector this file could write. Matching that specificity per
+ * skin per theme would mean re-stating every rule eight times and would still
+ * lose to the next skin someone adds.
+ *
+ * So this file is deliberately authoritative, and `!important` is confined to
+ * the properties that define a tier — `backdrop-filter`, the surface fill of a
+ * demoted element, and the label colour that has to travel with that fill. The
+ * last one is not optional: the glass skin gives the primary button an accent
+ * LABEL because it used to have a white glass fill, so re-tinting the fill to
+ * the accent without also claiming the colour paints accent text on an accent
+ * background — a 1:1 contrast ratio and an invisible button.
+ *
+ * Palette, geometry, type and layout stay entirely with the skins: nothing here sets a hue that a skin chose. A skin can still
+ * restyle any of these surfaces; what it can no longer do is put a second pane
+ * of glass inside the first one.
+ */
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Tier tokens
+   ══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* Tier 2 — content. Opaque by definition: this is the plane glass floats over. */
+  --mat-content: #ffffff;
+  --mat-content-sunken: #f6f7f9;
+  --mat-content-hairline: rgba(15, 23, 42, 0.09);
+  --mat-content-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 8px 20px -12px rgba(15, 23, 42, 0.10);
+
+  /* Tier 3 — controls. Fills, never panes. Two sets: one for a control resting
+     on content, one brighter for a control resting on chrome glass, where the
+     backdrop is already blurred and a grey fill would read as dirt. */
+  --mat-control: rgba(15, 23, 42, 0.045);
+  --mat-control-hover: rgba(15, 23, 42, 0.075);
+  --mat-control-active: rgba(15, 23, 42, 0.11);
+  --mat-control-hairline: rgba(15, 23, 42, 0.10);
+  --mat-on-glass: rgba(255, 255, 255, 0.50);
+  --mat-on-glass-hover: rgba(255, 255, 255, 0.68);
+  --mat-on-glass-active: rgba(255, 255, 255, 0.80);
+
+  /* The 8-point grid. 4pt half-steps exist for tight groupings only. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* Minimum comfortable target. Apple's floor is 44pt, and this is a tablet app
+     driven with a stylus in one hand. */
+  --tap-min: 44px;
+}
+/* ══════════════════════════════════════════════════════════════════════════
+   Tier 2 — content surfaces come off the glass
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.result-card,
+.history-item,
+.set-group,
+.pdf-empty-card,
+.provider-row,
+.status-bar,
+#mathField {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background: var(--mat-content) !important;
+  border: 1px solid var(--mat-content-hairline);
+  box-shadow: var(--mat-content-shadow);
+}
+
+/* The drop zone is the one content surface that should read as a well rather
+   than a card — it is asking to receive something. */
+.drop-zone {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background: var(--mat-content-sunken) !important;
+  border: 1.5px dashed var(--mat-content-hairline);
+  box-shadow: none;
+}
+
+/* A row inside a glass drawer was the clearest glass-on-glass case in the app:
+   the drawer blurs the page, then each row blurred the drawer. A list item is a
+   fill and a divider, which is what this now is. */
+.pdf-library-row {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background: transparent !important;
+  border: 0;
+  border-bottom: 1px solid var(--mat-content-hairline);
+  box-shadow: none;
+}
+.pdf-library-row:hover { background: var(--mat-control) !important; }
+.pdf-library-row:last-child { border-bottom: 0; }
+
+/* The rotate preview is a canvas. A canvas has its own pixels; blurring what is
+   behind it does nothing except allocate a compositing layer. */
+.cam-rotate-track canvas {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Tier 3 — controls stop pretending to be glass
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Every one of these had its own backdrop-filter while sitting on a surface
+   that already had one. The blur comes off; how each skin colours them is left
+   alone, except where a control was relying on the blur to be visible at all.
+   `.mode-tab` / `.settings-tab` / `.pdf-preset-btn` keep whatever background
+   their skin gives them: in the glass skin the sliding lens underneath is the
+   sole background owner, and in the flat skins the active tile is. */
+.theme-toggle,
+.skin-quick-toggle,
+.brand-math-symbol,
+.calc-btn,
+.mode-tab,
+.settings-tab,
+.pdf-preset-btn,
+.cam-mode-btn,
+.cam-close,
+.pdf-bar-group,
+.ink-seg-btn,
+.ink-tool.is-selected::before {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Controls resting on chrome glass need a fill of their own once the blur is
+   gone, or they vanish into the pane they sit on. */
+.calc-btn,
+.theme-toggle,
+.skin-quick-toggle {
+  background: var(--mat-on-glass) !important;
+  box-shadow: none;
+}
+.calc-btn:hover,
+.theme-toggle:hover,
+.skin-quick-toggle:hover { background: var(--mat-on-glass-hover) !important; }
+.calc-btn:active { background: var(--mat-on-glass-active) !important; }
+
+/* ── Buttons stay clear glass ─────────────────────────────────────────────────
+   An earlier pass here filled the primary action with the accent, on the Apple
+   rule that exactly one element per group should be tinted. That is not the
+   look this app wants: its buttons are glass capsules, and a capsule reads as
+   glass because you can see the page through it. So the fill is left to the
+   skins and nothing below paints a button.
+
+   What does stay is the pairing rule the accent experiment exposed — whoever
+   owns the fill owns the label. A capsule that is transparent must not carry a
+   white label, which is why the gradient-filled `.hw-recognize` needed both
+   changed together in handwriting.css. */
+
+/* Disabled must read as unavailable before it is tapped, not after. */
+.ocr-btn:disabled,
+.ocr-btn.secondary:disabled,
+.calc-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Tier 1 — chrome keeps its glass, and gets the one thing it was missing
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Nothing here re-tints the chrome; the skins already do that well. What the
+   chrome lacked was a floor on legibility for when the blur cannot be trusted. */
+
+/* Reduce Transparency is not "decoration off"; it is a legibility request from
+   someone who cannot read text over a shifting backdrop. Every glass surface
+   goes near-opaque and the blur — the expensive part — comes off with it. The
+   app previously had no such fallback anywhere. */
+@media (prefers-reduced-transparency: reduce) {
+  .top-nav,
+  .bottom-nav,
+  .ink-toolbar,
+  .ink-token,
+  .ink-card,
+  .calc-toolbar,
+  .hw-toolbar,
+  .mode-tabs,
+  .recog-tabs,
+  .settings-tabs,
+  .pdf-split-presets,
+  .pdf-page-bar,
+  .pdf-slot-toolbar,
+  .pdf-outline-panel,
+  .pdf-library,
+  .pdf-answer-panel,
+  .pdf-ws-ratio-badge,
+  .pdf-ws-divider-grip,
+  .set-select-dropdown,
+  .export-dropdown-list,
+  .toast-popup,
+  .install-banner,
+  .pdf-role-dialog,
+  .pdf-range-dialog {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: var(--mat-content) !important;
+    border-color: var(--mat-content-hairline) !important;
+  }
+
+  /* The sliding lens is a highlight, not a surface; here it becomes a plain
+     accent tint so the current selection is still findable. */
+  .nav-glass-lens,
+  .segmented-glass-lens {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: var(--accent-light) !important;
+  }
+
+  /* An overlay that dims the page behind a modal keeps dimming — that is
+     meaning, not decoration — but it stops blurring. */
+  .welcome-overlay,
+  .modal-overlay,
+  .pdf-role-overlay,
+  .pdf-range-overlay {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: rgba(15, 23, 42, 0.55) !important;
+  }
+}
+
+/* Increase Contrast: translucency and hairlines both go. Surfaces become solid
+   and every border becomes visible at a glance. */
+@media (prefers-contrast: more) {
+  .result-card,
+  .drop-zone,
+  .history-item,
+  .set-group,
+  .pdf-empty-card,
+  .provider-row,
+  .status-bar,
+  #mathField {
+    background: var(--mat-content) !important;
+    border-color: currentColor;
+    box-shadow: none;
+  }
+
+  .ocr-btn.secondary,
+  .calc-btn {
+    border: 1px solid currentColor;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Utility-surface motion budget
+   ══════════════════════════════════════════════════════════════════════════
+   This is an app screen, not a marketing page. Motion here should accelerate
+   the task, never comment on it: state transitions only, short enough that the
+   user never waits on one.
+*/
+
+@media (prefers-reduced-motion: reduce) {
+  .result-card,
+  .history-item,
+  .ocr-btn,
+  .calc-btn,
+  .mode-tab,
+  .settings-tab,
+  .theme-toggle,
+  .skin-quick-toggle,
+  .pdf-library-row {
+    transition: none !important;
+    animation: none !important;
+  }
+  .ocr-btn:active,
+  .calc-btn:active { transform: none !important; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Targets and focus
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* 44px is the floor, and it is a floor for the hit area rather than for the
+   drawn control: a 34px tool button keeps its size and grows its target. */
+.ocr-btn,
+.calc-btn,
+.mode-tab,
+.settings-tab,
+.theme-toggle,
+.skin-quick-toggle,
+.bottom-nav button {
+  min-height: var(--tap-min);
+}
+
+.mode-tab,
+.settings-tab {
+  min-width: var(--tap-min);
+}
+
+/* Focus has to be visible for anyone driving this from a keyboard or a
+   connected trackpad, and the browser default ring disappears on glass. */
+.ocr-btn:focus-visible,
+.calc-btn:focus-visible,
+.mode-tab:focus-visible,
+.settings-tab:focus-visible,
+.theme-toggle:focus-visible,
+.skin-quick-toggle:focus-visible,
+.bottom-nav button:focus-visible,
+.pdf-library-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Refraction while dragging
+   ══════════════════════════════════════════════════════════════════════════
+   A pane of glass moving over text should disturb the text. Until now a
+   dragged capsule slid across the page leaving it perfectly straight, because
+   `blur()` scatters light but does not bend it — the capsule read as a frosted
+   sticker rather than as something with thickness.
+
+   `#lg-refract` (defined in index.html) bends the backdrop near the rim and
+   leaves the middle alone, which is what a lens does. It runs ONLY during a
+   drag: that is when the distortion is legible, it is the most expensive
+   filter in the app, and a permanently warped backdrop under a stationary
+   toolbar just looks like a rendering fault.
+
+   The `@supports` test keeps it to engines that can run an SVG filter as a
+   backdrop. Everywhere else the blur in the same declaration stands on its own,
+   so the capsule still reads as glass — just without the bending.
+*/
+
+.lg-filter-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+@supports (backdrop-filter: url(#lg-refract)) {
+  .ink-toolbar.is-dragging,
+  .ink-token,
+  .pdf-ws-divider.is-dragging .pdf-ws-divider-grip,
+  .draggable-glass-capsule.is-glass-dragging {
+    backdrop-filter: url(#lg-refract) blur(3px) saturate(180%);
+    -webkit-backdrop-filter: url(#lg-refract) blur(3px) saturate(180%);
+  }
+}
+
+/* Reduce Transparency turns the capsule opaque, so there is nothing to refract
+   through; Reduce Motion keeps the glass but stops it distorting the page as
+   it travels, which is the part that reads as movement. */
+@media (prefers-reduced-transparency: reduce), (prefers-reduced-motion: reduce) {
+  .ink-toolbar.is-dragging,
+  .ink-token,
+  .pdf-ws-divider.is-dragging .pdf-ws-divider-grip,
+  .draggable-glass-capsule.is-glass-dragging {
+    backdrop-filter: var(--glass-blur, blur(20px) saturate(180%));
+    -webkit-backdrop-filter: var(--glass-blur, blur(20px) saturate(180%));
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   The split divider: free travel, and chrome that adapts to what is left
+   ══════════════════════════════════════════════════════════════════════════
+   The divider now runs anywhere from 1:9 to 9:1 and the three preset buttons
+   are gone, so the drag itself has to carry the affordance the buttons used to
+   provide: what ratio am I at, and can I still get back?
+*/
+
+/* The grip is the whole affordance now. It grows into the grab and settles
+   back out of it, so the divider reads as a control rather than as a gap. */
+.pdf-ws-divider-grip {
+  transition:
+    transform 220ms cubic-bezier(0.32, 0.72, 0, 1),
+    box-shadow 220ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 220ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.pdf-ws-divider:hover .pdf-ws-divider-grip { transform: scaleX(1.25); }
+.pdf-workspace.is-column .pdf-ws-divider:hover .pdf-ws-divider-grip { transform: scaleY(1.25); }
+
+.pdf-ws-divider.is-dragging .pdf-ws-divider-grip {
+  transform: scaleX(1.5);
+  box-shadow: 0 0 0 1px var(--accent-light), 0 6px 18px -6px rgba(15, 23, 42, 0.28);
+}
+.pdf-workspace.is-column .pdf-ws-divider.is-dragging .pdf-ws-divider-grip {
+  transform: scaleY(1.5);
+}
+
+/* Panes follow the divider instantly while it is dragged — a transition here
+   would put the page a frame behind the finger — and ease only when the ratio
+   is changed by something other than a drag (a double-click reset, a keyboard
+   step, a restored session). `.is-animating` is set by the workspace for
+   exactly those cases. */
+.pdf-workspace.is-animating .pdf-ws-slot,
+.pdf-workspace.is-animating .pdf-ws-divider {
+  transition: flex-basis 380ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* The live ratio readout replaces the preset buttons: it is the only thing
+   that still tells you the exact split, so it appears on grab and leaves
+   after. */
+.pdf-ws-ratio-badge {
+  transition: opacity 180ms ease, transform 180ms cubic-bezier(0.32, 0.72, 0, 1);
+  opacity: 0;
+  transform: scale(0.94);
+  pointer-events: none;
+}
+.pdf-ws-ratio-badge.is-visible {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* ── Adaptive panes ───────────────────────────────────────────────────────────
+   A pane can now be a tenth of the workspace. Its chrome was drawn for half of
+   one, so below two thresholds it sheds what it cannot afford rather than
+   overflowing. The bands are set in JS from the pane's real pixel width
+   (PdfWorkspace._syncPaneWidthBands), not from the ratio, because 30% of a
+   1280px tablet and 30% of a 640px phone are different problems. */
+
+.pdf-ws-slot.is-narrow .pdf-slot-toolbar { gap: var(--space-1); padding-inline: var(--space-1); }
+.pdf-ws-slot.is-narrow .pdf-slot-toolbar .pdf-control-label { display: none; }
+
+.pdf-ws-slot.is-tiny .pdf-slot-toolbar {
+  gap: 2px;
+  padding-inline: 2px;
+}
+/* At this width only the controls that let you get back out still fit: the
+   pane title, the page counter and the secondary actions go, the close/expand
+   control stays. A pane you cannot re-expand is a pane you have lost. */
+.pdf-ws-slot.is-tiny .pdf-slot-title,
+.pdf-ws-slot.is-tiny .pdf-page-indicator,
+.pdf-ws-slot.is-tiny .pdf-control-label,
+.pdf-ws-slot.is-tiny .pdf-slot-toolbar .pdf-control-btn:not([data-role="focus"]):not([data-role="close"]) {
+  display: none;
+}
+.pdf-ws-slot.is-tiny .pdf-outline-panel { display: none; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   The sliding pill is a lens, not a second sheet of frost
+   ══════════════════════════════════════════════════════════════════════════
+   The pill rides inside surfaces that are themselves glass — the dock, the
+   segmented tracks. It carried its own `backdrop-filter: blur()`, which meant
+   it was blurring an already-blurred backdrop. That does not compound into
+   "more glass"; it compounds into milk, which is why the pill read as a solid
+   white lozenge on an otherwise translucent bar.
+
+   Liquid Glass is refraction over scattering: a lens BENDS what is behind it
+   and keeps the structure, where frost destroys it. So the pill drops the
+   second blur and takes the displacement filter instead. It now distorts the
+   dock and the page behind it the way a thick bevelled pill would, while the
+   surface underneath stays legible — and the tab labels sit above the pill
+   (the lens controller gives items `z-index: 2`), so a label never smears.
+
+   Non-Chromium engines fall back to the light blur they had; the pill still
+   reads as glass there, just without the bending.
+*/
+
+.nav-glass-lens,
+.segmented-glass-lens {
+  /* Colourless. The body carries no fill at all now.
+  
+     Every step of this pill's history added white to make it read as glass —
+     0.20 body, 0.90 inset, a 0.58 catchlight — and each one made it read less
+     like glass, because white laid over a backdrop is paint, and paint is the
+     one thing glass is not. A pane you can see is a pane defined by three
+     things: what its edge does to light, what its body does to what is behind
+     it, and the shadow it casts. None of those is a fill.
+  
+     So the fill is gone, the bend does the work of the body, and the rim does
+     the work of the outline. What is left transmits. */
+  background: transparent !important;
+  backdrop-filter: saturate(125%) !important;
+  -webkit-backdrop-filter: saturate(125%) !important;
+  /* Cast and bevel only — no inner white to muddy the transmission. The lower
+     inset is a thin occlusion notch, not a highlight: it is what makes the
+     bottom edge read as thickness. */
+  box-shadow:
+    0 1px 1px rgba(15, 23, 42, 0.05),
+    0 5px 14px -5px rgba(15, 23, 42, 0.13),
+    0 10px 24px -12px rgba(120, 165, 245, 0.16),
+    inset 0 -5px 7px -7px rgba(15, 23, 42, 0.14) !important;
+}
+
+/* The refraction goes on the segmented pills only — deliberately NOT on
+   `.nav-glass-lens`.
+   
+   The dock is `position: fixed`, and an SVG-filter backdrop on a fixed element
+   nested inside another fixed, backdrop-filtered element makes Chromium
+   mis-composite: the dock's layer tiles down the whole viewport, repeating the
+   bar over the page. It reproduces on every reload with the filter applied and
+   disappears the moment it is swapped for a plain blur. The dock pill therefore
+   keeps the light blur above; it is small, it sits on an already-frosted bar,
+   and the rim and bevel carry it. */
+@supports (backdrop-filter: url(#lg-refract-soft)) {
+  .segmented-glass-lens {
+    backdrop-filter: url(#lg-refract-soft) !important;
+    -webkit-backdrop-filter: url(#lg-refract-soft) !important;
+  }
+}
+
+/* The catchlight rode `--glass-angle`, which the removed pointer-lighting pass
+   used to update. Nothing sets it now, so it would sit frozen at its fallback
+   angle on every pill. A fixed top-edge highlight is the honest version of the
+   same thing: light comes from above, and it stays there. */
+/* One glint, small and sharp, riding the top-left curve — the size a real
+   catchlight is. The wide 62%-by-120% wash it replaces covered most of the
+   pill, which is not a highlight, it is a fill with soft edges. */
+.nav-glass-lens::after,
+.segmented-glass-lens::after {
+  background:
+    radial-gradient(ellipse 34% 62% at 26% -6%,
+      rgba(255, 255, 255, 0.50) 0%,
+      rgba(255, 255, 255, 0.10) 52%,
+      transparent 76%) !important;
+}
+
+/* The rim carries the whole outline now, so it is drawn brighter and thinner
+   than before: a hairline that goes to near-white where light enters at the
+   top and where it exits at the bottom, and nearly vanishes along the sides.
+   That gradient is the Fresnel term — reflectivity rising toward grazing
+   angles — and it is what makes an edge read as curved rather than cut. */
+.nav-glass-lens::before,
+.segmented-glass-lens::before {
+  padding: 0.75px !important;
+  background:
+    linear-gradient(180deg,
+      rgba(255, 255, 255, 1) 0%,
+      rgba(255, 255, 255, 0.30) 34%,
+      rgba(190, 214, 255, 0.14) 58%,
+      rgba(255, 255, 255, 0.85) 100%) !important;
+}
+
+/* Under reduced transparency the pill has already been turned into a flat
+   accent tint further up; make sure no filter survives that. */
+@media (prefers-reduced-transparency: reduce) {
+  .nav-glass-lens,
+  .segmented-glass-lens {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    box-shadow: none !important;
+  }
+  .nav-glass-lens::before,
+  .segmented-glass-lens::before,
+  .nav-glass-lens::after,
+  .segmented-glass-lens::after { display: none !important; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Role sheet: legible body, refracting bevel
+   ══════════════════════════════════════════════════════════════════════════
+   "这份文件是?" was unreadable. The sheet filled itself with `--card-bg`, which
+   in the glass skin is 18% white, and floated it over a 35%-black scrim. White
+   at 18% over near-black mixes to mid grey, so the title, the filename and the
+   cancel action all landed a few percent away from their own background — grey
+   text on a grey slab.
+
+   The mistake was asking one surface to be both the thing you read and the
+   thing you see through. A real slab of glass does not do that either: it is
+   clear at the rim, where the curve is, and its face is where anything printed
+   on it stays readable.
+
+   So the sheet is split by geometry rather than by opacity. A 14px transparent
+   border gives the element a band that its background does not paint into, and
+   the fill is clipped to the padding box. The backdrop filter applies across
+   the whole element but is only VISIBLE in that band — so the bevel refracts
+   the blurred page behind the modal, hard, while the face behind the text is
+   near-opaque and reads at full contrast.
+*/
+
+.pdf-role-overlay {
+  /* A scrim separates; it does not have to bury. Cooler and lighter, so the
+     sheet reads as lit from the front rather than as a hole in the page. */
+  background: rgba(15, 23, 42, 0.28) !important;
+  backdrop-filter: blur(10px) saturate(120%) !important;
+  -webkit-backdrop-filter: blur(10px) saturate(120%) !important;
+}
+
+.pdf-role-dialog {
+  border: 14px solid transparent !important;
+  border-radius: 28px !important;
+  /* padding-box: the fill stops at the inner edge, leaving the border band
+     clear for the lens. */
+  background: linear-gradient(rgba(255, 255, 255, 0.97), rgba(255, 255, 255, 0.97)) padding-box !important;
+  backdrop-filter: saturate(150%) !important;
+  -webkit-backdrop-filter: saturate(150%) !important;
+  box-shadow:
+    /* the rim, drawn inside the border box so it sits on the bevel */
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.55),
+    0 2px 6px rgba(15, 23, 42, 0.10),
+    0 24px 60px -18px rgba(15, 23, 42, 0.38) !important;
+}
+
+@supports (backdrop-filter: url(#lg-refract)) {
+  .pdf-role-dialog {
+    backdrop-filter: url(#lg-refract) saturate(150%) !important;
+    -webkit-backdrop-filter: url(#lg-refract) saturate(150%) !important;
+  }
+}
+
+/* The face is opaque now, so the text can go back to full strength. The
+   filename was `--muted` on grey; muted is a colour for a quiet line on a white
+   card, not for a line nobody can read. */
+.pdf-role-title { color: var(--fg) !important; }
+.pdf-role-file {
+  color: #475569 !important;
+  font-weight: 500 !important;
+}
+.pdf-role-options button {
+  background: rgba(15, 23, 42, 0.04) !important;
+  border: 1px solid rgba(15, 23, 42, 0.12) !important;
+  color: var(--fg) !important;
+}
+.pdf-role-options button.is-suggested {
+  background: var(--accent-light) !important;
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+/* Cancel is a real action, not a watermark. */
+.pdf-role-cancel {
+  color: #475569 !important;
+  font-weight: 500 !important;
+}
+.pdf-role-cancel:hover { color: var(--fg) !important; }
+
+@media (prefers-reduced-transparency: reduce) {
+  .pdf-role-overlay {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .pdf-role-dialog {
+    border-color: rgba(15, 23, 42, 0.18) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Swap control
+   ══════════════════════════════════════════════════════════════════════════
+   A small bar on the divider that exchanges the two documents left-for-right.
+   It sits on the one piece of chrome that already belongs to both panes and to
+   neither, which is where a control about their relationship belongs.
+
+   It is draggable and tappable on purpose: dragging it is the gesture the
+   action describes — you push the panes past each other — and tapping is the
+   shortcut for anyone who already knows what it does.
+*/
+
+.pdf-ws-swap {
+  position: absolute;
+  top: calc(50% - 46px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: var(--pill-radius);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.62);
+  color: #475569;
+  cursor: grab;
+  touch-action: none;
+  z-index: 12;
+  opacity: 0;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.10),
+    0 6px 16px -8px rgba(15, 23, 42, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  transition:
+    opacity 180ms ease,
+    background 180ms ease,
+    color 180ms ease,
+    box-shadow 220ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.pdf-ws-swap[hidden] { display: none; }
+
+/* It stays out of the way until the divider is approached — the split is the
+   common action, swapping is the occasional one. */
+.pdf-ws-divider:hover .pdf-ws-swap,
+.pdf-ws-divider:focus-within .pdf-ws-swap,
+.pdf-ws-swap:focus-visible,
+.pdf-ws-swap.is-grabbed { opacity: 1; }
+
+.pdf-ws-swap:hover { background: rgba(255, 255, 255, 0.85); color: var(--fg); }
+.pdf-ws-swap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pdf-ws-swap.is-grabbed { cursor: grabbing; }
+
+/* Armed: the drag has passed the threshold, so releasing now will swap. The
+   control says so before the finger lifts, rather than after. */
+.pdf-workspace.is-swap-armed .pdf-ws-swap {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 0 0 4px var(--accent-light), 0 6px 18px -6px rgba(15, 23, 42, 0.3);
+}
+.pdf-workspace.is-swap-armed .pdf-ws-divider-grip {
+  background: var(--accent);
+}
+
+/* During the exchange the divider recedes: the panes are the thing moving, and
+   a grip sitting still in the middle of two sliding panes reads as a seam. */
+.pdf-workspace.is-swapping .pdf-ws-divider-grip { opacity: 0.35; }
+.pdf-workspace.is-swapping .pdf-ws-slot {
+  will-change: transform;
+  box-shadow: 0 18px 44px -20px rgba(15, 23, 42, 0.34);
+}
+/* The panes are mid-flight; a flex-basis transition would fight the transform
+   that is carrying them. */
+.pdf-workspace.is-swapping .pdf-ws-slot,
+.pdf-workspace.is-swapping .pdf-ws-divider { transition: none; }
+
+.pdf-workspace.is-column .pdf-ws-swap {
+  top: 50%;
+  left: calc(50% - 46px);
+  transform: translateY(-50%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pdf-ws-swap { transition: none; }
+  .pdf-workspace.is-swapping .pdf-ws-slot { will-change: auto; }
+}
+
+/* The library opens documents with one button now, so it carries the accent. */
+.pdf-library-btn.is-primary {
+  background: var(--accent-light) !important;
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+  font-weight: 600;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   `hidden` means hidden
+   ══════════════════════════════════════════════════════════════════════════
+   The UA stylesheet hides `[hidden]` with `display: none`, and that rule has
+   the weakest possible weight — ANY author `display` declaration beats it. So
+   every element in this app that is both toggled with `.hidden = true` and
+   given a `display: flex` of its own was still being painted.
+
+   `.pdf-pane-empty` was the expensive one. Opening a document sets
+   `elEmpty.hidden = true`, but `.pdf-pane-empty { display: flex }` kept it on
+   screen at its full 384px, which pushed `.pdf-pane-body` into a 300px strip at
+   the bottom of the pane. That is why an opened PDF rendered as a sliver below
+   a "未打开文档" placeholder, at a fit-to-width zoom computed against a viewport
+   the size of the leftovers, with the ink canvas stranded at its default
+   300x150. `.pdf-slot-toolbar` had the same defect.
+
+   Seven `<selector>[hidden] { display: none }` rules already existed in
+   pdf.css, each one added the last time somebody hit this. That is the wrong
+   shape of fix: it has to be remembered for every new element. One rule, at the
+   end of the cascade, for all of them.
+*/
+[hidden] { display: none !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Answer matching: states, and motion that reports progress
+   ══════════════════════════════════════════════════════════════════════════
+   Matching walks a several-hundred-page answer key, so this panel has a real
+   wait in it. It used to show one line of text and then replace it with the
+   whole result at once — no sense of how long, no sense of how much, and a
+   layout jump at the end.
+*/
+
+/* The panel is content, not chrome: it is what the reader came to read. */
+.pdf-answer-panel {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background: var(--mat-content) !important;
+  border-top: 1px solid var(--mat-content-hairline);
+}
+
+.answer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: #475569;
+}
+
+/* ── waiting ────────────────────────────────────────────────────────────── */
+
+.answer-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(15, 23, 42, 0.12);
+  border-top-color: var(--accent);
+  animation: answer-spin 720ms linear infinite;
+  flex: 0 0 auto;
+}
+@keyframes answer-spin { to { transform: rotate(360deg); } }
+
+/* Skeleton rows hold the shape the result will take, so the panel does not
+   jump when the matches land. */
+.answer-row.is-skeleton { pointer-events: none; }
+.answer-row.is-skeleton .sk {
+  display: inline-block;
+  height: 0.72em;
+  border-radius: 4px;
+  background: linear-gradient(90deg,
+    rgba(15, 23, 42, 0.06) 0%,
+    rgba(15, 23, 42, 0.11) 50%,
+    rgba(15, 23, 42, 0.06) 100%);
+  background-size: 200% 100%;
+  animation: answer-shimmer 1.3s ease-in-out infinite;
+}
+.answer-row.is-skeleton .sk-label { width: 4.5em; }
+.answer-row.is-skeleton .sk-chip  { width: 5.5em; margin-inline-start: var(--space-2); }
+.answer-row.is-skeleton .sk-line  { width: 82%; margin-top: 6px; }
+@keyframes answer-shimmer {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+
+/* ── arrival ────────────────────────────────────────────────────────────── */
+
+/* Rows come in together but not simultaneously — enough offset to read as a
+   list assembling, capped in JS at eight so a long page does not crawl. */
+.answer-panel:not(.is-loading) .answer-row {
+  animation: answer-row-in 260ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  animation-delay: calc(var(--row-index, 0) * 28ms);
+}
+@keyframes answer-row-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ── confidence ─────────────────────────────────────────────────────────── */
+
+/* The confidence chip is the one thing in this panel that must never be
+   decorative: it is the difference between an answer and a guess. Each level
+   gets its own fill, not just its own text colour, so it survives a glance. */
+.answer-conf {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--pill-radius);
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.answer-conf.is-high   { background: rgba(13, 148, 136, 0.12); color: #0f766e; }
+.answer-conf.is-medium { background: rgba(217, 119, 6, 0.12);  color: #b45309; }
+.answer-conf.is-low    { background: rgba(220, 38, 38, 0.10);  color: #b91c1c; }
+.answer-conf.is-none   { background: rgba(15, 23, 42, 0.06);   color: #475569; }
+
+/* An uncertain row is also marked on the row itself, so that scanning the list
+   finds it without reading every chip.
+  
+   This was a 3px coloured border down the leading edge, which is a stock
+   generic-UI tell and heavier than the signal deserves — the chip already
+   states the level in words. A faint wash over the whole row does the same
+   scanning job: it reads as "this one is different" from across the panel and
+   as nothing much up close, which is the right weight for a secondary encoding
+   of something the chip has already said. */
+.answer-row.is-low,
+.answer-row.is-none { background: rgba(220, 38, 38, 0.035); }
+.answer-row.is-medium { background: rgba(217, 119, 6, 0.035); }
+
+.answer-reveal > summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 600;
+  list-style: none;
+  padding: var(--space-1) 0;
+  min-height: 28px;
+}
+.answer-reveal > summary::-webkit-details-marker { display: none; }
+.answer-reveal[open] > summary { color: #475569; }
+.answer-reveal > .answer-value {
+  animation: answer-row-in 200ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+/* A narrow pane cannot afford the question preview or the reasoning line; the
+   question number, the confidence and the way to the page are what it keeps. */
+.pdf-ws-slot.is-narrow .answer-qtext,
+.pdf-ws-slot.is-tiny .answer-qtext,
+.pdf-ws-slot.is-tiny .answer-reason { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .answer-spinner { animation: none; border-top-color: var(--accent); }
+  .answer-row.is-skeleton .sk { animation: none; }
+  .answer-panel:not(.is-loading) .answer-row,
+  .answer-reveal > .answer-value { animation: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Page-bar capsules as lenses
+   ══════════════════════════════════════════════════════════════════════════
+   导入练习册 / 导入答案册 / 文件库 were transparent text with a hover tint —
+   they read as links on a bar, not as controls you could press. They are
+   capsules now, and they are made of the same glass as the sliding pill: no
+   fill, a hairline Fresnel rim, a soft cast, and the displacement lens instead
+   of a second blur over the bar's own.
+
+   Purity here is the same subtraction as the pill — the capsule is defined by
+   its edge and by what it bends, never by white laid over the page.
+*/
+
+.pdf-bar-btn {
+  position: relative;
+  background: transparent;
+  border: 0.75px solid rgba(255, 255, 255, 0.85);
+  box-shadow:
+    0 1px 1px rgba(15, 23, 42, 0.04),
+    0 4px 12px -6px rgba(15, 23, 42, 0.14),
+    inset 0 -4px 6px -6px rgba(15, 23, 42, 0.12);
+  backdrop-filter: saturate(125%);
+  -webkit-backdrop-filter: saturate(125%);
+  transition:
+    transform 180ms cubic-bezier(0.32, 0.72, 0, 1),
+    box-shadow 180ms cubic-bezier(0.32, 0.72, 0, 1),
+    border-color 180ms ease;
+}
+
+@supports (backdrop-filter: url(#lg-refract-soft)) {
+  .pdf-bar-btn {
+    backdrop-filter: url(#lg-refract-soft);
+    -webkit-backdrop-filter: url(#lg-refract-soft);
+  }
+}
+
+.pdf-bar-btn:hover {
+  border-color: rgba(255, 255, 255, 1);
+  box-shadow:
+    0 1px 1px rgba(15, 23, 42, 0.05),
+    0 8px 20px -8px rgba(15, 23, 42, 0.20),
+    inset 0 -4px 6px -6px rgba(15, 23, 42, 0.14);
+}
+/* Glass under pressure compresses; it does not slide. */
+.pdf-bar-btn:active { transform: scale(0.97); }
+.pdf-bar-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Splitting: a readout you can read, and an end that means close
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* The ratio readout used to float loose over the panes as "44% : 56%". It sits
+   on the divider it describes now, and follows it. */
+.pdf-ws-ratio-badge {
+  position: absolute;
+  top: calc(50% + 34px);
+  left: 50%;
+  transform: translate(-50%, 0) scale(0.94);
+  padding: 3px 9px;
+  border-radius: var(--pill-radius);
+  font-size: 0.7rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: #475569;
+  background: rgba(255, 255, 255, 0.92);
+  border: 0.75px solid rgba(255, 255, 255, 0.95);
+  box-shadow: 0 4px 14px -6px rgba(15, 23, 42, 0.30);
+  z-index: 12;
+}
+.pdf-ws-ratio-badge.is-visible { transform: translate(-50%, 0) scale(1); }
+
+/* Approaching an end, the pane that would close says so before the finger
+   lifts — dimmed and pulled back, the way a thing being put away looks. */
+.pdf-ws-slot.is-closing {
+  opacity: 0.45;
+  filter: saturate(0.6);
+  transition: opacity 140ms ease, filter 140ms ease;
+}
+.pdf-workspace.is-closing-primary .pdf-ws-divider-grip,
+.pdf-workspace.is-closing-secondary .pdf-ws-divider-grip {
+  background: #dc2626;
+}
+.pdf-workspace.is-closing-primary .pdf-ws-ratio-badge,
+.pdf-workspace.is-closing-secondary .pdf-ws-ratio-badge {
+  color: #fff;
+  background: #dc2626;
+  border-color: #dc2626;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   The answer action, and putting the panel away
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* 🔑 said "key", not "check this page against the answer key". The action is
+   named as well as drawn, and it is the one accented control in the slot bar
+   because it is the reason this workspace has two panes at all. */
+.pdf-slot-btn.is-answer-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: auto;
+  padding: 0 10px;
+  color: var(--accent);
+  background: var(--accent-light);
+  border-radius: var(--pill-radius);
+  font-weight: 600;
+  font-size: 0.78rem;
+}
+.pdf-slot-btn.is-answer-action:hover { background: rgba(10, 96, 255, 0.16); }
+.pdf-ws-slot.is-narrow .pdf-slot-btn-text,
+.pdf-ws-slot.is-tiny .pdf-slot-btn-text { display: none; }
+
+.answer-head-end { display: inline-flex; align-items: center; gap: var(--space-2); }
+.answer-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.05);
+  color: #475569;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+.answer-close:hover { background: rgba(15, 23, 42, 0.10); color: var(--fg); }
+.answer-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The panel arrives from under the toolbar it belongs to. Exit is handled in
+   JS so it can finish before the element is hidden. */
+.pdf-answer-panel:not([hidden]) {
+  animation: answer-panel-in 220ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.pdf-answer-panel.is-dismissing { animation: none; }
+@keyframes answer-panel-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pdf-answer-panel:not([hidden]) { animation: none; }
+  .pdf-bar-btn { transition: none; }
+  .pdf-bar-btn:active { transform: none; }
+}
+
+/* Retired surfaces stay in the tree but never render. */
+.page.is-retired { display: none !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   The answer action, and a panel that survives any pane width
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* 对答案 was wrapping one character per line and growing taller than the bar it
+   sits in. A label on a control never wraps: it shortens, or it goes. */
+.pdf-slot-btn.is-answer-action {
+  flex: 0 0 auto;
+  height: 30px;
+  white-space: nowrap;
+  line-height: 1;
+}
+.pdf-slot-btn.is-answer-action svg { flex: 0 0 auto; }
+.pdf-slot-btn-text { white-space: nowrap; }
+
+/* The panel is an overlay on the page, not a slice taken out of it.
+ 
+   It used to be a flex sibling, so opening it shrank the page — and at a high
+   zoom in a narrow pane the two fought each other: the page reflowed, the
+   panel got the leftovers, and the rows crushed. It floats over the top of the
+   page now with its own scroll, capped at half the pane, so the page underneath
+   never moves and the panel never runs out of room. */
+.pdf-answer-panel:not([hidden]) {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 20;
+  max-height: 52%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-shadow: 0 18px 40px -22px rgba(15, 23, 42, 0.45);
+}
+
+/* The jump-to-page control is the row's action; it must not be pushed off the
+   end or wrap the row when the pane is narrow. */
+.answer-row .answer-q {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.answer-goto {
+  margin-inline-start: auto;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+.answer-goto:hover { background: var(--accent-hover); }
+
+/* Narrower still: the reasoning line and the preview go before the answer does. */
+.pdf-ws-slot.is-narrow .answer-reason { display: none; }
+.pdf-ws-slot.is-tiny .answer-goto { padding: 0.25rem 0.45rem; font-size: 0.7rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pdf-answer-panel:not([hidden]) { animation: none; }
+}
+
+/* ── Save annotations ────────────────────────────────────────────────────────
+   Annotations autosave on a 400ms debounce, so this button is not what makes
+   the work durable — it is what lets someone see that it is. It is enabled only
+   while there is something unwritten, which turns "disabled" into a status:
+   greyed out means already safe. */
+.pdf-slot-btn.is-save-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: auto;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: var(--pill-radius);
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 0.78rem;
+  line-height: 1;
+  color: #475569;
+  background: rgba(15, 23, 42, 0.04);
+}
+.pdf-slot-btn.is-save-action.is-dirty {
+  color: var(--accent);
+  background: var(--accent-light);
+}
+.pdf-slot-btn.is-save-action:disabled { opacity: 0.55; cursor: default; }
+.pdf-slot-btn.is-save-action svg { flex: 0 0 auto; }

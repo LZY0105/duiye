@@ -1,0 +1,1602 @@
+/* base.css — Apple Liquid Glass design system, layout, nav, global resets */
+
+:root {
+  --bg: #f2f3f7;
+  --fg: #1c1c1e;
+  --muted: #6e6e73;
+  --accent: #007AFF;
+  --accent-hover: #0062cc;
+  --accent-light: rgba(0, 122, 255, 0.10);
+  --border-color: rgba(60, 60, 67, 0.12);
+  --card-bg: rgba(255, 255, 255, 0.78);
+  --hdr-bg: rgba(242, 243, 247, 0.76);
+  --max-w: 1200px;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+
+  /* Apple Liquid Glass Tokens */
+  --glass-bg: rgba(255, 255, 255, 0.76);
+  --glass-bg-subtle: rgba(255, 255, 255, 0.52);
+  --glass-border: 0.5px solid rgba(255, 255, 255, 0.75);
+  --glass-border-subtle: 0.5px solid rgba(60, 60, 67, 0.12);
+  --glass-blur: blur(28px) saturate(190%);
+  --glass-shadow: 0 4px 24px -2px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.03);
+  --glass-inner-glow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+
+  /* Geometry & Motion */
+  --btn-radius: 12px;
+  --btn-radius-lg: 18px;
+  --card-radius: 18px;
+  --nav-radius: 20px;
+  --tab-radius: 12px;
+  --pill-radius: 999px;
+  --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.02);
+  --btn-shadow: 0 1px 3px rgba(0, 122, 255, 0.18);
+  --nav-blur: blur(32px) saturate(190%);
+  --nav-border: 0.5px solid rgba(60, 60, 67, 0.12);
+  --font-stack: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --spacing-unit: 1rem;
+  --spring-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --transition-fast: 0.18s cubic-bezier(0.32, 0.72, 0, 1);
+  --transition-normal: 0.28s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Default Skin: Apple Liquid Glass */
+[data-skin="default"] .bottom-nav button.active,
+:root:not([data-skin]) .bottom-nav button.active,
+:root[data-skin="default"] .bottom-nav button.active {
+  color: var(--accent);
+}
+[data-skin="default"] .bottom-nav button.active::after,
+:root:not([data-skin]) .bottom-nav button.active::after,
+:root[data-skin="default"] .bottom-nav button.active::after {
+  content: ''; position: absolute; bottom: 3px;
+  width: 24px; height: 3px; border-radius: 3px;
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(0, 122, 255, 0.6);
+}
+[data-skin="default"] .ocr-btn,
+:root:not([data-skin]) .ocr-btn,
+:root[data-skin="default"] .ocr-btn {
+  font-weight: 500; letter-spacing: -0.01em;
+}
+/* ═══════════════════════════════════════════
+   Skin: iOS / Apple Liquid Glass
+   毛玻璃 + 饱和度 · 0.5px发丝边框 · 柔和高光 · 苹果原生质感
+   ═══════════════════════════════════════════ */
+[data-skin="ios"] {
+  --accent: #007AFF;
+  --accent-hover: #0056cc;
+  --bg: #f2f2f7;
+  --card-bg: rgba(255, 255, 255, 0.82);
+  --border-color: rgba(60, 60, 67, 0.14);
+  --btn-radius: 12px;
+  --btn-radius-lg: 18px;
+  --card-radius: 18px;
+  --nav-radius: 20px;
+  --tab-radius: 10px;
+  --card-shadow: 0 4px 24px -2px rgba(0,0,0,0.06);
+  --btn-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  --nav-blur: blur(40px) saturate(190%);
+  --nav-border: 0.5px solid rgba(60, 60, 67, 0.12);
+  --font-stack: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+  --spacing-unit: 1rem;
+}
+[data-skin="ios"] .ocr-btn {
+  border: 0.5px solid rgba(60, 60, 67, 0.18);
+  box-shadow: none; font-weight: 500; letter-spacing: -0.01em;
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(16px);
+}
+[data-skin="ios"] .ocr-btn:active { background: var(--accent); color: #fff; transform: scale(0.96); }
+[data-skin="ios"] .ocr-btn.secondary {
+  border-color: rgba(60, 60, 67, 0.12); color: var(--accent);
+  background: rgba(0, 122, 255, 0.08);
+}
+[data-skin="ios"] .result-card {
+  box-shadow: var(--glass-shadow); border: var(--glass-border);
+  backdrop-filter: var(--glass-blur);
+}
+[data-skin="ios"] .bottom-nav {
+  border-top: 0.5px solid rgba(60, 60, 67, 0.12);
+}
+[data-skin="ios"] .bottom-nav button.active {
+  color: var(--accent); font-weight: 600;
+}
+[data-skin="ios"] .top-nav {
+  border-bottom: 0.5px solid rgba(60, 60, 67, 0.12);
+}
+[data-skin="ios"] .mode-tab.active,
+[data-skin="ios"] .recog-tabs .mode-tab.active {
+  background: var(--accent); color: #fff; border-radius: 8px;
+}
+/* ═══════════════════════════════════════════
+   Skin: MIUI / HyperOS — Liquid Glass
+   超大圆角 · 渐变暖色 · 全界面毛玻璃通透
+   ═══════════════════════════════════════════ */
+[data-skin="miui"] {
+  --accent: #ff6b35;
+  --accent-hover: #e55a2b;
+  --border-color: #f0e0d6;
+  --btn-radius: 24px;
+  --btn-radius-lg: 34px;
+  --card-radius: 20px;
+  --nav-radius: 18px;
+  --tab-radius: 24px;
+  --card-shadow: none;
+  --btn-shadow: none;
+  --nav-blur: blur(24px);
+  --nav-border: none;
+  --font-stack: "MiSans","Segoe UI","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
+  --spacing-unit: 1.15rem;
+  --bg: #fff5f0;
+  --card-bg: rgba(255,255,255,0.72);
+  --hdr-bg: rgba(255,245,240,0.78);
+}
+[data-skin="miui"] .ocr-btn {
+  border: none;
+  background: linear-gradient(135deg, #ff6b35, #ff8c5a);
+  color: #fff; font-weight: 600;
+}
+[data-skin="miui"] .ocr-btn.secondary {
+  background: rgba(255,107,53,0.08);
+  color: #ff6b35; border: none;
+}
+[data-skin="miui"] .ocr-btn:active { opacity: 0.82; transform: scale(0.97); }
+[data-skin="miui"] .result-card {
+  background: rgba(255,255,255,0.65);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,107,53,0.12);
+}
+[data-skin="miui"] .cam-capture {
+  background: linear-gradient(135deg, #ff6b35, #ff8c5a);
+  border-color: transparent;
+}
+[data-skin="miui"] .bottom-nav button.active {
+  background: linear-gradient(135deg, #ff6b35, #ff8c5a);
+  color: #fff; border-radius: 20px; padding: 6px 16px;
+}
+/* ═══════════════════════════════════════════
+   Skin: Sakura — 樱花和风
+   日式侘寂 · 淡粉 · 毛笔字感 · 纸和墨
+   ═══════════════════════════════════════════ */
+[data-skin="sakura"] {
+  --accent: #d45b7a;
+  --accent-hover: #b84763;
+  --bg: #faf3f0;
+  --fg: #3c2c33;
+  --muted: #8f6b78;
+  --border-color: #e6d0cc;
+  --card-bg: rgba(255,252,248,0.78);
+  --hdr-bg: rgba(250,243,240,0.85);
+  --btn-radius: 4px;
+  --btn-radius-lg: 6px;
+  --card-radius: 6px;
+  --nav-radius: 0px;
+  --tab-radius: 4px;
+  --card-shadow: 0 1px 0 rgba(0,0,0,0.04);
+  --btn-shadow: none;
+  --nav-blur: none;
+  --nav-border: 1px solid var(--border-color);
+  --font-stack: "Zen Kurenaido","Yu Gothic","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
+  --spacing-unit: 1rem;
+}
+[data-skin="sakura"] .ocr-btn {
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent); font-weight: 400;
+  letter-spacing: 0.04em;
+}
+[data-skin="sakura"] .ocr-btn:active {
+  background: var(--accent); color: #fff;
+}
+[data-skin="sakura"] .ocr-btn.secondary {
+  border-color: var(--border-color); color: var(--muted);
+}
+[data-skin="sakura"] .result-card {
+  border: 1px solid var(--border-color);
+  background: var(--card-bg);
+}
+[data-skin="sakura"] .mode-tab.active,
+[data-skin="sakura"] .recog-tabs .mode-tab.active {
+  background: var(--accent); color: #fff;
+}
+[data-skin="sakura"] .bottom-nav button.active {
+  border-bottom: 2px solid var(--accent);
+  color: var(--accent);
+}
+[data-skin="sakura"] .bottom-nav {
+  border-top: 1px solid var(--border-color);
+}
+[data-skin="sakura"] .top-nav {
+  border-bottom: 1px solid var(--border-color);
+}
+[data-skin="sakura"] .cam-capture {
+  background: var(--accent); border: none;
+}
+[data-skin="sakura"] .set-select-btn:focus { border-color: var(--accent); }
+/* ═══════════════════════════════════════════
+   Skin: Matrix — 黑客矩阵
+   黑底绿字 · 像素感 · 终端风 · 发光字
+   ═══════════════════════════════════════════ */
+[data-skin="matrix"] {
+  --accent: #00ff41;
+  --accent-hover: #33ff75;
+  --bg: #0a0a0a;
+  --fg: #c0ffc0;
+  --muted: #407a40;
+  --border-color: #1a3a1a;
+  --card-bg: rgba(8,16,8,0.85);
+  --hdr-bg: rgba(10,10,10,0.95);
+  --btn-radius: 0px;
+  --btn-radius-lg: 0px;
+  --card-radius: 0px;
+  --nav-radius: 0px;
+  --tab-radius: 0px;
+  --card-shadow: none;
+  --btn-shadow: none;
+  --nav-blur: none;
+  --nav-border: 1px solid var(--border-color);
+  --font-stack: "Source Code Pro","Fira Code","Cascadia Code","Consolas","Noto Sans CJK SC","Microsoft YaHei",monospace;
+  --spacing-unit: 1rem;
+}
+[data-skin="matrix"] .ocr-btn {
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent); font-weight: 400;
+  text-transform: lowercase;
+}
+[data-skin="matrix"] .ocr-btn:active {
+  background: rgba(0,255,65,0.10);
+}
+[data-skin="matrix"] .ocr-btn.secondary {
+  border-color: var(--muted); color: var(--muted);
+}
+[data-skin="matrix"] .ocr-btn:active {
+  background: rgba(0,255,65,0.08);
+}
+[data-skin="matrix"] .result-card {
+  border: 1px solid var(--border-color);
+  background: var(--card-bg);
+}
+[data-skin="matrix"] .mode-tab.active,
+[data-skin="matrix"] .recog-tabs .mode-tab.active {
+  background: var(--accent); color: var(--bg); border-color: var(--accent);
+}
+[data-skin="matrix"] .bottom-nav {
+  border-top: 1px solid var(--border-color);
+}
+[data-skin="matrix"] .bottom-nav button.active {
+  color: var(--accent);
+  text-shadow: 0 0 6px rgba(0,255,65,0.50);
+}
+[data-skin="matrix"] .top-nav {
+  border-bottom: 1px solid var(--border-color);
+}
+[data-skin="matrix"] .theme-toggle {
+  border-color: var(--border-color);
+}
+[data-skin="matrix"] .set-select-btn:focus { border-color: var(--accent); }
+/* ═══════════════════════════════════════════
+   Skin: Warm — 暖咖纸墨
+   咖啡暖棕 · 厚实质感 · 弧形圆角 · 哑光
+   ═══════════════════════════════════════════ */
+[data-skin="warm"] {
+  --accent: #8b5e3c;
+  --accent-hover: #a87b58;
+  --bg: #f5ede4;
+  --fg: #2d1f14;
+  --muted: #8e7668;
+  --border-color: #dcccbc;
+  --card-bg: rgba(255,248,240,0.85);
+  --hdr-bg: rgba(245,237,228,0.90);
+  --btn-radius: 50px;
+  --btn-radius-lg: 50px;
+  --card-radius: 18px;
+  --nav-radius: 18px;
+  --tab-radius: 50px;
+  --card-shadow: 0 4px 12px rgba(139,94,60,0.10);
+  --btn-shadow: none;
+  --nav-blur: none;
+  --nav-border: none;
+  --font-stack: "Noto Serif","Georgia","Noto Serif CJK SC","Source Han Serif CN","STSong","SimSun",serif;
+  --spacing-unit: 1.15rem;
+}
+[data-skin="warm"] .ocr-btn {
+  background: var(--accent);
+  color: #fff; border: none;
+  font-weight: 500;
+}
+[data-skin="warm"] .ocr-btn.secondary {
+  background: rgba(139,94,60,0.08);
+  color: var(--accent); border: none;
+}
+[data-skin="warm"] .ocr-btn:active {
+  opacity: 0.80;
+}
+[data-skin="warm"] .result-card {
+  border: none;
+  background: var(--card-bg);
+  box-shadow: 0 4px 12px rgba(139,94,60,0.08);
+}
+[data-skin="warm"] .mode-tab.active,
+[data-skin="warm"] .recog-tabs .mode-tab.active {
+  background: var(--accent); color: #fff; border-color: var(--accent);
+}
+[data-skin="warm"] .bottom-nav {
+  background: rgba(245,237,228,0.88);
+}
+[data-skin="warm"] .bottom-nav button.active {
+  color: var(--accent); font-weight: 600;
+}
+[data-skin="warm"] .cam-capture {
+  background: var(--accent); border: none;
+}
+[data-skin="warm"] .set-select-btn:focus { border-color: var(--accent); }
+/* ═══════════════════════════════════════════
+   Skin: Minimal — 极简纤白
+   白 · 超轻阴影 · 窄圆角 · 干净 · 空气感
+   ═══════════════════════════════════════════ */
+[data-skin="minimal"] {
+  --accent: #111111;
+  --accent-hover: #444444;
+  --bg: #fdfdfd;
+  --fg: #111111;
+  --muted: #888888;
+  --border-color: #e5e5e5;
+  --card-bg: #ffffff;
+  --hdr-bg: rgba(253,253,253,0.92);
+  --btn-radius: 4px;
+  --btn-radius-lg: 6px;
+  --card-radius: 4px;
+  --nav-radius: 0px;
+  --tab-radius: 4px;
+  --card-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  --btn-shadow: none;
+  --nav-blur: none;
+  --nav-border: 1px solid var(--border-color);
+  --font-stack: "Inter","Helvetica Neue","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
+  --spacing-unit: 1rem;
+}
+[data-skin="minimal"] .ocr-btn {
+  border: 1px solid var(--fg);
+  background: transparent;
+  color: var(--fg); font-weight: 400;
+  font-size: 0.82rem;
+}
+[data-skin="minimal"] .ocr-btn:active {
+  background: var(--fg); color: #fff;
+}
+[data-skin="minimal"] .ocr-btn.secondary {
+  border-color: #ccc; color: var(--muted);
+}
+[data-skin="minimal"] .result-card {
+  border: none;
+  border-top: 1px solid var(--border-color);
+  background: transparent;
+  box-shadow: none;
+}
+[data-skin="minimal"] .mode-tab.active,
+[data-skin="minimal"] .recog-tabs .mode-tab.active {
+  background: var(--fg); color: #fff; border-color: var(--fg);
+}
+[data-skin="minimal"] .bottom-nav {
+  border-top: 1px solid var(--border-color);
+}
+[data-skin="minimal"] .bottom-nav button.active {
+  color: var(--fg); font-weight: 600;
+}
+[data-skin="minimal"] .bottom-nav button {
+  font-size: 0.65rem;
+}
+[data-skin="minimal"] .top-nav {
+  border-bottom: 1px solid var(--border-color);
+}
+[data-skin="minimal"] .theme-toggle {
+  border-color: var(--border-color);
+}
+[data-skin="minimal"] .set-select-btn:focus {
+  border-color: var(--fg);
+}
+/* Minimal: hi-tag background uses card-bg instead of accent tint */
+[data-skin="minimal"] .history-item .hi-tag {
+  background: rgba(0,0,0,0.04); color: var(--muted);
+  border: 1px solid var(--border-color);
+}
+/* ══════════════════════════════════════════════════════════════
+   Skin: Math Liquid Glass (自然物理真玻璃 · Apple Studio Architecture)
+   高透光定向采光 · 纯净物理色彩 · 费涅尔高光与多层双边框物理阴影
+   ══════════════════════════════════════════════════════════════ */
+[data-skin="liquid-math"] {
+  /* Curated Mathematical Palette (Apple Studio Architecture) */
+  --accent: #0a60ff;
+  --accent-hover: #0052de;
+  --accent-light: rgba(10, 96, 255, 0.08);
+  --accent-gradient: #0a60ff;
+  --math-violet: #6366f1;
+  --math-cyan: #0284c7;
+  --math-gold: #d97706;
+  --math-emerald: #0d9488;
+
+  --bg: #f4f6f9;
+  --fg: #0f172a;
+  --muted: #64748b;
+  --border-color: rgba(15, 23, 42, 0.08);
+  --card-bg: rgba(255, 255, 255, 0.18);
+  --hdr-bg: rgba(244, 246, 249, 0.45);
+
+  /* ── Glass material ───────────────────────────────────────────────────────
+     A slab of glass over a background does five separate things, and the old
+     token set collapsed all five into one flat white fill plus a uniform white
+     outline — which is what made every surface read as frosted plastic. Each
+     is now its own token so a surface can dial thickness without reinventing
+     the material:
+
+       1. transmits    the backdrop, blurred and more saturated (light
+                       concentrates as it passes through)      --glass-blur
+       2. reflects     at the rim, and only at the rim; a Fresnel term goes
+                       to 1 at grazing angles                  --glass-rim-*
+       3. bevels       bright where light enters the near wall, bright again
+                       where it exits the far wall, dark in the notch between
+                                                               --glass-bevel
+       4. casts        a tight contact shadow, a soft ambient one, and a cool
+                       pool of light that passed straight through
+                                                               --glass-shadow
+       5. glints       one small sharp catchlight, not a milky wash
+                                                               --glass-glint-*
+
+     Transmittance is the budget: every point of white fill spent on the body
+     is clarity taken away from the scene behind it. 0.13 is about the floor
+     at which text stays legible over the workspace grid. */
+  --card-blur: blur(20px) saturate(200%) brightness(105%);
+
+  --glass-bg: rgba(255, 255, 255, 0.13);
+  --glass-bg-subtle: rgba(255, 255, 255, 0.06);
+  --glass-blur: blur(20px) saturate(200%) brightness(105%);
+
+  /* The rim is drawn as a masked gradient ring by the .liquid-surface rules
+     below, so these borders exist only for surfaces that opt out of it. */
+  --glass-border: 1px solid rgba(255, 255, 255, 0.55);
+  --glass-border-subtle: 1px solid rgba(255, 255, 255, 0.28);
+
+  --glass-rim-width: 1.25px;
+  --glass-rim-bright: rgba(255, 255, 255, 0.95);
+  --glass-rim-mid: rgba(255, 255, 255, 0.30);
+  --glass-rim-dim: rgba(198, 219, 255, 0.13);
+
+  /* Entry highlight, its bloom, the far-wall exit arc, and the occlusion notch
+     that sells thickness. The exit arc along the bottom inside edge is the
+     detail that separates glass from a translucent panel. */
+  --glass-bevel:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.88),
+    inset 0 2.5px 3px -2px rgba(255, 255, 255, 0.50),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.40),
+    inset 0 -10px 14px -12px rgba(15, 23, 42, 0.16);
+
+  /* Contact, ambient, deep ambient, and the transmitted pool. The pool is
+     tinted rather than gray because the light reaching it went through the
+     glass; a neutral shadow under a clear object is the giveaway. */
+  --glass-cast:
+    0 1px 1px rgba(15, 23, 42, 0.045),
+    0 10px 24px -8px rgba(15, 23, 42, 0.10),
+    0 26px 48px -20px rgba(15, 23, 42, 0.13),
+    0 12px 30px -14px rgba(120, 165, 245, 0.16);
+
+  --glass-shadow: var(--glass-cast), var(--glass-bevel);
+
+  --glass-glint-size: 92px;
+  --glass-glint-core: rgba(255, 255, 255, 0.62);
+  --glass-inner-glow: inset 0 1px 0 0 rgba(255, 255, 255, 0.88);
+
+  /* Geometry & Typography (Apple Squircles) */
+  --btn-radius: 12px;
+  --btn-radius-lg: 16px;
+  --card-radius: 22px;
+  --nav-radius: 999px;
+  --tab-radius: 12px;
+  --pill-radius: 999px;
+
+  --card-shadow: var(--glass-shadow);
+  --btn-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
+  --nav-blur: blur(24px) saturate(210%) brightness(108%);
+  --nav-border: 1px solid rgba(255, 255, 255, 0.88);
+
+  --font-stack: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-math: "KaTeX_Math", "Latin Modern Math", serif;
+  --spacing-unit: 1.1rem;
+}
+
+[data-skin="liquid-math"] body {
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(to right, rgba(15, 23, 42, 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(15, 23, 42, 0.045) 1px, transparent 1px),
+    linear-gradient(to right, rgba(15, 23, 42, 0.09) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(15, 23, 42, 0.09) 1px, transparent 1px);
+  background-size:
+    20px 20px, 20px 20px,
+    100px 100px, 100px 100px;
+  background-position:
+    -1px -1px, -1px -1px,
+    -1px -1px, -1px -1px;
+}
+
+[data-skin="liquid-math"] .ocr-btn {
+  background: rgba(255, 255, 255, 0.35);
+  color: var(--accent);
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  box-shadow:
+    0 3px 12px rgba(15, 23, 42, 0.06),
+    inset 0 1.5px 0.5px rgba(255, 255, 255, 1),
+    inset 0 -1px 0.5px rgba(15, 23, 42, 0.03);
+  backdrop-filter: blur(20px) saturate(210%) brightness(108%);
+  -webkit-backdrop-filter: blur(20px) saturate(210%) brightness(108%);
+  position: relative;
+  overflow: hidden;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+[data-skin="liquid-math"] .ocr-btn.secondary {
+  background: rgba(255, 255, 255, 0.20);
+  color: var(--fg);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.03), inset 0 1px 0.5px #fff;
+  backdrop-filter: blur(16px) saturate(190%);
+  -webkit-backdrop-filter: blur(16px) saturate(190%);
+}
+[data-skin="liquid-math"] .ocr-btn:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 255, 255, 0.55);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08), inset 0 1.5px 0.5px #fff;
+}
+[data-skin="liquid-math"] .ocr-btn:active {
+  transform: scale(0.97);
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   The glass surface itself
+   ══════════════════════════════════════════════════════════════
+   One material, declared once, worn by every glass surface in the app. A
+   surface joins by adding itself to the three selector lists below and, if it
+   wants thicker or thinner glass, by setting --glass-rim-width locally.
+
+   The two pseudo-elements divide the work the way the optics do:
+
+     ::before  the rim — a Fresnel reflection ring, drawn as a masked gradient
+               so it can vary in brightness around the perimeter. A uniform
+               `border: 1px solid white` cannot, which is why the old surfaces
+               looked like stickers cut out of frosted film: real glass is
+               never equally bright on all four sides at once.
+
+     ::after   the glint — one small, sharp catchlight that tracks the pointer.
+               The previous 520x360px wash at 0.40 alpha was not a highlight,
+               it was fog: it lit the whole surface evenly and destroyed the
+               sense that anything was behind it.
+
+   Both are inert to input, and both are suppressed under reduced motion in the
+   sense that matters — they stop tracking, they do not disappear. */
+
+[data-skin="liquid-math"] .result-card,
+[data-skin="liquid-math"] .hw-canvas-wrap {
+  background: var(--glass-bg);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 0;
+  border-radius: var(--card-radius);
+  position: relative;
+  isolation: isolate;
+}
+
+/* ── the rim ── */
+[data-skin="liquid-math"] .result-card::before,
+[data-skin="liquid-math"] .hw-canvas-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: var(--glass-rim-width, 1.25px);
+  /* Anchored to the pointer angle, so the bright arc of the ring swings around
+     the surface as the hand moves — the same way a catchlight travels around
+     the edge of a real lens. */
+  background:
+    conic-gradient(from calc(var(--glass-angle, 135deg) - 100deg),
+      var(--glass-rim-bright)  0deg,
+      var(--glass-rim-mid)    58deg,
+      var(--glass-rim-dim)   126deg,
+      var(--glass-rim-dim)   190deg,
+      var(--glass-rim-mid)   258deg,
+      var(--glass-rim-bright) 330deg,
+      var(--glass-rim-bright) 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask-composite: exclude;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ── the glint ── */
+[data-skin="liquid-math"] .result-card::after,
+[data-skin="liquid-math"] .hw-canvas-wrap::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(circle var(--glass-glint-size, 92px)
+      at var(--glass-x, 28%) var(--glass-y, 16%),
+      var(--glass-glint-core) 0%,
+      rgba(255, 255, 255, 0.10) 38%,
+      transparent 72%),
+    radial-gradient(circle 26px
+      at var(--glass-x, 28%) var(--glass-y, 16%),
+      rgba(255, 255, 255, 0.34) 0%,
+      transparent 100%);
+  mix-blend-mode: screen;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ── Floating Island Navigation Dock (Anchored Dead Center) ── */
+.bottom-nav,
+[data-skin="liquid-math"] .bottom-nav {
+  position: fixed !important;
+  bottom: 12px !important;
+  /* Centred by margin, not by `translateX(-50%)`.
+     A transform used for layout is a transform nothing else can touch. The
+     individual `scale` property composes AFTER the `transform` property, about
+     the same origin, so a press effect of scale(0.972) on a 480px dock
+     multiplied the -240px centring offset too and slid the whole bar 13px
+     sideways on every tap. Taking the transform out of the centring leaves
+     `scale` free to do what it says. */
+  left: 0 !important;
+  right: 0 !important;
+  margin-inline: auto;
+  width: calc(100% - 32px);
+  max-width: 480px;
+  border-radius: var(--nav-radius);
+  border: 0;
+  background: var(--glass-bg);
+  backdrop-filter: var(--nav-blur);
+  -webkit-backdrop-filter: var(--nav-blur);
+  box-shadow: var(--glass-shadow);
+  padding: 6px 10px;
+  padding-bottom: max(6px, var(--safe-b));
+  user-select: none;
+  /* pan-y, not none: the dock spans the width of the screen, and `none` meant
+     a swipe that happened to start on it could not scroll the page behind it.
+     The lens drag is horizontal, so it keeps the axis it actually uses. */
+  touch-action: pan-y;
+  z-index: 1000;
+  isolation: isolate;
+}
+
+/* The dock wears the same rim as every other glass surface, rather than the
+   flat 1px white outline it had. */
+.bottom-nav::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: var(--glass-rim-width, 1.25px);
+  background:
+    conic-gradient(from calc(var(--glass-angle, 135deg) - 100deg),
+      var(--glass-rim-bright)  0deg,
+      var(--glass-rim-mid)    58deg,
+      var(--glass-rim-dim)   126deg,
+      var(--glass-rim-dim)   190deg,
+      var(--glass-rim-mid)   258deg,
+      var(--glass-rim-bright) 330deg,
+      var(--glass-rim-bright) 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask-composite: exclude;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Sliding lenses — the dock pill and the segmented-control pill
+   ══════════════════════════════════════════════════════════════
+   These are the one place in the app where a piece of glass sits on top of
+   other glass, so they are the easiest to overbuild and the previous version
+   did: a 1px white border, a second 1px white ring in the box-shadow, four
+   inset white lines, a ::before topping out at 0.90 white and a ::after laying
+   0.55 white over all of it. Stacked, that is a near-opaque white capsule —
+   the selected tab stopped showing anything behind it, which is the one job a
+   lens has.
+
+   Rebuilt to the same material as every other surface: a low-alpha body, one
+   Fresnel ring, one glint. The lens earns its separation from the dock beneath
+   it through contrast and a lifted cast, not through more white. */
+.nav-glass-lens,
+.segmented-glass-lens {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: var(--pill-radius);
+  border: 0;
+  background: rgba(255, 255, 255, 0.20);
+  box-shadow:
+    0 1px 1px rgba(15, 23, 42, 0.05),
+    0 6px 16px -4px rgba(15, 23, 42, 0.12),
+    0 10px 24px -12px rgba(120, 165, 245, 0.18),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.90),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.38),
+    inset 0 -6px 8px -7px rgba(15, 23, 42, 0.14);
+  /* A lens concentrates: it samples the same backdrop as the bar it rides on,
+     but sharper and more saturated. That difference is what reads as a
+     separate piece of glass. Pushing contrast to 135% as before did not read
+     as glass, it read as a filter applied by mistake. */
+  backdrop-filter: blur(8px) saturate(240%) brightness(109%);
+  -webkit-backdrop-filter: blur(8px) saturate(240%) brightness(109%);
+  pointer-events: none;
+  z-index: 1;
+  transform-origin: center center;
+  transition: left 0.38s cubic-bezier(0.32, 0.72, 0, 1),
+              top 0.38s cubic-bezier(0.32, 0.72, 0, 1),
+              width 0.38s cubic-bezier(0.32, 0.72, 0, 1),
+              height 0.38s cubic-bezier(0.32, 0.72, 0, 1),
+              transform 0.38s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.nav-glass-lens {
+  top: 6px;
+  bottom: max(6px, var(--safe-b));
+}
+
+/* Fresnel ring, rotating with the pointer like every other surface. */
+.nav-glass-lens::before,
+.segmented-glass-lens::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background:
+    conic-gradient(from calc(var(--glass-angle, 135deg) - 100deg),
+      rgba(255, 255, 255, 0.98)  0deg,
+      rgba(255, 255, 255, 0.42) 58deg,
+      rgba(198, 219, 255, 0.20) 128deg,
+      rgba(198, 219, 255, 0.20) 188deg,
+      rgba(255, 255, 255, 0.44) 256deg,
+      rgba(255, 255, 255, 0.92) 330deg,
+      rgba(255, 255, 255, 0.98) 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* One catchlight riding the top of the pill, plus the faintest cool fringe
+   along the leading edge — dispersion, at the only strength where it reads as
+   glass rather than as a broken display. */
+.nav-glass-lens::after,
+.segmented-glass-lens::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse 62% 120% at 30% -34%,
+      rgba(255, 255, 255, 0.58) 0%,
+      rgba(255, 255, 255, 0.14) 46%,
+      transparent 78%),
+    linear-gradient(var(--glass-angle, 135deg),
+      rgba(140, 205, 255, 0.10) 0%,
+      transparent 34%,
+      transparent 66%,
+      rgba(255, 214, 170, 0.08) 100%);
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nav-glass-lens,
+  .segmented-glass-lens { transition: none; }
+}
+
+/* Lasso is a peer mode, not a warning. Its orange fill was the only selected
+   state in the app that did not go through the lens, so under this skin the
+   two camera modes disagreed about what "selected" looks like. It keeps a
+   distinct hue — the mode really is different — but wears it as text on the
+   same glass, at the same weight. */
+[data-skin="liquid-math"] .cam-mode-btn.lasso-active {
+  color: var(--math-gold) !important;
+  font-weight: 600 !important;
+}
+
+/* Draggable Glass Capsule Dynamics */
+.draggable-glass-capsule {
+  cursor: grab;
+  user-select: none;
+}
+
+.is-glass-dragging {
+  cursor: grabbing !important;
+  box-shadow:
+    0 24px 60px rgba(15, 23, 42, 0.18),
+    0 8px 20px rgba(15, 23, 42, 0.10),
+    inset 0 1.5px 0.5px rgba(255, 255, 255, 1) !important;
+  z-index: 1200 !important;
+}
+
+/* Press feedback.
+   This must NOT be written as `transform: scale(...)`. The dock centres itself
+   with `translateX(-50%)` and the floating ink toolbar with `translate(-50%,
+   -50%)`; a `transform` here — `!important` no less — replaced those outright,
+   so every tap threw the dock half its own width to the right and snapped it
+   back on release. The `scale` property is a separate compositing input and
+   multiplies into whatever `transform` the element already carries, which is
+   exactly what a press effect needs. */
+.liquid-bulge-press {
+  scale: 0.972;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.10),
+    inset 0 1px 2px rgba(15, 23, 42, 0.07),
+    var(--glass-bevel, none);
+  transition: scale 0.12s cubic-bezier(0.32, 0.72, 0, 1),
+              box-shadow 0.12s ease;
+}/* The active tab is drawn by exactly one thing: the sliding lens.
+   The button used to paint its own background, border and shadow as well. With
+   no border-radius of its own, that left a hard-edged rectangle sitting under
+   the rounded lens — visible in dark mode as a square shadow behind the pill,
+   and briefly as a square flash while the lens was still travelling. The
+   button now contributes colour and weight only. */
+[data-skin="liquid-math"] .bottom-nav button,
+[data-skin="liquid-math"] .bottom-nav button.active {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}[data-skin="liquid-math"] .bottom-nav button.active{
+  color: var(--accent);
+  font-weight: 600;
+}
+
+[data-skin="liquid-math"] .settings-tabs {
+  background: var(--glass-bg-subtle);
+  border: var(--glass-border-subtle);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-radius: var(--btn-radius);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.02);
+}
+
+[data-skin="liquid-math"] .settings-tab.active {
+  background: rgba(255, 255, 255, 0.70);
+  color: var(--accent);
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05), inset 0 1.5px 0.5px #fff;
+  font-weight: 600;
+  backdrop-filter: blur(16px) saturate(210%);
+  -webkit-backdrop-filter: blur(16px) saturate(210%);
+}
+/* Tap ripple.
+   The old rule grew a 12px disc to 45x — a 540px white circle — inside 34px
+   round buttons that clip nothing, so every tap on a tool flashed a blob
+   across half the screen. The wave is now sized by the script to the tap
+   point's distance to the element's farthest corner, so scale(1) is exactly
+   "reached the edge" on any size of control and never more. */
+.liquid-ripple-wave {
+  position: absolute;
+  width: var(--ripple-size, 40px);
+  height: var(--ripple-size, 40px);
+  margin: 0;
+  border-radius: 50%;
+  transform: translate(-50%, -50%) scale(0.12);
+  background: radial-gradient(circle,
+    rgba(255, 255, 255, 0.55) 0%,
+    rgba(255, 255, 255, 0.22) 42%,
+    rgba(255, 255, 255, 0.05) 70%,
+    transparent 100%);
+  mix-blend-mode: screen;
+  pointer-events: none;
+  animation: liquidRippleSpread 0.52s cubic-bezier(0.16, 0.84, 0.32, 1) forwards;
+  z-index: 2;
+}
+@keyframes liquidRippleSpread {
+  0%   { transform: translate(-50%, -50%) scale(0.12); opacity: 0.9; }
+  100% { transform: translate(-50%, -50%) scale(1);    opacity: 0; }
+}
+
+/* Reduced motion, across the whole app.
+   The narrow rules that used to live here covered the lens and the ripple and
+   nothing else, so a user who had asked for less motion still got the page
+   transition on every navigation, a skeleton shimmering on a loop, and
+   dropdowns, toasts and dialogs animating in.
+
+   Durations collapse rather than `animation: none`, because several of these
+   animations carry their end state in a `forwards` fill — cancelling them
+   outright would leave elements at their *starting* opacity and transform,
+   which is worse than the motion. State feedback is unaffected: a transition
+   that completes in a hundredth of a millisecond still applies. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* A ripple that appears and vanishes in the same frame is a flash, not
+     feedback, so it is removed rather than shortened. */
+  .liquid-ripple-wave { display: none !important; }
+
+  /* The exception: a spinner is not decoration. It is the only thing telling
+     the user that work is still in progress, and freezing it would report the
+     opposite. Slowed, not stopped. */
+  .spinner {
+    animation-duration: 1.6s !important;
+    animation-iteration-count: infinite !important;
+  }
+}
+
+/* Fallback for the Fresnel rings.
+   Every glass surface draws its rim as a full-size gradient box clipped to a
+   1px band by `mask-composite`. Where that is unsupported the clip silently
+   does nothing and the gradient paints solid across the whole surface — the
+   rim would cover the glass instead of edging it. So the rings are switched
+   off there and a plain border stands in: less alive, but a correct edge. */
+@supports not ((mask-composite: exclude) or (-webkit-mask-composite: xor)) {
+  [data-skin="liquid-math"] .result-card::before,
+  [data-skin="liquid-math"] .hw-canvas-wrap::before,
+  [data-skin="liquid-math"] .ink-toolbar::after,
+  [data-skin="liquid-math"] .ink-card::after,
+  .bottom-nav::after,
+  .nav-glass-lens::before,
+  .segmented-glass-lens::before { display: none !important; }
+
+  [data-skin="liquid-math"] .result-card,
+  [data-skin="liquid-math"] .hw-canvas-wrap,
+  [data-skin="liquid-math"] .ink-toolbar,
+  [data-skin="liquid-math"] .ink-card,
+  .bottom-nav,
+  .nav-glass-lens,
+  .segmented-glass-lens {
+    border: 1px solid var(--glass-rim-mid, rgba(255, 255, 255, 0.4)) !important;
+  }
+}
+
+/* ── End skin blocks ── */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* The surfaces we did not draw.
+   Native controls, the caret, the selection band and the scrollbar all ship
+   with defaults that belong to no theme here. Without `color-scheme`, an
+   unchecked checkbox on a dark glass card renders as a bright white square,
+   a range track renders light-on-dark, and the scrollbars stay light — the
+   most visible seam between the design and the browser. */
+:root { color-scheme: light; }
+::selection { background: var(--accent-light); color: var(--fg); }
+:root { accent-color: var(--accent); caret-color: var(--accent); }
+
+* { scrollbar-color: var(--border-color) transparent; scrollbar-width: thin; }
+
+html, body {
+  font-family: var(--font-stack);
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior: none;
+  touch-action: manipulation;
+}
+
+button, .snippet-btn, .compute-btn, .ocr-btn, .hw-tool-btn, .cam-trigger-btn {
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  font-family: inherit;
+}
+
+a { color: var(--accent); text-decoration: none; transition: color var(--transition-fast); }
+a:hover { color: var(--accent-hover); }
+
+/* ── Top nav: Floating Glass Bar ── */
+.spacer-top { height: calc(52px + var(--safe-t)); }
+.top-nav {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  background: var(--hdr-bg);
+  backdrop-filter: var(--nav-blur); -webkit-backdrop-filter: var(--nav-blur);
+  border-bottom: var(--nav-border);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.4), 0 4px 20px -2px rgba(0, 0, 0, 0.04);
+  padding-top: var(--safe-t);
+  transition: background 0.3s, border-color 0.3s;
+}
+.top-nav .inner {
+  max-width: var(--max-w); margin: 0 auto;
+  padding: 0 1.5rem; height: 50px;
+  display: flex; align-items: center; gap: 1.25rem;
+}
+.top-nav a { color: var(--fg); text-decoration: none; font-size: 0.92rem; font-weight: 500; }
+.top-nav a:hover { color: var(--accent); }
+.top-nav .brand-link { font-weight: 700; font-size: 1.05rem; letter-spacing: -0.02em; display: flex; align-items: center; gap: 8px; }
+
+.brand-math-symbol {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--glass-bg-subtle);
+  border: var(--glass-border-subtle);
+  color: var(--accent);
+  font-size: 0.9rem;
+  font-family: "KaTeX_Math", "Times New Roman", serif;
+  font-weight: 800;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04), inset 0 1px 0.5px #fff;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.top-nav-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* Never shrink, never wrap.
+     As flex items these controls were shrinkable by default, so on a 360-390px
+     phone the skin toggle was squeezed until its five-character label broke
+     across three lines. The button then grew to 97px inside a 48px bar and,
+     being centred, escaped 13px above it and overlapped the page beneath.
+     Width is the thing that has to give here, and the media query in
+     mobile.css gives it by dropping to icons — not by letting text reflow. */
+  flex: 0 0 auto;
+}
+
+.skin-quick-toggle,
+.theme-toggle {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* The brand is the one part of the bar that may yield, and it truncates rather
+   than wraps for the same reason. */
+.top-nav .brand-link { min-width: 0; }
+.top-nav .brand-link > span:not(.brand-math-symbol) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skin-quick-toggle {
+  background: var(--glass-bg-subtle);
+  border: var(--glass-border-subtle);
+  border-radius: var(--pill-radius);
+  padding: 5px 12px; cursor: pointer; font-size: 0.8rem; font-weight: 600;
+  display: flex; align-items: center; gap: 5px;
+  color: var(--fg);
+  transition: all var(--transition-fast);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  font-family: inherit;
+}
+.skin-quick-toggle:hover {
+  background: var(--glass-bg);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(10, 96, 255, 0.18);
+}
+.skin-quick-toggle:active { transform: scale(0.94); }
+.skin-quick-toggle .skin-badge-icon { font-size: 0.85rem; }
+
+.theme-toggle {
+  background: var(--glass-bg-subtle);
+  border: var(--glass-border-subtle);
+  border-radius: var(--pill-radius);
+  padding: 5px 12px; cursor: pointer; font-size: 0.8rem; font-weight: 500;
+  display: flex; align-items: center; gap: 6px;
+  color: var(--fg);
+  transition: all var(--transition-fast);
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+.theme-toggle:hover {
+  background: var(--glass-bg);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(10, 96, 255, 0.18);
+}
+.theme-toggle:active { transform: scale(0.94); }
+.theme-icon { flex-shrink: 0; display: block; }
+.theme-label { line-height: 1; white-space: nowrap; }
+
+/* ── Liquid Math Top Nav Island ── */
+[data-skin="liquid-math"] .top-nav {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(100% - 28px);
+  max-width: var(--max-w);
+  border-radius: 18px;
+  border: var(--glass-border);
+  background: var(--glass-bg);
+  backdrop-filter: var(--nav-blur);
+  -webkit-backdrop-filter: var(--nav-blur);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.03),
+    0 8px 24px -4px rgba(15, 23, 42, 0.06),
+    inset 0 1px 0.5px rgba(255, 255, 255, 0.95);
+  padding-top: 0;
+}
+[data-skin="liquid-math"] .top-nav .inner {
+  height: 48px;
+  padding: 0 1.1rem;
+}
+[data-skin="liquid-math"] .spacer-top {
+  height: 70px;
+}[data-skin="liquid-math"] .skin-quick-toggle,
+[data-skin="liquid-math"] .theme-toggle {
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), inset 0 1px 0.5px #fff;
+  color: var(--fg);
+}
+/* ── Page layout ── */
+#app { max-width: var(--max-w); margin: 0 auto; }
+.page { display: none; padding: 1.5rem 1.25rem calc(6.5rem + var(--safe-b)); }
+.page.active { display: block; animation: pageFadeIn 0.22s var(--spring-ease); }
+
+@keyframes pageFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Bottom tab bar: Liquid Glass Capsule / Bar ── */
+.bottom-nav {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
+  background: var(--hdr-bg);
+  border-radius: var(--nav-radius) var(--nav-radius) 0 0;
+  backdrop-filter: var(--nav-blur); -webkit-backdrop-filter: var(--nav-blur);
+  border-top: var(--nav-border);
+  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  display: flex; justify-content: space-around;
+  padding-bottom: var(--safe-b);
+  transition: background 0.3s, border-color 0.3s;
+}
+.bottom-nav button {
+  flex: 1; background: none; border: none;
+  color: var(--muted); cursor: pointer; position: relative;
+  padding: 8px 4px 6px;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  font-size: 0.72rem; font-weight: 500; font-family: inherit;
+  transition: all var(--transition-fast); -webkit-tap-highlight-color: transparent;
+}
+.bottom-nav button:active { transform: scale(0.92); }
+.bottom-nav button.active { color: var(--accent); font-weight: 600; }
+.bottom-nav button svg {
+  width: 22px; height: 22px;
+  transition: transform var(--transition-fast), filter var(--transition-fast);
+}
+.bottom-nav button.active svg {
+  transform: translateY(-1px);
+  filter: drop-shadow(0 2px 6px rgba(0, 122, 255, 0.4));
+}
+
+/* ── Ambient particle/mesh background ── */
+#mathBg { position: fixed; inset: 0; z-index: -2; pointer-events: none; opacity: 0.65; }
+.bg-overlay {
+  position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(ellipse at 15% 15%, rgba(0, 122, 255, 0.04) 0%, transparent 50%),
+    radial-gradient(ellipse at 85% 85%, rgba(88, 86, 214, 0.04) 0%, transparent 50%);
+}
+/* ── Skeleton loading ── */
+.skeleton {
+  background: linear-gradient(90deg, var(--border-color) 25%, rgba(255,255,255,0.4) 50%, var(--border-color) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+  border-radius: 8px;
+}
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* ── Settings page (Apple Inset Grouped) ── */
+#page-settings { padding: 1.25rem 1.25rem; padding-bottom: calc(6.5rem + var(--safe-b)); }
+#page-settings .settings-body { max-width: 580px; padding: 0; margin: 0 auto; }
+.settings-tabs {
+  display: flex; gap: 4px; margin-bottom: 1.25rem; padding: 4px;
+  background: var(--glass-bg-subtle); border-radius: var(--btn-radius);
+  border: var(--glass-border-subtle); backdrop-filter: blur(20px);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.04);
+}
+.settings-tab {
+  flex: 1; padding: 8px 0; border: none; background: transparent;
+  color: var(--muted); font-size: 0.86rem; font-weight: 500;
+  border-radius: calc(var(--btn-radius) - 3px);
+  cursor: pointer; transition: all var(--transition-fast); position: relative;
+}
+.settings-tab:active { transform: scale(0.97); }
+.settings-tab.active {
+  background: var(--card-bg); color: var(--fg);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+  font-weight: 600;
+}
+.set-label { display: block; font-size: 0.8rem; font-weight: 500; color: var(--muted); margin: 0.85rem 0 0.35rem; }
+.set-label:first-child { margin-top: 0; }
+.set-input, .set-select {
+  width: 100%; padding: 0.65rem 0.85rem; border: var(--glass-border-subtle);
+  border-radius: 10px; background: var(--bg); color: var(--fg);
+  font-size: 0.9rem; font-family: inherit; outline: none;
+  transition: all var(--transition-fast);
+}
+.set-input:focus, .set-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+/* ── Custom dropdown: Liquid Glass ── */
+.set-select-wrap {
+  position: relative; width: 100%;
+}
+.set-select-wrap .set-select { display: none; }
+.set-select-btn {
+  width: 100%; padding: 0.65rem 0.85rem;
+  border: var(--glass-border-subtle); border-radius: 10px;
+  background: var(--bg); color: var(--fg);
+  font-size: 0.9rem; font-family: inherit; cursor: pointer;
+  text-align: left; user-select: none;
+  display: flex; align-items: center; justify-content: space-between;
+  transition: all var(--transition-fast);
+}
+.set-select-btn:active { transform: scale(0.98); }
+.set-select-btn:hover { border-color: var(--accent); }
+.set-select-btn::after {
+  content: ''; width: 7px; height: 7px;
+  border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg); margin-left: 8px; flex-shrink: 0;
+  transition: transform var(--transition-fast);
+}
+.set-select-btn.open::after { transform: rotate(-135deg); }
+.set-select-dropdown {
+  position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 50;
+  background: var(--card-bg); border: var(--glass-border);
+  backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  border-radius: 12px; overflow: hidden; display: none;
+  box-shadow: var(--glass-shadow);
+  animation: dropdownIn 0.18s var(--spring-ease);
+}
+@keyframes dropdownIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.set-select-dropdown.show { display: block; }
+.set-option {
+  padding: 0.65rem 0.9rem; font-size: 0.88rem; color: var(--fg);
+  cursor: pointer; transition: background var(--transition-fast);
+}
+.set-option:hover { background: var(--accent-light); }
+.set-option:active { background: var(--accent); color: #fff; }
+.set-option.selected { color: var(--accent); font-weight: 600; background: var(--accent-light); }
+.set-hint { font-size: 0.74rem; color: var(--muted); margin-top: 0.5rem; line-height: 1.6; }
+
+/* ── Settings page groups: Apple Inset Grouped ── */
+.set-group {
+  margin-bottom: 1.25rem; padding: 1.1rem 1.25rem;
+  background: var(--card-bg); border-radius: var(--card-radius);
+  border: var(--glass-border); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-shadow);
+}
+.set-group-title {
+  font-size: 0.92rem; font-weight: 600; color: var(--fg);
+  margin-bottom: 0.75rem; padding-bottom: 0.5rem;
+  border-bottom: 0.5px solid var(--border-color);
+  letter-spacing: -0.01em;
+}
+.set-section { margin-bottom: 1rem; }
+.set-section:last-child { margin-bottom: 0; }
+.set-section-title { font-size: 0.82rem; font-weight: 500; color: var(--muted); margin-bottom: 0.5rem; }
+.set-radio-group { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.set-radio {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0.5rem 0.95rem; border: var(--glass-border-subtle);
+  border-radius: 10px; font-size: 0.85rem; font-weight: 500; cursor: pointer; color: var(--fg);
+  background: var(--glass-bg-subtle); transition: all var(--transition-fast); user-select: none;
+}
+.set-radio input { display: none; }
+.set-radio.active {
+  background: var(--accent); color: #fff; border-color: var(--accent);
+  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.3); font-weight: 600;
+}
+.set-radio:active { transform: scale(0.96); }
+
+/* ── Settings toggle switch (iOS Switch) ── */
+.set-toggle {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; cursor: pointer;
+  font-size: 0.88rem; color: var(--fg); margin-top: 0.5rem; user-select: none;
+}
+.set-toggle input { display: none; }
+.set-toggle-track {
+  width: 48px; height: 28px; border-radius: 14px;
+  background: rgba(120, 120, 128, 0.2); position: relative;
+  transition: background 0.25s var(--spring-ease); flex-shrink: 0;
+}
+.set-toggle-track::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 24px; height: 24px; border-radius: 50%; background: #ffffff;
+  transition: transform 0.25s var(--spring-ease), width 0.15s;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+.set-toggle:active .set-toggle-track::after { width: 28px; }
+.set-toggle input:checked + .set-toggle-track { background: #34C759; }
+.set-toggle input:checked + .set-toggle-track::after { transform: translateX(20px); }
+
+/* ── Toast Popup: Liquid Glass ── */
+.toast-popup {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  z-index: 10000;
+  background: var(--card-bg); border: var(--glass-border);
+  backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  border-radius: 20px; padding: 22px 30px; max-width: 340px; width: 90%;
+  box-shadow: var(--glass-shadow); text-align: center;
+  animation: toastIn 0.28s var(--spring-ease);
+}
+.toast-popup p { margin: 0 0 18px; color: var(--fg); font-size: 0.92rem; line-height: 1.5; }
+.toast-popup .toast-close {
+  background: var(--accent); color: #fff; border: none; padding: 9px 32px;
+  border-radius: var(--pill-radius); font-size: 0.88rem; font-weight: 600; cursor: pointer;
+  font-family: inherit; transition: all var(--transition-fast);
+  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.3);
+}
+.toast-popup .toast-close:active { transform: scale(0.95); opacity: 0.9; }
+@keyframes toastIn {
+  from { opacity: 0; transform: translate(-50%,-46%) scale(0.92); }
+  to   { opacity: 1; transform: translate(-50%,-50%) scale(1); }
+}
+
+/* ── Model Management UI ── */
+.model-section { margin-bottom: 1rem; padding: 0.6rem; border: 1px solid var(--border-color); border-radius: 8px; }
+.model-section h4 { margin: 0 0 0.5rem; font-size: 0.85rem; }
+.source-item { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0; border-bottom: 1px solid var(--border-color); font-size: 0.82rem; }
+.source-item:last-child { border-bottom: none; }
+.model-category { margin-bottom: 0.8rem; }
+.cat-header { display: flex; justify-content: space-between; align-items: center; font-weight: 600; font-size: 0.82rem; }
+.cat-status { display: inline-flex; align-items: center; }
+.cat-status.installed { color: #22c55e; }
+.cat-status.not-installed { color: #ef4444; }
+.variant-item { display: flex; justify-content: space-between; align-items: center; padding: 0.3rem 0 0.3rem 1rem; font-size: 0.8rem; }
+.variant-item.active { background: var(--accent-color-light, rgba(0,120,255,0.1)); border-radius: 4px; }
+.variant-item label { display: flex; align-items: center; gap: 0.4rem; cursor: pointer; flex: 1; min-width: 0; }
+.variant-item label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn-download-variant, .btn-delete-variant, .btn-remove-source { font-size: 0.72rem; padding: 0.25rem 0.6rem; min-width: 3.2em; text-align: center; border: 1px solid var(--border-color); border-radius: 4px; background: var(--card-bg); color: var(--fg); cursor: pointer; flex-shrink: 0; }
+.btn-download-variant { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn-download-variant:active { opacity: 0.8; }
+.btn-delete-variant { border-color: #ef4444; color: #ef4444; }
+.btn-delete-variant:active { background: #ef4444; color: #fff; }
+.add-source-form { display: flex; gap: 0.4rem; margin-top: 0.5rem; }
+.add-source-form input { flex: 1; font-size: 0.82rem; }
+#btn-import-zip, #btn-import-file, #btn-refresh-manifests { width: 100%; margin-top: 0.3rem; font-size: 0.82rem; padding: 0.5rem; border: 1px solid var(--border-color); border-radius: 6px; background: var(--card-bg); color: var(--fg); cursor: pointer; }
+#btn-import-zip:hover, #btn-import-file:hover, #btn-refresh-manifests:hover { background: var(--accent); color: #fff; }
+
+/* ── Welcome Dialog ── */
+.welcome-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  display: flex; justify-content: center; align-items: center;
+  background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px);
+}
+.welcome-dialog {
+  background: var(--card-bg); border-radius: 16px; padding: 2rem 1.5rem;
+  max-width: 360px; width: 90%; text-align: center;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.2);
+}
+.welcome-icon { color: var(--accent); margin-bottom: 1rem; }
+.welcome-dialog h2 { margin: 0 0 0.8rem; font-size: 1.2rem; color: var(--fg); }
+.welcome-desc { margin: 0.3rem 0; font-size: 0.85rem; color: var(--muted); line-height: 1.5; }
+.welcome-list { text-align: left; margin: 0.8rem auto; max-width: 280px; font-size: 0.82rem; color: var(--fg); }
+.welcome-list li { margin: 0.3rem 0; }
+.welcome-actions { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 1.2rem; }
+.welcome-btn {
+  width: 100%; padding: 0.7rem; border-radius: 10px; border: none;
+  font-size: 0.9rem; font-weight: 500; cursor: pointer; transition: all 0.15s;
+}
+.welcome-btn.primary { background: var(--accent); color: #fff; }
+.welcome-btn.primary:active { transform: scale(0.97); }
+.welcome-btn.secondary { background: var(--card-bg); color: var(--fg); border: 1px solid var(--border-color); }
+.welcome-btn.ghost { background: transparent; color: var(--muted); }
+.welcome-progress { margin-top: 1rem; }
+.welcome-progress-bar {
+  height: 6px; border-radius: 3px; background: var(--border-color);
+  overflow: hidden; margin-bottom: 0.4rem;
+}
+.welcome-progress-fill {
+  height: 100%; width: 0%; border-radius: 3px; background: var(--accent);
+  transition: width 0.3s ease;
+}
+.welcome-progress-text { font-size: 0.78rem; color: var(--muted); }
+
+/* ── Modal overlay (import/progress dialogs) ── */
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 2000;
+  display: flex; justify-content: center; align-items: center;
+  background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(4px);
+}
+.modal-content {
+  background: var(--card-bg); border-radius: 14px; padding: 1.5rem;
+  max-width: 340px; width: 85%; text-align: center;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+}
+.modal-content h3 { margin: 0 0 0.8rem; font-size: 1rem; color: var(--fg); }
+.modal-content p { margin: 0.5rem 0; font-size: 0.85rem; color: var(--muted); }
+.modal-content label { display: block; font-size: 0.78rem; color: var(--muted); margin: 0.6rem 0 0.2rem; text-align: left; }
+.modal-content input, .modal-content select {
+  width: 100%; padding: 0.55rem 0.7rem; border: 1px solid var(--border-color);
+  border-radius: 8px; background: var(--bg); color: var(--fg); font-size: 0.85rem;
+}
+.modal-content .modal-actions { display: flex; gap: 0.5rem; margin-top: 1rem; }
+.modal-content .modal-actions button { flex: 1; }
+.modal-status { font-size: 0.85rem; color: var(--muted); margin: 0.5rem 0; }
+.modal-status.success { color: #22c55e; }
+.modal-status.error { color: #ef4444; }
+.modal-progress { margin: 0.8rem 0; }
+.modal-progress-bar { height: 5px; border-radius: 3px; background: var(--border-color); overflow: hidden; }
+.modal-progress-fill { height: 100%; width: 0%; border-radius: 3px; background: var(--accent); transition: width 0.3s; }
+
+/* ── Save success toast (bottom popup) ── */
+.save-toast {
+  position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+  z-index: 10001; background: var(--accent); color: #fff;
+  border-radius: 10px; padding: 12px 24px; font-size: 0.9rem;
+  white-space: nowrap; box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+  opacity: 0; transition: opacity 0.3s ease, transform 0.3s ease;
+  transform: translateX(-50%) translateY(12px);
+  pointer-events: none;
+}
+.save-toast.save-toast-show {
+  opacity: 1; transform: translateX(-50%) translateY(0);
+}
+.save-toast.save-toast-hide {
+  opacity: 0; transform: translateX(-50%) translateY(-8px);
+}
+
+/* ── Update modal ── */
+.update-overlay {
+  position: fixed; inset: 0; z-index: 10000;
+  background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center;
+  padding: 16px; animation: overlayIn 0.2s ease;
+}
+.update-dialog {
+  background: var(--card-bg); border: 1px solid var(--border-color);
+  border-radius: 16px; max-width: 440px; width: 100%; max-height: 80vh;
+  display: flex; flex-direction: column;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.22);
+  animation: dialogIn 0.25s ease;
+}
+.update-dialog-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 20px 24px 0; flex-shrink: 0;
+}
+.update-dialog-header h3 { margin: 0; font-size: 1.05rem; color: var(--fg); }
+.update-dialog-close {
+  background: none; border: none; font-size: 1.4rem; cursor: pointer;
+  color: var(--muted); line-height: 1; padding: 0 4px;
+}
+.update-dialog-body {
+  padding: 16px 24px; overflow-y: auto; flex: 1;
+  font-size: 0.85rem; color: var(--muted); line-height: 1.6;
+  white-space: pre-wrap;
+}
+.update-dialog-footer {
+  display: flex; gap: 10px; justify-content: flex-end;
+  padding: 16px 24px 20px; flex-shrink: 0;
+}
+.update-dialog-footer .ocr-btn { min-width: 90px; }
+@keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dialogIn { from { opacity: 0; transform: scale(0.93) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+
+/* ═══════════════════════════════════════════
+   Splash / Loading Screen
+   ═══════════════════════════════════════════ */
+.splash {
+  position: fixed; inset: 0; z-index: 10000;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg);
+  transition: opacity 0.5s ease, visibility 0.5s ease;
+}
+.splash--hidden {
+  opacity: 0; visibility: hidden; pointer-events: none;
+}
+.splash-inner {
+  text-align: center; max-width: 360px; width: 90vw;
+}
+.splash-icon {
+  margin-bottom: 1.2rem;
+  animation: splashPulse 2s ease-in-out infinite;
+}
+@keyframes splashPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.06); }
+}
+.splash-title {
+  font-size: 1.8rem; font-weight: 700; color: var(--fg);
+  letter-spacing: -0.02em; margin-bottom: 0.2rem;
+}
+.splash-subtitle {
+  font-size: 0.95rem; color: var(--muted); margin-bottom: 2rem;
+}
+.splash-progress-wrap {
+  margin-bottom: 1.2rem;
+}
+.splash-progress-track {
+  width: 100%; height: 4px; border-radius: 2px;
+  background: var(--border-color); overflow: hidden; margin-bottom: 0.6rem;
+}
+.splash-progress-fill {
+  height: 100%; width: 0%; border-radius: 2px;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+.splash-progress-label {
+  font-size: 0.8rem; color: var(--muted); min-height: 1.2em;
+}
+.splash-progress-pct {
+  font-size: 0.75rem; color: var(--muted); margin-top: 0.15rem;
+}
+.splash-models {
+  display: flex; flex-wrap: wrap; gap: 0.35rem; justify-content: center;
+  margin-top: 0.8rem;
+}
+.splash-model-tag {
+  font-size: 0.7rem; padding: 0.25rem 0.6rem; border-radius: 10px;
+  background: var(--border-color); color: var(--muted);
+  transition: background 0.3s, color 0.3s;
+}
+.splash-model-tag--loaded {
+  background: var(--accent); color: #fff;
+}
+.splash-model-tag--error {
+  background: #fecaca; color: #dc2626;
+}
+/* ── Install Banner (Top-Right Floating Toast) ── */
+.install-banner {
+  display: none;
+  position: fixed;
+  top: calc(56px + var(--safe-t));
+  right: 16px;
+  left: auto;
+  transform: none;
+  z-index: 9999;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: var(--glass-border);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  border-radius: var(--pill-radius);
+  padding: 8px 14px;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.82rem;
+  color: var(--fg);
+  animation: modal-enter 0.3s var(--spring-ease);
+}
+.install-banner.show {
+  display: flex;
+}
+.install-banner button#installBtn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 5px 12px;
+  border-radius: var(--pill-radius);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(10, 96, 255, 0.3);
+}
+.install-banner .close-banner {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}

@@ -1,0 +1,1053 @@
+/* PDF workspace — Apple Liquid Glass dual-document layout, animated resizing, divider, outline, library. */
+
+#page-pdf {
+  display: none;
+  flex-direction: column;
+  flex: 1 1 auto;
+  height: calc(100vh - 50px - 70px);
+  height: calc(100dvh - 50px - 70px);
+  min-height: 480px;
+  padding: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+#page-pdf.active {
+  display: flex !important;
+  padding: 0 !important;
+}
+
+#app:has(#page-pdf.active) {
+  max-width: 100% !important;
+}
+
+/* ── page toolbar: Floating Liquid Glass Bar ───────────────────────────────── */
+
+.pdf-page-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  background: var(--hdr-bg);
+  backdrop-filter: var(--nav-blur);
+  -webkit-backdrop-filter: var(--nav-blur);
+  border-bottom: var(--nav-border);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.4), 0 4px 20px -2px rgba(0, 0, 0, 0.03);
+  flex-wrap: wrap;
+  z-index: 15;
+  transition: background 0.3s, border-color 0.3s;
+}
+
+.pdf-bar-group {
+  display: inline-flex;
+  align-items: center;
+  background: var(--glass-bg-subtle);
+  border: var(--glass-border-subtle);
+  border-radius: var(--pill-radius);
+  padding: 3px;
+  gap: 3px;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+}
+
+.pdf-bar-btn,
+.pdf-page-bar button {
+  padding: 0.45rem 0.85rem;
+  border: none;
+  border-radius: var(--pill-radius);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 0.84rem;
+  font-weight: 500;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+}
+
+.pdf-bar-btn:hover,
+.pdf-page-bar button:hover {
+  background: var(--glass-bg);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  transform: translateY(-1px);
+}
+
+.pdf-bar-btn:active,
+.pdf-page-bar button:active {
+  transform: scale(0.95);
+}
+
+.pdf-status {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--muted);
+  margin-inline-start: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pdf-status.is-error { color: #FF3B30; font-weight: 600; }
+
+.pdf-runtime-missing {
+  padding: 3rem 1.5rem;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+/* ── Workspace & Sizing Animation Adaptation ──────────────────────────────── */
+
+.pdf-workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+  position: relative;
+  background: var(--bg);
+  padding: 4px;
+  gap: 2px;
+}
+
+.pdf-workspace.is-column { flex-direction: column; }
+
+/* Animated sizing adaptation rule */
+.pdf-workspace.is-animating .pdf-ws-slot {
+  transition: flex-basis 0.36s cubic-bezier(0.32, 0.72, 0, 1),
+              opacity 0.28s ease,
+              transform 0.36s cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: flex-basis;
+}
+
+.pdf-ws-slot {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  flex-grow: 0;
+  flex-shrink: 1;
+  position: relative;
+  border-radius: var(--card-radius);
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--card-shadow);
+  transition: border-color 0.25s, box-shadow 0.25s;
+}
+
+.pdf-ws-slot.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-light), 0 6px 24px rgba(0, 122, 255, 0.14);
+}
+
+.pdf-ws-slot[hidden] { display: none; }
+
+/* ── Workspace Empty State (Apple Liquid Glass) ──────────────────────────── */
+
+.pdf-ws-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+  padding: 2rem;
+  pointer-events: none;
+}
+
+.pdf-ws-empty[hidden] { display: none; }
+
+.pdf-empty-card {
+  pointer-events: auto;
+  max-width: 480px;
+  width: 100%;
+  text-align: center;
+  padding: 2.5rem 2rem;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: var(--glass-border);
+  border-radius: var(--card-radius-lg);
+  box-shadow: var(--glass-shadow), var(--glass-inner-glow);
+  animation: modal-enter 0.3s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+.pdf-empty-icon {
+  width: 68px;
+  height: 68px;
+  border-radius: 20px;
+  background: rgba(0, 122, 255, 0.1);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 1.25rem;
+  box-shadow: 0 4px 16px rgba(0, 122, 255, 0.15);
+}
+
+.pdf-empty-title {
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0 0 0.5rem;
+  letter-spacing: -0.01em;
+}
+
+.pdf-empty-desc {
+  font-size: 0.88rem;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0 0 1.5rem;
+}
+
+.pdf-empty-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.pdf-empty-btn {
+  padding: 0.65rem 1.4rem;
+  border-radius: var(--pill-radius);
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+}
+
+.pdf-empty-btn.primary {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(0, 122, 255, 0.3);
+}
+
+.pdf-empty-btn.primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(0, 122, 255, 0.4);
+}
+
+.pdf-empty-btn.secondary {
+  background: var(--glass-bg-subtle);
+  color: var(--fg);
+  border: var(--glass-border-subtle);
+}
+
+.pdf-empty-btn.secondary:hover {
+  background: var(--glass-bg);
+  transform: translateY(-1px);
+}
+
+.pdf-empty-btn:active {
+  transform: scale(0.96);
+}
+
+/* ── Liquid Divider & Real-Time Ratio Badge ───────────────────────────────── */
+
+.pdf-ws-divider {
+  flex: 0 0 14px;
+  background: transparent;
+  position: relative;
+  cursor: col-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  user-select: none;
+  z-index: 10;
+  transition: all var(--transition-fast);
+}
+
+.pdf-ws-divider::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: 0 auto;
+  width: 1px;
+  background: var(--border-color);
+  opacity: 0.8;
+}
+
+.pdf-workspace.is-column .pdf-ws-divider {
+  flex-basis: 14px;
+  cursor: row-resize;
+}
+
+.pdf-workspace.is-column .pdf-ws-divider::before {
+  width: 100%;
+  height: 1px;
+}
+
+.pdf-ws-divider:focus-visible { outline: 2px solid var(--accent); }
+
+.pdf-ws-divider-grip {
+  width: 6px;
+  height: 48px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  transition: all 0.22s var(--spring-ease);
+  z-index: 2;
+}
+
+.pdf-workspace.is-column .pdf-ws-divider-grip {
+  width: 48px;
+  height: 6px;
+}
+
+.pdf-ws-divider:hover .pdf-ws-divider-grip,
+.pdf-ws-divider.is-dragging .pdf-ws-divider-grip {
+  width: 8px;
+  height: 60px;
+  background: var(--accent);
+  border-color: transparent;
+  box-shadow: 0 0 16px rgba(0, 122, 255, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.pdf-workspace.is-column .pdf-ws-divider:hover .pdf-ws-divider-grip,
+.pdf-workspace.is-column .pdf-ws-divider.is-dragging .pdf-ws-divider-grip {
+  width: 60px;
+  height: 8px;
+}
+
+.pdf-ws-divider[hidden] { display: none; }
+
+/* Real-Time Floating Ratio Badge */
+.pdf-ws-ratio-badge {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translate(-50%, 0) scale(0.85);
+  background: rgba(20, 20, 24, 0.85);
+  color: #ffffff;
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 0.5px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  border-radius: var(--pill-radius);
+  padding: 5px 14px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.22s var(--spring-ease), transform 0.22s var(--spring-ease);
+  z-index: 100;
+}
+
+.pdf-ws-ratio-badge.is-visible {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+/* ── Per-Slot Liquid Glass Toolbar ────────────────────────────────────────── */
+
+.pdf-slot-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.65rem;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-bottom: var(--glass-border-subtle);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.02);
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  z-index: 8;
+  transition: background 0.3s;
+}
+
+.pdf-slot-toolbar::-webkit-scrollbar { display: none; }
+
+.pdf-slot-title {
+  font-size: 0.84rem;
+  font-weight: 600;
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-inline-end: 0.35rem;
+  color: var(--fg);
+}
+
+.pdf-slot-btn {
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 0.45rem;
+  border: var(--glass-border-subtle);
+  border-radius: 8px;
+  background: var(--glass-bg-subtle);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 0.88rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+}
+
+.pdf-slot-btn:hover:not(:disabled) {
+  background: var(--card-bg);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.pdf-slot-btn:active:not(:disabled) {
+  transform: scale(0.92);
+}
+
+.pdf-slot-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.pdf-slot-btn.is-active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.35);
+}
+
+.pdf-slot-sep {
+  width: 1px;
+  height: 1.25rem;
+  background: var(--border-color);
+  flex: 0 0 auto;
+  margin: 0 0.2rem;
+}
+
+.pdf-slot-page {
+  width: 3.2rem;
+  height: 2rem;
+  text-align: center;
+  border: var(--glass-border-subtle);
+  border-radius: 8px;
+  background: var(--glass-bg-subtle);
+  color: var(--fg);
+  font-size: 0.85rem;
+  font-weight: 500;
+  outline: none;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+}
+
+.pdf-slot-label {
+  width: 3.2rem;
+  height: 2rem;
+  text-align: center;
+  border: var(--glass-border-subtle);
+  border-radius: 8px;
+  background: var(--glass-bg-subtle);
+  color: var(--fg);
+  font-size: 0.8rem;
+  font-weight: 500;
+  outline: none;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+}
+
+.pdf-slot-page:focus,
+.pdf-slot-label:focus {
+  border-color: var(--accent);
+  background: var(--card-bg);
+  box-shadow: 0 0 0 2px var(--accent-light);
+}
+
+.pdf-slot-total,
+.pdf-slot-zoom {
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* ── Pane & Viewport ──────────────────────────────────────────────────────── */
+
+.pdf-slot-pane { flex: 1 1 auto; min-height: 0; display: flex; }
+
+.pdf-pane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+
+.pdf-pane-empty {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.pdf-pane-empty-icon {
+  font-size: 2.5rem;
+  opacity: 0.6;
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.08));
+}
+
+.pdf-pane-body { flex: 1 1 auto; min-height: 0; display: flex; }
+
+.pdf-pane-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg);
+  touch-action: none;
+  cursor: grab;
+}
+
+.pdf-pane-viewport.is-panning { cursor: grabbing; }
+
+.pdf-pane-canvas-holder {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.pdf-pane-canvas {
+  display: block;
+  background: #fff;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+  border-radius: 2px;
+}
+
+.pdf-pane-error {
+  padding: 1.25rem;
+  color: #FF3B30;
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+/* Ink layer: vector canvas overlay */
+.pdf-ink-canvas {
+  position: absolute;
+  inset: 0;
+  touch-action: none;
+  z-index: 2;
+}
+
+/* ── Outline Panel: Glass Accordion ───────────────────────────────────────── */
+
+.pdf-outline-panel {
+  max-height: 42%;
+  overflow: auto;
+  border-bottom: var(--glass-border-subtle);
+  background: var(--card-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  padding: 0.5rem 0;
+  box-shadow: var(--glass-shadow);
+  animation: outlineIn 0.22s var(--spring-ease);
+}
+
+@keyframes outlineIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.pdf-outline-panel[hidden] { display: none; }
+
+.pdf-outline-empty {
+  padding: 0.85rem 1.25rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.pdf-outline-list { list-style: none; margin: 0; padding: 0; }
+
+.pdf-outline-link {
+  display: block;
+  width: 100%;
+  text-align: start;
+  padding: 0.45rem 1rem;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font-size: 0.84rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.pdf-outline-link:hover:not(:disabled) {
+  background: var(--accent-light);
+  color: var(--accent);
+}
+
+.pdf-outline-link:disabled { opacity: 0.45; cursor: default; }
+
+/* ── Library Drawer: iPadOS Glass Sheet ──────────────────────────────────── */
+
+.pdf-library {
+  position: absolute;
+  inset: 0;
+  background: var(--glass-bg);
+  backdrop-filter: blur(40px) saturate(200%);
+  -webkit-backdrop-filter: blur(40px) saturate(200%);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  animation: libraryIn 0.28s var(--spring-ease);
+}
+
+@keyframes libraryIn {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.pdf-library[hidden] { display: none; }
+
+.pdf-library-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.85rem 1.25rem;
+  border-bottom: var(--glass-border-subtle);
+  background: var(--hdr-bg);
+}
+
+.pdf-library-header strong {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.pdf-library-usage {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.pdf-library-list {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 0.75rem 1rem;
+}
+
+.pdf-library-empty {
+  padding: 3rem 1rem;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.pdf-library-row {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.85rem 1.1rem;
+  margin-bottom: 0.6rem;
+  border-radius: var(--card-radius);
+  background: var(--card-bg);
+  border: var(--glass-border);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-shadow);
+  transition: all var(--transition-fast);
+}
+
+.pdf-library-row:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
+}
+
+.pdf-library-info { flex: 1 1 auto; min-width: 0; }
+
+.pdf-library-name {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--fg);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pdf-library-meta {
+  font-size: 0.76rem;
+  color: var(--muted);
+  margin-top: 0.25rem;
+}
+
+.pdf-role-tag {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.1rem 0.45rem;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  vertical-align: middle;
+}
+
+.pdf-library-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
+
+.pdf-library-btn {
+  padding: 0.4rem 0.75rem;
+  border: var(--glass-border-subtle);
+  border-radius: 8px;
+  background: var(--glass-bg-subtle);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 500;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+}
+
+.pdf-library-btn:hover {
+  background: var(--card-bg);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.pdf-library-btn.is-danger {
+  color: #FF3B30;
+  background: rgba(255, 59, 48, 0.08);
+  border-color: rgba(255, 59, 48, 0.15);
+}
+
+.pdf-library-btn.is-danger:hover {
+  background: #FF3B30;
+  color: #fff;
+}
+
+/* ── Role Selection Modal Sheet ───────────────────────────────────────────── */
+
+.pdf-role-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  animation: modalFadeIn 0.22s ease;
+}
+
+@keyframes modalFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.pdf-role-dialog {
+  min-width: 18rem;
+  max-width: 24rem;
+  padding: 1.35rem 1.5rem;
+  border-radius: 20px;
+  background: var(--card-bg);
+  border: var(--glass-border);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-shadow);
+  text-align: center;
+  animation: dialogPop 0.26s var(--spring-ease);
+}
+
+@keyframes dialogPop {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.pdf-role-title { font-size: 1.05rem; font-weight: 700; color: var(--fg); margin-bottom: 0.35rem; }
+
+.pdf-role-file {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 1.1rem;
+  overflow-wrap: anywhere;
+}
+
+.pdf-role-options { display: flex; gap: 0.6rem; margin-bottom: 0.85rem; }
+
+.pdf-role-options button {
+  flex: 1 1 0;
+  padding: 0.75rem 0.5rem;
+  border-radius: 12px;
+  border: var(--glass-border-subtle);
+  background: var(--glass-bg-subtle);
+  color: var(--fg);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+}
+
+.pdf-role-options button:hover {
+  background: var(--card-bg);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.pdf-role-options button.is-suggested {
+  border-color: var(--accent);
+  background: var(--accent-light);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+.pdf-role-cancel {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 0.82rem;
+  cursor: pointer;
+  padding: 4px 12px;
+  border-radius: var(--pill-radius);
+  font-family: inherit;
+}
+
+.pdf-role-cancel:hover { color: var(--fg); }
+
+/* ── Answer Lookup Panel: Apple Intelligence Glass Card ───────────────────── */
+
+.pdf-answer-panel {
+  max-height: 48%;
+  overflow: auto;
+  border-bottom: var(--glass-border-subtle);
+  background: var(--card-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  padding: 0.75rem 0.85rem;
+  box-shadow: var(--glass-shadow);
+  animation: answerIn 0.24s var(--spring-ease);
+}
+
+@keyframes answerIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.pdf-answer-panel[hidden] { display: none; }
+
+.answer-panel { font-size: 0.84rem; }
+
+.answer-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--muted);
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 0.5px solid var(--border-color);
+}
+
+.answer-notice { padding: 1rem 0.4rem; color: var(--muted); text-align: center; }
+
+.answer-row {
+  padding: 0.65rem 0.8rem;
+  border-radius: 12px;
+  border: var(--glass-border);
+  background: var(--glass-bg-subtle);
+  margin-bottom: 0.5rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.02);
+  transition: all var(--transition-fast);
+}
+
+.answer-row:hover {
+  background: var(--card-bg);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.answer-q { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+
+.answer-qtext {
+  font-size: 0.76rem;
+  color: var(--muted);
+  margin: 0.25rem 0;
+  overflow-wrap: anywhere;
+}
+
+.answer-conf {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.1rem 0.45rem;
+  border-radius: 6px;
+  color: #fff;
+  letter-spacing: 0.01em;
+}
+
+.answer-conf.is-high { background: #34C759; }
+.answer-conf.is-medium { background: #FF9500; }
+.answer-conf.is-low { background: #FF3B30; }
+.answer-conf.is-none { background: #8E8E93; }
+
+.answer-row.is-low { border-color: rgba(255, 59, 48, 0.25); }
+
+.answer-goto {
+  margin-inline-start: auto;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  border-radius: var(--pill-radius);
+  border: none;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+}
+
+.answer-goto {
+  margin-inline-start: auto;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  border-radius: var(--pill-radius);
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all var(--transition-fast);
+  box-shadow: 0 2px 6px rgba(0, 122, 255, 0.3);
+}
+
+.answer-goto:hover { transform: scale(1.04); box-shadow: 0 3px 10px rgba(0, 122, 255, 0.4); }
+.answer-goto:active { transform: scale(0.95); }
+
+.answer-reveal summary { cursor: pointer; font-size: 0.78rem; font-weight: 500; color: var(--fg); opacity: 0.9; }
+
+.answer-value {
+  margin-top: 0.4rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  background: var(--bg);
+  border: var(--glass-border-subtle);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  overflow-wrap: anywhere;
+  font-size: 0.85rem;
+}
+
+.answer-reason { font-size: 0.72rem; color: var(--muted); margin-top: 0.35rem; }
+
+.answer-alts {
+  margin: 0.4rem 0 0;
+  padding-inline-start: 1.2rem;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Skin: Math Liquid Glass — Apple Studio Dual Workspace
+   ══════════════════════════════════════════════════════════════ */
+[data-skin="liquid-math"] .pdf-ws-slot {
+  background: var(--glass-bg);
+  backdrop-filter: var(--card-blur);
+  -webkit-backdrop-filter: var(--card-blur);
+  border: var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  border-radius: var(--card-radius);
+  position: relative;
+  overflow: hidden;
+}
+
+[data-skin="liquid-math"] .pdf-page-bar {
+  background: var(--glass-bg);
+  backdrop-filter: var(--nav-blur);
+  -webkit-backdrop-filter: var(--nav-blur);
+  border: var(--nav-border);
+  box-shadow: var(--glass-shadow);
+  border-radius: var(--pill-radius);
+  margin: 6px 12px;
+}
+
+[data-skin="liquid-math"] .pdf-pane-viewport {
+  background: transparent;
+}
+
+[data-skin="liquid-math"] .pdf-ws-slot::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse 520px 360px at var(--glass-x, 25%) var(--glass-y, 15%),
+      rgba(255, 255, 255, 0.45) 0%,
+      rgba(255, 255, 255, 0.10) 35%,
+      rgba(255, 255, 255, 0.02) 65%,
+      transparent 85%),
+    linear-gradient(var(--glass-angle, 135deg),
+      rgba(255, 255, 255, 0.32) 0%,
+      rgba(255, 255, 255, 0.05) 30%,
+      transparent 60%,
+      rgba(255, 255, 255, 0.04) 100%);
+  pointer-events: none;
+}
+
+[data-skin="liquid-math"] .pdf-slot-toolbar {
+  background: var(--glass-bg-subtle);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-bottom: var(--glass-border-subtle);
+}
+
+[data-skin="liquid-math"] .pdf-ws-divider {
+  flex-basis: 14px;
+  position: relative;
+}
+
+[data-skin="liquid-math"] .pdf-ws-divider::before {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0; left: 50%;
+  width: 1.5px;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.08);
+  box-shadow: none;
+}
+
+[data-skin="liquid-math"] .pdf-ws-divider-grip {
+  width: 9px;
+  height: 54px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  box-shadow:
+    0 2px 10px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0.5px #fff;
+  position: relative;
+}
+
+[data-skin="liquid-math"] .pdf-ws-divider-grip::after {
+  content: 'φ';
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  font-family: "KaTeX_Math", "STIX Two Math", serif;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+/* ══════════════════════════════════════════════════════════════
+   Active Preset & Ratio Badge: Liquid Crystal Lens
+   胶囊本身无色透明，纯净透光透过见底色
+   ══════════════════════════════════════════════════════════════ */
+[data-skin="liquid-math"] .pdf-ws-ratio-badge {
+  font-family: "KaTeX_Math", "SF Pro Text", -apple-system, sans-serif;
+  background: rgba(255, 255, 255, 0.40);
+  color: var(--fg);
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(20px) saturate(210%) brightness(108%);
+  -webkit-backdrop-filter: blur(20px) saturate(210%) brightness(108%);
+  box-shadow:
+    0 4px 16px rgba(15, 23, 42, 0.08),
+    inset 0 1.5px 0.5px #fff;
+  text-shadow: none;
+  letter-spacing: 0.02em;
+  font-weight: 600;
+}

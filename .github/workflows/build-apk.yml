@@ -1,0 +1,155 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（留空自动从 package.json 读取）'
+        required: false
+        default: ''
+        type: string
+      create_release:
+        description: '创建 GitHub Release'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GRADLE_OPTS: '-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs="-Xmx3g"'
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-36 build-tools;36.0.0'
+
+      - name: Generate release keystore
+        run: |
+          mkdir -p ~/.android
+          # Debug keystore (for assembleDebug)
+          if [ ! -f ~/.android/debug.keystore ]; then
+            keytool -genkey -v -keystore ~/.android/debug.keystore \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          # Release keystore (for assembleRelease, V1+V2+V3 signed)
+          # Use GitHub Secrets if available, otherwise generate a CI-only key
+          cd android/app
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > release.keystore
+            echo "storeFile=release.keystore" > keystore.properties
+            echo "storePassword=${KEYSTORE_PASSWORD}" >> keystore.properties
+            echo "keyAlias=${KEY_ALIAS:-latexsnipper}" >> keystore.properties
+            echo "keyPassword=${KEY_PASSWORD:-${KEYSTORE_PASSWORD}}" >> keystore.properties
+            echo "Using user-provided keystore"
+          else
+            keytool -genkey -v -keystore release.keystore \
+              -storepass latexsnipper -alias latexsnipper -keypass latexsnipper \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=LaTeXSnipper,O=LaTeXSnipper,C=CN"
+            echo "storeFile=release.keystore" > keystore.properties
+            echo "storePassword=latexsnipper" >> keystore.properties
+            echo "keyAlias=latexsnipper" >> keystore.properties
+            echo "keyPassword=latexsnipper" >> keystore.properties
+            echo "Using CI-generated keystore (no Secrets set)"
+          fi
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle*', 'android/**/gradle-wrapper.properties') }}
+
+      - name: Set version
+        run: |
+          # Auto-read version from package.json if not provided
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION=$(node -e "console.log(require('./package.json').version)")
+            echo "Using package.json version: $VERSION"
+          else
+            # Update package.json with the provided version
+            node -e "const p=require('./package.json');p.version='$VERSION';require('fs').writeFileSync('package.json',JSON.stringify(p,null,2))"
+          fi
+          # Update Android version — strip dots and strip leading zeros to avoid octal
+          VER_CODE=$(echo "$VERSION" | node -e "process.stdin.on('data',d=>console.log(Number(d.toString().replace(/\./g,''))))")
+          sed -i "s/versionCode .*/versionCode $VER_CODE/" android/app/build.gradle
+          sed -i "s/versionName .*/versionName \"$VERSION\"/" android/app/build.gradle
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "Version set to $VERSION (code: $VER_CODE)"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web assets
+        run: npm run build
+
+      - name: Sync Capacitor Android
+        run: npx cap sync android
+
+      - name: Build Release APK (signed V1+V2+V3 + R8 obfuscated)
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleRelease
+
+      - name: Verify APK
+        run: |
+          # With ABI splits, APK names contain architecture
+          APK_DIR="android/app/build/outputs/apk/release"
+          echo "=== APK files ==="
+          ls -lh "$APK_DIR"/
+          echo "--- Architecture-specific APKs ---"
+          for apk in "$APK_DIR"/*.apk; do
+            echo "APK: $(basename "$apk") size: $(du -sh "$apk" | cut -f1)"
+            apksigner verify --verbose "$apk" 2>&1 | head -5 || true
+          done
+
+      - name: Get version
+        id: version
+        run: echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        if: ${{ inputs.create_release }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: v${{ env.VERSION }}
+          files: android/app/build/outputs/apk/release/*.apk
+          draft: false
+          generate_release_notes: true

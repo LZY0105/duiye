@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#2563eb">
+  <meta name="version" content="0.0.0"><!-- auto-replaced by vite build -->
+  <meta name="description" content="LaTeXSnipper — 公式识别 — 离线 ONNX 公式 OCR 识别">
+  <title>LaTeXSnipper — 公式识别</title>
+  <link rel="icon" type="image/png" href="/icon.png">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="stylesheet" href="/vendor/mathlive/mathlive-fonts.css">
+</head>
+<body>
+  <canvas id="mathBg" aria-hidden="true"></canvas>
+  <div class="bg-overlay"></div>
+
+  <!-- ═══ Top Nav ═══ -->
+  <nav class="top-nav">
+    <div class="inner">
+      <span class="brand-link">
+        <span class="brand-math-symbol">∑</span>
+        <span>LaTeXSnipper</span>
+      </span>
+      <div class="top-nav-actions">
+      </div>
+    </div>
+  </nav>
+
+  <div class="spacer-top"></div>
+
+  <!-- ═══ Splash / Loading Screen ═══ -->
+  <div class="splash" id="splash">
+    <div class="splash-inner">
+      <div class="splash-icon">
+        <img src="/icon.png" alt="LaTeXSnipper" width="72" height="72" style="border-radius:18px;">
+      </div>
+      <div class="splash-title">LaTeXSnipper</div>
+      <div class="splash-subtitle">公式识别</div>
+      <div class="splash-progress-wrap">
+        <div class="splash-progress-track">
+          <div class="splash-progress-fill" id="splashProgressFill"></div>
+        </div>
+        <div class="splash-progress-label" id="splashProgressLabel" data-i18n="status.initializing">正在初始化…</div>
+        <div class="splash-progress-pct" id="splashProgressPct"></div>
+      </div>
+      <div class="splash-models" id="splashModels"></div>
+    </div>
+  </div>
+
+  <!-- ═══ App Container ═══ -->
+  <div id="app">
+
+    <!-- ── Tab 1: OCR ── -->
+    <!-- ── Tab 2: Editor (MathLive created by JS) ── -->
+    <!-- ── Tab: PDF learning workspace (dual document) ── -->
+    <div class="page" id="page-pdf">
+      <div class="pdf-page-bar">
+        <div class="pdf-bar-group">
+          <button type="button" class="pdf-bar-btn" data-role="import-exercise" data-i18n="pdf.importExercise">导入练习册</button>
+          <button type="button" class="pdf-bar-btn" data-role="import-answer" data-i18n="pdf.importAnswer">导入答案册</button>
+          <button type="button" class="pdf-bar-btn" data-role="open-library" data-i18n="pdf.library">文档库</button>
+        </div>
+        <span class="pdf-status" data-role="pdf-status"></span>
+        <input type="file" accept="application/pdf,.pdf" hidden data-role="file-exercise">
+        <input type="file" accept="application/pdf,.pdf" hidden data-role="file-answer">
+      </div>
+
+      <div class="pdf-workspace-host" data-role="workspace"></div>
+
+      <div class="pdf-library" data-role="library" hidden>
+        <div class="pdf-library-header">
+          <strong data-i18n="pdf.library">文档库</strong>
+          <span class="pdf-library-usage" data-role="library-usage"></span>
+          <button type="button" class="pdf-library-btn" data-role="close-library" data-i18n="pdf.close">关闭</button>
+        </div>
+        <div class="pdf-library-list" data-role="library-list"></div>
+      </div>
+    </div>
+
+    <!-- ── Tab 4: History ── -->
+    <!-- ── Tab 4: Settings ── -->
+    <div class="page" id="page-settings">
+      <div class="settings-body">
+
+        <!-- Settings sub-tabs -->
+        <!-- ═══ Tab: AI 服务商 ═══ -->
+        <!-- ═══ Tab: 识别 ═══ -->
+        <!-- ═══ Tab: 模型 ═══ -->
+        <!-- ═══ Tab: 通用 ═══ -->
+        <div class="settings-panel" data-panel="general">
+          <div class="set-group">
+            <div class="set-group-title" data-i18n="settings.appearance">外观</div>
+
+            <div class="set-section">
+              <div class="set-section-title" data-i18n="settings.skin">皮肤</div>
+              <div class="set-select-wrap">
+                <select class="set-select" id="setSkinSelect">
+                  <option value="liquid-math">✨ 数学 · 真液态玻璃 (Math Liquid Glass)</option>
+                  <option value="default">Apple 原生玻璃 (iOS Glass)</option>
+                  <option value="miui">MIUI 渐变</option>
+                  <option value="sakura">樱花和风</option>
+                  <option value="matrix">黑客矩阵</option>
+                  <option value="warm">暖咖纸墨</option>
+                  <option value="minimal">极简纤白</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="set-section">
+              <div class="set-section-title" data-i18n="settings.language">语言 / Language</div>
+              <div class="set-select-wrap">
+                <select class="set-select" id="setLangSelect">
+                  <option value="zh-CN">中文</option>
+                  <option value="zh-TW">繁體中文</option>
+                  <option value="en">English</option>
+                  <option value="ja">日本語</option>
+                  <option value="ko">한국어</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="set-group">
+            <div class="set-group-title" data-i18n="settings.about">关于</div>
+
+            <div class="set-section">
+              <button class="ocr-btn secondary" id="checkUpdateBtn" style="width:100%;" data-i18n="update.checkUpdate">检查更新</button>
+              <label class="set-toggle" style="margin-top:0.6rem;">
+                <input type="checkbox" id="setAutoUpdate">
+                <span class="set-toggle-track"></span>
+                自动检查更新
+              </label>
+            </div>
+          </div>
+
+          <!-- ═══ 开发者选项 (默认隐藏) ═══ -->
+          <div class="set-group">
+            <div class="set-group-title" style="cursor:pointer;" id="devGroupTitle">
+              开发者选项 ▸
+            </div>
+            <div id="devOptions" style="display:none;">
+              <div class="set-section">
+                <label class="set-toggle">
+                  <input type="checkbox" id="setDevMode">
+                  <span class="set-toggle-track"></span>
+                  <span data-i18n="dev.devMode">开发者模式</span>
+                </label>
+              </div>
+              <div class="set-section" id="devOptionsContent" style="display:none;">
+                <label class="set-toggle">
+                  <input type="checkbox" id="devMultiThread" checked>
+                  <span class="set-toggle-track"></span>
+                  <span data-i18n="dev.multiThread">ONNX 多线程 (最多8核+SIMD)</span>
+                </label>
+                <pre id="devLogOutput" style="display:none;margin-top:0.4rem;padding:0.5rem;background:var(--bg);border-radius:8px;font-size:0.72rem;max-height:200px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;"></pre>
+                <div style="display:flex;gap:0.4rem;margin-top:0.4rem;">
+                  <button class="ocr-btn secondary" id="devShowLogs" data-i18n="dev.showLogs" style="flex:1;">查看日志</button>
+                  <button class="ocr-btn secondary" id="devClearLogs" data-i18n="dev.clearLogs" style="flex:1;">清空日志</button>
+                  <button class="ocr-btn secondary" id="devExportLogs" data-i18n="dev.exportLogs" style="flex:1;">导出日志</button>
+                </div>
+                <button class="ocr-btn secondary" id="devClearCache" style="width:100%;margin-top:0.3rem;" data-i18n="btn.clearCache">清除模型缓存</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <button class="ocr-btn" id="settingsSave" style="width:100%;margin-top:0.8rem;" data-i18n="btn.saveSettings">保存设置</button>
+
+        <p class="set-hint" style="margin-top:1rem;margin-bottom:2rem;">外部模型通过云端 API 识别，需网络和 API Key。内置 ONNX 完全离线运行。</p>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ═══ Bottom Tab Navigation ═══ -->
+  <nav class="bottom-nav">
+    <button class="active" data-page="pdf">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3h9l5 5v13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M13 3v6h6"/><path d="M12 21V10"/></svg>
+      <span data-i18n="nav.pdf">课本</span>
+    </button>
+    <button data-page="settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      <span data-i18n="nav.settings">设置</span>
+    </button>
+  </nav>
+
+  <!-- ═══ Liquid Glass refraction filter ═══
+       Real glass does not just blur what is behind it, it bends it: the
+       backdrop shifts sideways near the rim, where the curve is steepest, and
+       stays put through the flat middle. CSS `backdrop-filter: blur()` only
+       scatters, which is why a dragged capsule used to slide over text without
+       disturbing it.
+
+       This is the displacement-map approach: a map image whose red channel
+       carries the horizontal offset and whose green channel carries the
+       vertical one, both neutral (128) across the centre and ramping to the
+       extremes at the edges, so `feDisplacementMap` bends the backdrop only
+       near the rim. The two ramps are combined with a screen blend, which
+       leaves red from one and green from the other.
+
+       It is applied only while a capsule is being dragged (see material.css),
+       because that is when the bending is legible and because it is the most
+       expensive filter in the app. `@supports` keeps it to engines that can
+       actually run an SVG filter as a backdrop — Chromium, which is what the
+       Android WebView this ships in uses. Everywhere else the plain blur in
+       the same declaration stands. -->
+  <svg class="lg-filter-defs" width="0" height="0" aria-hidden="true" focusable="false">
+    <defs>
+      <filter id="lg-refract" x="0%" y="0%" width="100%" height="100%"
+              color-interpolation-filters="sRGB">
+        <feImage preserveAspectRatio="none" result="map" href="data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27100%27 height=%27100%27%3E%3Cdefs%3E%3ClinearGradient id=%27x%27 x1=%270%27 y1=%270%27 x2=%271%27 y2=%270%27%3E%3Cstop offset=%270%27 stop-color=%27rgb(0,0,0)%27/%3E%3Cstop offset=%270.18%27 stop-color=%27rgb(128,0,0)%27/%3E%3Cstop offset=%270.82%27 stop-color=%27rgb(128,0,0)%27/%3E%3Cstop offset=%271%27 stop-color=%27rgb(255,0,0)%27/%3E%3C/linearGradient%3E%3ClinearGradient id=%27y%27 x1=%270%27 y1=%270%27 x2=%270%27 y2=%271%27%3E%3Cstop offset=%270%27 stop-color=%27rgb(0,0,0)%27/%3E%3Cstop offset=%270.18%27 stop-color=%27rgb(0,128,0)%27/%3E%3Cstop offset=%270.82%27 stop-color=%27rgb(0,128,0)%27/%3E%3Cstop offset=%271%27 stop-color=%27rgb(0,255,0)%27/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width=%27100%27 height=%27100%27 fill=%27url(%23x)%27/%3E%3Crect width=%27100%27 height=%27100%27 fill=%27url(%23y)%27 style=%27mix-blend-mode:screen%27/%3E%3C/svg%3E" />
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="34"
+                           xChannelSelector="R" yChannelSelector="G" result="bent" />
+        <!-- A touch of blur hides the map's quantisation; the saturation bump is
+             the vibrancy that light picks up passing through the glass. -->
+        <feGaussianBlur in="bent" stdDeviation="0.7" result="soft" />
+        <feColorMatrix in="soft" type="saturate" values="1.7" />
+      </filter>
+
+      <!-- The same lens, gentler. `scale` is in pixels, so the 34px offset above
+           is right for a capsule a few hundred pixels wide and absurd on a 72px
+           segmented-control pill, where it would fold the backdrop over itself.
+           This one is sized for small chrome. -->
+      <filter id="lg-refract-soft" x="0%" y="0%" width="100%" height="100%"
+              color-interpolation-filters="sRGB">
+        <feImage preserveAspectRatio="none" result="map" href="data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27100%27 height=%27100%27%3E%3Cdefs%3E%3ClinearGradient id=%27x%27 x1=%270%27 y1=%270%27 x2=%271%27 y2=%270%27%3E%3Cstop offset=%270%27 stop-color=%27rgb(0,0,0)%27/%3E%3Cstop offset=%270.22%27 stop-color=%27rgb(128,0,0)%27/%3E%3Cstop offset=%270.78%27 stop-color=%27rgb(128,0,0)%27/%3E%3Cstop offset=%271%27 stop-color=%27rgb(255,0,0)%27/%3E%3C/linearGradient%3E%3ClinearGradient id=%27y%27 x1=%270%27 y1=%270%27 x2=%270%27 y2=%271%27%3E%3Cstop offset=%270%27 stop-color=%27rgb(0,0,0)%27/%3E%3Cstop offset=%270.22%27 stop-color=%27rgb(0,128,0)%27/%3E%3Cstop offset=%270.78%27 stop-color=%27rgb(0,128,0)%27/%3E%3Cstop offset=%271%27 stop-color=%27rgb(0,255,0)%27/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width=%27100%27 height=%27100%27 fill=%27url(%23x)%27/%3E%3Crect width=%27100%27 height=%27100%27 fill=%27url(%23y)%27 style=%27mix-blend-mode:screen%27/%3E%3C/svg%3E" />
+        <feDisplacementMap in="SourceGraphic" in2="map" scale="15"
+                           xChannelSelector="R" yChannelSelector="G" result="bent" />
+        <!-- Transmission only. A brightness lift lived here briefly and had to
+             go: this app's backdrop is a near-white page ruled with 4.5%-alpha
+             grid lines, and lifting it 6% erased exactly the detail the lens
+             exists to bend. Whatever is behind the pill comes through at its
+             own value, a little more saturated, and nothing else. Purity here
+             is subtraction — the pill has no fill, no wash and no lift, so what
+             you see through it is the page. -->
+        <feColorMatrix in="bent" type="saturate" values="1.25" />
+      </filter>
+    </defs>
+  </svg>
+
+  <!-- ═══ Install banner ═══ -->
+  <div class="install-banner" id="installBanner">
+    <span>安装到桌面，离线使用</span>
+    <button id="installBtn">安装</button>
+    <button class="close-banner" id="dismissInstall">&times;</button>
+  </div>
+
+  <!-- ═══ KaTeX CSS (vendor, local) ═══ -->
+  <link rel="stylesheet" href="/vendor/katex.min.css">
+
+  <!-- ═══ Libraries (bundled, local, no CDN) ═══ -->
+  <!-- No ONNX Runtime script here. It referenced /vendor/ort.all.min.js, a
+       file that has never existed in this repository: not in public/vendor,
+       not in dist, not in the Android assets, and never tracked in git. The
+       dev server answered the request with its HTML fallback, so the browser
+       parsed a '<' as JavaScript and reported SyntaxError on every load, and
+       the production build warned it could not bundle the reference.
+       Nothing consumes it — no module imports onnxruntime-web and no code
+       touches an `ort` global; recognition runs through the native Capacitor
+       bridge in src/ocr/ocr-native.js. The tag is a leftover from the removed
+       browser-side inference path. If that path returns, restore this tag AND
+       vendor the pinned runtime into public/vendor so dev, dist and Android
+       all serve it. -->
+  <script src="/vendor/pdf.min.js"></script>
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.min.js';
+  </script>
+
+  <!-- ═══ KaTeX (replaces MathJax) ═══ -->
+  <script src="/vendor/katex.min.js"></script>
+  <script src="/vendor/mathlive/mathlive.min.js"></script>
+
+  <!-- The Liquid Glass skin used to inject an SVG <defs> block of five filters
+       here — displacement lenses, Sobel normal maps and specular point lights.
+       None of them survived, and none is referenced any more.
+
+       They could not do the job they were written for. A displacement lens
+       needs a normal map, and every one of these derived its map from
+       `SourceAlpha`. Inside `backdrop-filter` the input is the backdrop image,
+       which is uniformly opaque, so there was no alpha edge to read and
+       nothing bent. Applied as `filter` instead — which is how the ink toolbar
+       used one — the map came from the element's own shape, so it warped the
+       element's own icons and left the scene behind it untouched: the opposite
+       of refraction, at the cost of two per-pixel convolution passes per frame
+       on the surface floating over the inking canvas.
+
+       The rim, the Fresnel falloff, the catchlight and the dispersion fringe
+       are all in CSS now, in base.css and ink-toolbar.css, driven by the
+       --glass-x / --glass-y / --glass-angle custom properties that
+       src/ui/liquid-glass.js keeps on the pointer. -->
+
+
+  <!-- ═══ Entry point ═══ -->
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

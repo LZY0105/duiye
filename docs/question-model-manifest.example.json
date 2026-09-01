@@ -1,0 +1,51 @@
+{
+  "sourceId": "local-question-models",
+  "sourceLabel": "Local question modifier models",
+  "version": "2.0.0",
+  "baseUrl": "https://example.invalid/models",
+  "categories": {
+    "question-modifier": {
+      "label": "Question modifier",
+      "required": false,
+      "default": "qwen2.5-0.5b-instruct-q4-k-m-gguf",
+      "variants": [
+        {
+          "id": "qwen2.5-0.5b-instruct-q4-k-m-gguf",
+          "label": "Qwen2.5 0.5B Instruct Q4_K_M (GGUF)",
+          "modelType": "llama.cpp",
+          "format": "gguf",
+          "modelFamily": "qwen",
+          "promptTemplate": "chatml",
+          "contextLength": 4096,
+          "maxOutputTokens": 512,
+          "files": [
+            "question-modifier.json",
+            "qwen2.5-0.5b-instruct-q4_k_m.gguf"
+          ],
+          "sizeBytes": 0,
+          "zipFile": "question-modifier-qwen2.5-0.5b-q4-k-m-gguf.zip",
+          "license": "Model-specific; verify before distribution"
+        },
+        {
+          "id": "qwen2.5-0.5b-instruct-int4",
+          "label": "Qwen2.5 0.5B Instruct INT4",
+          "modelType": "onnxruntime-genai",
+          "format": "onnx",
+          "modelFamily": "qwen",
+          "promptTemplate": "chatml",
+          "contextLength": 4096,
+          "maxOutputTokens": 512,
+          "files": [
+            "question-modifier.json",
+            "config.json",
+            "model.onnx",
+            "tokenizer.json"
+          ],
+          "sizeBytes": 0,
+          "zipFile": "question-modifier-qwen2.5-0.5b-int4.zip",
+          "license": "Model-specific; verify before distribution"
+        }
+      ]
+    }
+  }
+}

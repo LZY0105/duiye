@@ -1,0 +1,68 @@
+node_modules/
+dist/
+.git/
+*.pyc
+__pycache__/
+.DS_Store
+Thumbs.db
+
+# Signing keys (never commit!)
+*.keystore
+*.jks
+keystore.properties
+!debug.keystore
+
+# Android / iOS
+android/app/build/
+android/build/
+android/.gradle/
+android/captures/
+android/local.properties
+.android-local/
+.gradle-local/
+.gradle-hybrid*/
+.build-temp/
+ios/build/
+ios/Pods/
+ios/*.xcworkspace
+*.apk
+*.ipa
+*.aab
+keystore_b64.txt
+keystore_b64_clean.txt
+RELEASE.md
+keystore_new.txt
+keystore_new_clean.txt
+skills/
+
+# Python
+.venv/
+*.pyc
+__pycache__/
+
+# Packages / datasets (too large for git)
+*.zip
+*.tar
+*.gz
+
+# Training artifacts (all consolidated)
+pp-ocr-train/
+
+# Test scripts (local only, not for production)
+test_onnx_local.py
+.claude/test-before-deploy
+test_48h.png
+test_detect.js
+test_upload.png
+test_output/
+
+# 56MB pandoc WASM binary (copied from node_modules at build time)
+public/pandoc.wasm
+
+# Real-book corpora for the matcher regression suites.
+#
+# Extracted text and bookmark trees from copyrighted textbooks — ~7.7 MB of
+# them. Never committed. The suites look here first, then at
+# FIND_ENGINE_CORPUS / FIND_ENGINE_EXPANDED_CORPUS, and skip cleanly when the
+# files are absent, so a clone without them still runs green.
+corpus/
