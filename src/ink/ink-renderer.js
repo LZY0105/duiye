@@ -45,12 +45,122 @@ function widthAt(stroke, pressure) {
 }
 
 /**
+ * Screen-space centres and half-widths for a stroke, with samples that land on
+ * the same pixel dropped.
+ *
+ * The decimation is pure economy and never changes what is drawn: pointer
+ * samples are stored in document space at 0.6-unit spacing, so a page viewed
+ * at 25% has four of them per pixel and three of every four contribute nothing
+ * but arithmetic.
+ */
+function screenSamples(stroke, transform, points) {
+  const out = [];
+  const minGap = 0.55;
+  for (let i = 0; i < points.length; i++) {
+    const pt = points[i];
+    const x = (pt.x - transform.offsetX) * transform.scale;
+    const y = (pt.y - transform.offsetY) * transform.scale;
+    const r = Math.max(0.2, widthAt(stroke, pt.p) * transform.scale / 2);
+    const last = out[out.length - 1];
+    // The final sample is always kept: it is where the stroke ends, and
+    // dropping it would shorten the mark.
+    if (last && i < points.length - 1
+      && Math.abs(x - last.x) < minGap && Math.abs(y - last.y) < minGap) continue;
+    out.push({ x, y, r });
+  }
+  return out;
+}
+
+const norm = (x, y) => {
+  const len = Math.hypot(x, y);
+  return len < 1e-9 ? null : { x: x / len, y: y / len };
+};
+
+/**
+ * The two sides of a variable-width stroke, as one closed path.
+ *
+ * This replaces stroking each segment on its own with its own lineWidth, which
+ * is the only way a plain `stroke()` can vary width along a line — and which
+ * put a round cap at both ends of every segment. At ordinary size the caps
+ * overlap sub-pixel and nobody sees them; magnify the ink and every one of
+ * them appears, because each was antialiased separately and the rims stack
+ * where they overlap. That is the string of beads down an enlarged stroke.
+ *
+ * An outline has no seams to stack: it is one region, filled once. It is also
+ * one draw call per stroke instead of one per sample, which is worth more than
+ * the arithmetic it costs on a page carrying a few hundred marks.
+ *
+ * Both sides are smoothed through sample midpoints, the same quadratic
+ * smoothing the centre line used, so the silhouette curves rather than
+ * faceting. Nonzero winding fills a stroke that doubles back on itself solid,
+ * which is what ink does.
+ */
+function traceOutline(ctx, pts) {
+  const n = pts.length;
+  // Direction at each sample: the average of the segments meeting there, so
+  // the offset follows the corner instead of jumping across it.
+  const dirs = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const back = i > 0 ? norm(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y) : null;
+    const fwd = i < n - 1 ? norm(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y) : null;
+    let d = back && fwd ? norm(back.x + fwd.x, back.y + fwd.y) : (fwd || back);
+    // A hairpin averages to nothing; keep going the way we came.
+    if (!d) d = back || fwd || { x: 1, y: 0 };
+    dirs[i] = d;
+  }
+
+  const side = (i, sign) => ({
+    x: pts[i].x - dirs[i].y * pts[i].r * sign,
+    y: pts[i].y + dirs[i].x * pts[i].r * sign,
+  });
+  const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+
+  const run = (sign, order) => {
+    let prev = side(order[0], sign);
+    ctx.lineTo(prev.x, prev.y);
+    for (let k = 1; k < order.length - 1; k++) {
+      const c = side(order[k], sign);
+      const e = mid(c, side(order[k + 1], sign));
+      ctx.quadraticCurveTo(c.x, c.y, e.x, e.y);
+      prev = e;
+    }
+    const last = side(order[order.length - 1], sign);
+    ctx.lineTo(last.x, last.y);
+  };
+
+  const forward = [];
+  for (let i = 0; i < n; i++) forward.push(i);
+  const backward = forward.slice().reverse();
+
+  const head = side(0, 1);
+  ctx.beginPath();
+  ctx.moveTo(head.x, head.y);
+  run(1, forward);
+  // Round caps, each turning onto the other side.
+  //
+  // Both sweep anticlockwise — decreasing angle — and that is not a symmetry
+  // to trust by eye. The far cap has to pass in FRONT of the tip and the near
+  // one BEHIND the start; taking the other arc direction sends each of them
+  // the long way round, back through the stroke, and the fill then eats a bite
+  // out of the end it was supposed to round off.
+  const tip = pts[n - 1];
+  const tipDir = dirs[n - 1];
+  ctx.arc(tip.x, tip.y, tip.r,
+    Math.atan2(tipDir.x, -tipDir.y), Math.atan2(-tipDir.x, tipDir.y), true);
+  run(-1, backward);
+  const tail = pts[0];
+  ctx.arc(tail.x, tail.y, tail.r,
+    Math.atan2(-dirs[0].x, dirs[0].y), Math.atan2(dirs[0].x, -dirs[0].y), true);
+  ctx.closePath();
+  ctx.fill();
+}
+
+/**
  * Paints one stroke.
  *
- * A pen/pencil/marker is drawn segment by segment so pressure can vary the
- * width along the stroke. A highlighter is drawn as a single constant-width
- * path instead: per-segment drawing would overlap translucent caps at every
- * joint and leave visible dark beads along the line.
+ * A constant-width tool is one stroked path. A pressure-varying one is an
+ * outline, filled once — see traceOutline for why it is not stroked segment by
+ * segment any more.
  */
 export function drawStroke(ctx, stroke, transform) {
   const points = stroke.points;
@@ -107,22 +217,18 @@ export function drawStroke(ctx, stroke, transform) {
     return;
   }
 
-  // Pressure-varying width has to be stroked per curve, since a single path
-  // can only carry one lineWidth.
-  let start = points[0];
-  for (let i = 1; i < points.length; i++) {
-    const control = points[i];
-    const end = i < points.length - 1 ? midpoint(points[i], points[i + 1]) : points[i];
-    ctx.lineWidth = Math.max(0.4, widthAt(stroke, control.p) * transform.scale);
-    const s = toScreen(start);
-    const c = toScreen(control);
-    const e = toScreen(end);
+  // Pressure-varying width: one filled outline, not one stroked curve per
+  // sample. A single path can only carry one lineWidth, which is what forced
+  // the old per-segment loop and its string of overlapping caps.
+  const pts = screenSamples(stroke, transform, points);
+  if (pts.length === 1) {
     ctx.beginPath();
-    ctx.moveTo(s.x, s.y);
-    ctx.quadraticCurveTo(c.x, c.y, e.x, e.y);
-    ctx.stroke();
-    start = end;
+    ctx.arc(pts[0].x, pts[0].y, Math.max(0.4, pts[0].r), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return;
   }
+  traceOutline(ctx, pts);
   ctx.restore();
 }
 

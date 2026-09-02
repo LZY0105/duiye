@@ -52,6 +52,7 @@ import {
 } from '../src/ink/ink-eraser.js';
 import {
   createTransform,
+  drawStroke,
   documentToScreen,
   screenToDocument,
 } from '../src/ink/ink-renderer.js';
@@ -619,6 +620,160 @@ check('bounds are rebuilt after a transform, so the ink stays hittable', () => {
   const b = layer.strokes[0].bounds;
   assert.ok(b.minX > 400, 'stale bounds would leave the stroke hittable where it no longer is');
   assert.ok(strokeHitByPoint(layer.strokes[0], 500, 500, 4));
+});
+
+// ═══════════════════════════════════════════════════════════════
+group('Enlarged ink — one filled outline, no string of beads');
+
+/**
+ * A 2D context that flattens whatever is drawn into a polygon.
+ *
+ * Counting draw calls would only prove the shape of the code. Flattening the
+ * path and then asking where the ink actually IS proves the geometry: that the
+ * outline sits half a line-width off the centre, that the caps round off the
+ * ends rather than biting into them, and that a point beyond the edge is not
+ * painted.
+ */
+function pathRecorder() {
+  let cur = null;
+  let poly = [];
+  const rec = { fills: 0, strokes: 0, shape: null, arcs: 0 };
+  const push = (x, y) => { poly.push({ x, y }); cur = { x, y }; };
+
+  Object.assign(rec, {
+    save() {}, restore() {}, closePath() {}, clearRect() {}, setLineDash() {},
+    set strokeStyle(_) {}, set fillStyle(_) {}, set lineWidth(_) {},
+    set lineCap(_) {}, set lineJoin(_) {}, set globalAlpha(_) {},
+    set globalCompositeOperation(_) {},
+    beginPath() { poly = []; },
+    moveTo(x, y) { push(x, y); },
+    lineTo(x, y) { push(x, y); },
+    quadraticCurveTo(cx, cy, x, y) {
+      const s0 = cur;
+      for (let t = 1; t <= 8; t++) {
+        const u = t / 8, v = 1 - u;
+        push(v * v * s0.x + 2 * v * u * cx + u * u * x,
+             v * v * s0.y + 2 * v * u * cy + u * u * y);
+      }
+    },
+    arc(x, y, r, a0, a1, anticlockwise) {
+      rec.arcs++;
+      let d = a1 - a0;
+      if (anticlockwise) { while (d > 0) d -= Math.PI * 2; }
+      else { while (d < 0) d += Math.PI * 2; }
+      for (let t = 1; t <= 24; t++) {
+        const a = a0 + (d * t) / 24;
+        push(x + Math.cos(a) * r, y + Math.sin(a) * r);
+      }
+    },
+    fill() { rec.fills++; rec.shape = poly.slice(); },
+    stroke() { rec.strokes++; rec.shape = poly.slice(); },
+  });
+  return rec;
+}
+
+const inked = (rec, x, y) => pointInPolygon(x, y, rec.shape);
+
+/** A horizontal stroke of `n` samples from x=0 to x=100 at y=0. */
+function flatStroke(n, tool = INK_TOOLS.MARKER) {
+  const st = createStroke({ tool, color: '#dc2626' });
+  for (let i = 0; i < n; i++) appendPoint(st, (i * 100) / (n - 1), 0, 0.5, 0);
+  return st;
+}
+
+check('a stroke is ONE filled region, however many samples it holds', () => {
+  // The beads came from stroking every segment on its own: 200 separately
+  // antialiased capsules whose rims stack wherever they overlap. Invisible at
+  // 6px wide, a chain of discs at 60.
+  for (const n of [2, 20, 400]) {
+    const rec = pathRecorder();
+    drawStroke(rec, flatStroke(n), createTransform(1, 0, 0));
+    assert.equal(rec.fills, 1, `${n} samples must still be one fill`);
+    assert.equal(rec.strokes, 0, `${n} samples: no per-segment stroking`);
+  }
+});
+
+check('the outline sits exactly half a line-width off the centre', () => {
+  const rec = pathRecorder();
+  const st = flatStroke(30);              // marker: width 6, so r = 3
+  drawStroke(rec, st, createTransform(1, 0, 0));
+
+  assert.ok(inked(rec, 50, 0), 'the centre line is ink');
+  assert.ok(inked(rec, 50, 2.6), 'and so is just inside the edge');
+  assert.ok(!inked(rec, 50, 3.6), 'just outside the edge is not');
+  assert.ok(!inked(rec, 50, 20), 'and neither is the page');
+});
+
+check('the caps round the ends off instead of biting into them', () => {
+  // Both arcs sweep anticlockwise. Take the other direction and each goes the
+  // long way round, back through the stroke, and the fill eats the end.
+  const rec = pathRecorder();
+  drawStroke(rec, flatStroke(30), createTransform(1, 0, 0));
+  assert.equal(rec.arcs, 2, 'one cap at each end');
+
+  assert.ok(inked(rec, 100, 0), 'the last sample is ink');
+  assert.ok(inked(rec, 102, 0), 'and the cap carries it past the tip');
+  assert.ok(!inked(rec, 104, 0), 'but only by the half-width');
+  assert.ok(inked(rec, 0, 0), 'the first sample is ink');
+  assert.ok(inked(rec, -2, 0), 'and its cap reaches back');
+  assert.ok(!inked(rec, -4, 0));
+});
+
+check('enlarging the ink widens the mark, and it stays one region', () => {
+  // What the user was looking at: a stroke scaled up with the lasso.
+  const layer = new InkLayer();
+  const st = flatStroke(40);
+  layer.add(st);
+  transformSelection(layer, null, [st.id], { origin: { x: 0, y: 0 }, scale: 4 });
+
+  const rec = pathRecorder();
+  drawStroke(rec, layer.strokes[0], createTransform(1, 0, 0));
+  assert.equal(rec.fills, 1, 'still one region at four times the size');
+  assert.equal(rec.strokes, 0, 'and still nothing stroked per segment');
+
+  assert.ok(inked(rec, 200, 0), 'the middle of the enlarged stroke');
+  assert.ok(inked(rec, 200, 11), 'and out to nearly the new half-width of 12');
+  assert.ok(!inked(rec, 200, 13), 'but not past it');
+});
+
+check('samples landing on one pixel are dropped, and the end never is', () => {
+  // Pure economy: at 25% zoom four stored samples share a pixel and three of
+  // them contribute nothing but arithmetic. It must not shorten the mark.
+  const st = flatStroke(400);
+  const zoomed = pathRecorder();
+  drawStroke(zoomed, st, createTransform(0.25, 0, 0));
+  assert.ok(inked(zoomed, 25, 0), 'the far end is still drawn');
+  assert.ok(!inked(zoomed, 27, 0), 'and does not run past where it ends');
+
+  const full = pathRecorder();
+  drawStroke(full, st, createTransform(1, 0, 0));
+  assert.ok(full.shape.length > zoomed.shape.length,
+    'zoomed out costs fewer points than zoomed in');
+});
+
+check('a constant-width tool is still one stroked path, not an outline', () => {
+  // The highlighter has no pressure to vary, so a plain stroke is both correct
+  // and cheaper — and it already could not bead, being a single path.
+  const rec = pathRecorder();
+  const st = createStroke({ tool: INK_TOOLS.HIGHLIGHTER, color: '#facc15' });
+  for (let i = 0; i < 20; i++) appendPoint(st, i * 5, 0, 0.5, 0);
+  drawStroke(rec, st, createTransform(1, 0, 0));
+  assert.equal(rec.strokes, 1);
+  assert.equal(rec.fills, 0);
+});
+
+check('a hairpin does not collapse the outline', () => {
+  // Where a stroke doubles back on itself the two directions cancel and the
+  // offset is undefined. Nonzero winding fills the overlap solid, which is
+  // what ink does — it must not punch a hole.
+  const st = createStroke({ tool: INK_TOOLS.MARKER, color: '#000' });
+  for (let i = 0; i < 10; i++) appendPoint(st, i * 5, 0, 0.5, 0);
+  for (let i = 9; i >= 0; i--) appendPoint(st, i * 5, 0.2, 0.5, 0);
+  const rec = pathRecorder();
+  drawStroke(rec, st, createTransform(1, 0, 0));
+  assert.equal(rec.fills, 1);
+  assert.ok(rec.shape.every(p => Number.isFinite(p.x) && Number.isFinite(p.y)),
+    'no NaN may reach the path — one would erase the whole stroke');
 });
 
 // ═══════════════════════════════════════════════════════════════
