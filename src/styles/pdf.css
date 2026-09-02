@@ -659,6 +659,14 @@
   transition: all var(--transition-fast);
 }
 
+/* The whole row opens on a double-tap, so it has to look like something you
+   can press — and its text must not select out from under the second tap. */
+.pdf-library-row {
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .pdf-library-row:hover {
   transform: translateY(-1px);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
@@ -848,7 +856,20 @@
   border-bottom: 0.5px solid var(--border-color);
 }
 
-.answer-notice { padding: 1rem 0.4rem; color: var(--muted); text-align: center; }
+.answer-notice { padding: 1rem 0.4rem 0.5rem; color: var(--muted); text-align: center; }
+
+/* The next step, in the app's gold.
+   Loud enough to be read after the grey line above it has been skimmed, quiet
+   enough not to read as an error: this is advice, not a failure. Gold rather
+   than red because nothing is broken — and it is a hue the panel does not
+   otherwise use, so it cannot be mistaken for a matched answer. */
+.answer-notice-hint {
+  padding: 0 0.9rem 1rem;
+  text-align: center;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--math-gold-ink);
+}
 
 .answer-row {
   padding: 0.65rem 0.8rem;

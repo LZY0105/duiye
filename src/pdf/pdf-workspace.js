@@ -1046,7 +1046,10 @@ export class PdfWorkspace {
       const blocked = describeUnusable(pane.questionIndex, '习题册')
         || describeUnusable(other.answerIndex, '答案册');
       if (blocked) {
-        renderAnswerNotice(panel, blocked);
+        // Every branch of describeUnusable means one of the two books did not
+        // index, and the first thing to check is always the same: whether the
+        // right file went in, under the right role.
+        renderAnswerNotice(panel, blocked, { hint: '请检查答案是否上传正确' });
         return;
       }
 

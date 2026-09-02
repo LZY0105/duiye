@@ -149,14 +149,39 @@ function isVisible(stroke, transform, viewport) {
     && bottomRight.y >= 0 && topLeft.y <= viewport.height;
 }
 
-/** Outline preview for the region eraser's lasso, drawn above the ink. */
-export function drawLasso(ctx, polygon, transform) {
+/**
+ * The lasso's line — the app's gold, `--math-gold` in base.css.
+ *
+ * Gold rather than the accent blue or the eraser's red: the loop is drawn
+ * ACROSS the user's own ink, so it has to be a hue nothing else on the page
+ * uses. Blue is the accent every control already wears, and red is the eraser,
+ * which is the one thing a selection must never be mistaken for.
+ */
+export const LASSO_STROKE = '#d97706';
+const LASSO_DASH = [7, 5];
+
+/**
+ * The lasso loop: the line the hand actually drew, dashed, and nothing else.
+ *
+ * No fill and no bounding box. A fill tints whatever it is drawn over —
+ * including the ink being selected, which is the one thing that must stay
+ * legible — and a box describes the extent of what was caught rather than what
+ * was asked for, claiming blank page around anything diagonal.
+ *
+ * The same function draws it while it is being drawn and after it has closed,
+ * so the loop does not change appearance at the moment of release. It only
+ * gains its closing line and loses the tip.
+ *
+ * @param {{closed?: boolean, tip?: boolean}} [opts]
+ */
+export function drawLasso(ctx, polygon, transform, { closed = false, tip = false } = {}) {
   if (!Array.isArray(polygon) || polygon.length < 2) return;
   ctx.save();
-  ctx.setLineDash([6, 4]);
-  ctx.lineWidth = 1.5;
-  ctx.strokeStyle = '#ef4444';
-  ctx.fillStyle = 'rgba(239, 68, 68, 0.08)';
+  ctx.setLineDash(LASSO_DASH);
+  ctx.lineWidth = 1.6;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = LASSO_STROKE;
   ctx.beginPath();
   const first = documentToScreen(transform, polygon[0].x, polygon[0].y);
   ctx.moveTo(first.x, first.y);
@@ -164,8 +189,22 @@ export function drawLasso(ctx, polygon, transform) {
     const pt = documentToScreen(transform, polygon[i].x, polygon[i].y);
     ctx.lineTo(pt.x, pt.y);
   }
-  ctx.closePath();
-  ctx.fill();
+  if (closed) ctx.closePath();
   ctx.stroke();
+
+  // While the loop is open, a small ring rides the tip. It is what says the
+  // gesture is still live and where it will close back to.
+  if (tip) {
+    const last = documentToScreen(
+      transform, polygon[polygon.length - 1].x, polygon[polygon.length - 1].y,
+    );
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.arc(last.x, last.y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+  }
   ctx.restore();
 }

@@ -70,6 +70,26 @@ export function transformPolygon(polygon, transform) {
   return polygon.map(p => transformPoint(p, transform));
 }
 
+/**
+ * The point on the loop where the transform handle sits.
+ *
+ * The vertex furthest along the down-right diagonal, so the handle lands ON
+ * the outline rather than at the corner of a bounding box. There is no box
+ * drawn any more, and a circle floating in the blank space beside the loop
+ * would read as unattached to anything — which is exactly the confusion the
+ * box was removed to avoid.
+ */
+export function handleVertex(polygon) {
+  if (!Array.isArray(polygon) || polygon.length === 0) return null;
+  let best = polygon[0];
+  let bestScore = best.x + best.y;
+  for (const p of polygon) {
+    const score = p.x + p.y;
+    if (score > bestScore) { best = p; bestScore = score; }
+  }
+  return { x: best.x, y: best.y };
+}
+
 export function boundsCentre(box) {
   if (!box) return null;
   return { x: (box.minX + box.maxX) / 2, y: (box.minY + box.maxY) / 2 };

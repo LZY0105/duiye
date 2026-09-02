@@ -144,6 +144,12 @@
   --math-violet: #6366f1;
   --math-cyan: #0284c7;
   --math-gold: #d97706;
+  /* The same gold, dark enough to be TEXT.
+     #d97706 is 3.19:1 on white — fine for a line or an icon, which needs 3:1,
+     and short of the 4.5:1 that body text needs. Advice nobody can read is
+     not advice, so the graphic keeps the brighter gold and the words get this
+     one, at 5.02:1. */
+  --math-gold-ink: #b45309;
   --math-emerald: #0d9488;
 
   --bg: #f4f6f9;

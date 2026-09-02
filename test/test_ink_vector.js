@@ -31,6 +31,7 @@ import { InkLayer } from '../src/ink/ink-layer.js';
 import { InkHistory } from '../src/ink/ink-history.js';
 import {
   boundsCentre,
+  handleVertex,
   polygonBounds,
   selectionBounds,
   transformPolygon,
@@ -674,6 +675,21 @@ check('the outline travels with the ink it caught', () => {
   const inkCentre = boundsCentre(selectionBounds(layer, [st.id]));
   assert.equal(pointInPolygon(inkCentre.x, inkCentre.y, loop), true,
     'the ink must still be inside its own outline');
+});
+
+check('the transform handle sits ON the loop, not beside it', () => {
+  // There is no bounding box drawn any more, so a handle at the box's corner
+  // would float in blank page with nothing connecting it to the selection.
+  const loop = ring(100, 100, 50);
+  const h = handleVertex(loop);
+  const r = Math.hypot(h.x - 100, h.y - 100);
+  assert.ok(Math.abs(r - 50) < 1e-6, 'the handle must lie on the outline itself');
+  assert.ok(h.x > 100 && h.y > 100, 'and on its lower-right, where a handle is looked for');
+
+  const box = polygonBounds(loop);
+  assert.ok(h.x < box.maxX && h.y < box.maxY, 'strictly inside the box corner');
+  assert.equal(handleVertex([]), null);
+  assert.equal(handleVertex(null), null);
 });
 
 check('an empty polygon has no bounds and holds nothing', () => {

@@ -84,10 +84,24 @@ export function renderAnswerLoading(host, { page, count = 3 } = {}) {
     </div>`;
 }
 
-/** A plain message: no answer book, scanned document, nothing on this page. */
-export function renderAnswerNotice(host, message) {
+/**
+ * A plain message: no answer book, scanned document, nothing on this page.
+ *
+ * `hint` is the thing to DO about it. A notice that only reports the failure
+ * leaves the reader to guess whether the app is broken or the file is wrong,
+ * and the answer is almost always the file — so when there is a next step
+ * worth taking, it is said here rather than left to be inferred.
+ *
+ * @param {{hint?: string}} [opts]
+ */
+export function renderAnswerNotice(host, message, { hint } = {}) {
   if (!host) return;
-  host.innerHTML = `<div class="answer-panel"><div class="answer-notice">${escapeHtml(message)}</div></div>`;
+  const tail = hint
+    ? `<div class="answer-notice-hint">${escapeHtml(hint)}</div>`
+    : '';
+  host.innerHTML = `<div class="answer-panel">
+      <div class="answer-notice">${escapeHtml(message)}</div>${tail}
+    </div>`;
 }
 
 /**

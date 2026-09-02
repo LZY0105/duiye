@@ -94,6 +94,11 @@ echo ""
 echo "─── [15] Vector Ink Tests ───"
 node test/test_ink_vector.js && pass || fail "vector ink"
 
+# ═══ 15b. UI 交互测试 ═══
+echo ""
+echo "─── [15b] UI Interaction Tests ───"
+node test/test_ui_interactions.js && pass || fail "ui interactions"
+
 # ═══ 16. 端到端源码契约测试 ═══
 echo ""
 echo "─── [16] End-to-End Source Contract Tests ───"

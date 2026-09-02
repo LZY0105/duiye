@@ -14,6 +14,7 @@ import {
   libraryUsageBytes,
   listDocuments,
 } from './pdf-library.js';
+import { onDoubleTap } from '../ui/double-tap.js';
 import { isPdfRuntimeAvailable } from './pdf-document.js';
 import { deleteDocumentInk } from '../ink/ink-store.js';
 import Logger from '../core/logger.js';
@@ -40,6 +41,14 @@ function setStatus(message, isError) {
   el.classList.toggle('is-error', !!isError);
 }
 
+/**
+ * The document whose open is in flight, if any.
+ *
+ * Module-scoped rather than per-row: the guard has to survive the row being
+ * rebuilt by a refresh in the middle of an open.
+ */
+let openingId = null;
+
 async function refreshLibrary() {
   const list = elRoot?.querySelector('[data-role="library-list"]');
   if (!list) return;
@@ -56,6 +65,7 @@ async function refreshLibrary() {
   list.replaceChildren(...docs.map((doc) => {
     const row = document.createElement('div');
     row.className = 'pdf-library-row';
+    row.title = '双击打开';
 
     const info = document.createElement('div');
     info.className = 'pdf-library-info';
@@ -76,12 +86,15 @@ async function refreshLibrary() {
     // made them decide something they had no basis to decide yet — and it was
     // the wrong moment to ask, because the arrangement is trivially changed
     // afterwards with the swap control on the divider.
-    const open = document.createElement('button');
-    open.type = 'button';
-    open.className = 'pdf-library-btn is-primary';
-    open.textContent = '打开';
-    open.title = '打开到空的一侧';
-    open.addEventListener('click', async () => {
+    // One open path, two ways to reach it.
+    //
+    // Guarded against a second activation while the first is still in flight:
+    // a double-tap on the button itself, or an impatient second tap on the
+    // row, would otherwise open the same document into BOTH panes — the two
+    // calls each ask for the next free slot before either has filled one.
+    const openDoc = async () => {
+      if (openingId === doc.id) return;
+      openingId = doc.id;
       const slot = workspace.nextFreeSlot();
       try {
         setStatus('正在打开…');
@@ -91,9 +104,22 @@ async function refreshLibrary() {
       } catch (error) {
         Logger.error('PDF', 'open failed', error);
         setStatus('打开失败: ' + error.message, true);
+      } finally {
+        openingId = null;
       }
-    });
+    };
+
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'pdf-library-btn is-primary';
+    open.textContent = '打开';
+    open.title = '打开到空的一侧';
+    open.addEventListener('click', openDoc);
     actions.appendChild(open);
+
+    // Double-tap the row. The buttons speak for themselves, so a tap that
+    // lands on one is a tap on IT, not on the row around it.
+    onDoubleTap(row, openDoc, { ignore: '.pdf-library-actions' });
 
     const del = document.createElement('button');
     del.type = 'button';

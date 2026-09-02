@@ -27,6 +27,7 @@ import {
 } from './ink-eraser.js';
 import {
   boundsCentre,
+  handleVertex,
   polygonBounds,
   selectInPolygon,
   selectionBounds,
@@ -35,6 +36,7 @@ import {
   transformSelection,
 } from './ink-selection.js';
 import {
+  LASSO_STROKE,
   createTransform,
   drawLasso,
   drawStroke,
@@ -229,7 +231,7 @@ export class InkSurface {
       drawStroke(this.ctx, this._active, this.transform);
     }
     if (this._eraserDot) this._drawEraserDot();
-    if (this._loop) drawLasso(this.ctx, this._loop, this.transform);
+    if (this._loop) drawLasso(this.ctx, this._loop, this.transform, { tip: true });
     if (this.selection.length) this._drawSelection();
   }
 
@@ -254,38 +256,23 @@ export class InkSurface {
    */
   _drawSelection() {
     const loop = this.selectionLoop;
-    const ctx = this.ctx;
-
     if (!loop || loop.length < 3) return;
 
-    ctx.save();
-    ctx.beginPath();
-    const first = this._toScreen(loop[0]);
-    ctx.moveTo(first.x, first.y);
-    for (let i = 1; i < loop.length; i++) {
-      const pt = this._toScreen(loop[i]);
-      ctx.lineTo(pt.x, pt.y);
-    }
-    ctx.closePath();
-
-    ctx.fillStyle = 'rgba(10, 96, 255, 0.06)';
-    ctx.fill();
-    ctx.setLineDash([6, 4]);
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = 'rgba(10, 96, 255, 0.9)';
-    ctx.stroke();
-    ctx.setLineDash([]);
+    // The SAME renderer that drew it while the hand was moving, so releasing
+    // the stylus does not change how the loop looks. It only closes.
+    drawLasso(this.ctx, loop, this.transform, { closed: true });
 
     const handle = this._handleAt();
-    if (handle) {
-      ctx.beginPath();
-      ctx.arc(handle.x, handle.y, SELECT_HANDLE, 0, Math.PI * 2);
-      ctx.fillStyle = '#fff';
-      ctx.fill();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = 'rgba(10, 96, 255, 0.95)';
-      ctx.stroke();
-    }
+    if (!handle) return;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(handle.x, handle.y, SELECT_HANDLE, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = LASSO_STROKE;
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -297,9 +284,10 @@ export class InkSurface {
 
   /** Screen-space position of the transform handle, or null. */
   _handleAt() {
-    const box = polygonBounds(this.selectionLoop) || this.selectionBox();
-    if (!box) return null;
-    return this._toScreen({ x: box.maxX, y: box.maxY });
+    const onLoop = handleVertex(this.selectionLoop);
+    if (onLoop) return this._toScreen(onLoop);
+    const box = this.selectionBox();
+    return box ? this._toScreen({ x: box.maxX, y: box.maxY }) : null;
   }
 
   /**
