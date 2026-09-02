@@ -31,7 +31,9 @@ import { InkLayer } from '../src/ink/ink-layer.js';
 import { InkHistory } from '../src/ink/ink-history.js';
 import {
   boundsCentre,
+  polygonBounds,
   selectionBounds,
+  transformPolygon,
   snapshotStrokes,
   transformSelection,
 } from '../src/ink/ink-selection.js';
@@ -612,6 +614,82 @@ check('bounds are rebuilt after a transform, so the ink stays hittable', () => {
   const b = layer.strokes[0].bounds;
   assert.ok(b.minX > 400, 'stale bounds would leave the stroke hittable where it no longer is');
   assert.ok(strokeHitByPoint(layer.strokes[0], 500, 500, 4));
+});
+
+// ═══════════════════════════════════════════════════════════════
+group('The lasso outline is the loop that was drawn');
+
+/** A hand-drawn ring, sampled the way a stylus samples one. */
+const ring = (cx, cy, r, n = 24) => {
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    pts.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r });
+  }
+  return pts;
+};
+
+check('an open loop still encloses: the ends do not have to meet', () => {
+  // A hand never closes a lasso exactly. Refusing to select because the ends
+  // missed by a few pixels would make the tool feel broken, not precise.
+  const arc = ring(50, 50, 20).slice(0, 22);
+  assert.equal(pointInPolygon(50, 50, arc), true, 'the middle is inside');
+  assert.equal(pointInPolygon(200, 50, arc), false, 'far away is not');
+});
+
+check('containment follows the drawn shape, not its bounding box', () => {
+  // An L. Its bounding box corner is empty page, and a box-based selection
+  // would claim it.
+  const L = [
+    { x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 80 },
+    { x: 80, y: 80 }, { x: 80, y: 100 }, { x: 0, y: 100 },
+  ];
+  const box = polygonBounds(L);
+  assert.deepEqual(box, { minX: 0, minY: 0, maxX: 80, maxY: 100 });
+  assert.equal(pointInPolygon(10, 50, L), true, 'the upright of the L is inside');
+  assert.equal(pointInPolygon(70, 20, L), false, 'the empty corner of the box is NOT');
+});
+
+check('the outline travels with the ink it caught', () => {
+  const layer = new InkLayer();
+  const st = boxStroke();
+  layer.add(st);
+  let loop = ring(5, 5, 40);
+
+  // Move: outline and ink move by the same delta.
+  transformSelection(layer, null, [st.id], { dx: 100, dy: 50 });
+  loop = transformPolygon(loop, { dx: 100, dy: 50 });
+  assert.deepEqual(boundsCentre(polygonBounds(loop)), { x: 105, y: 55 });
+  assert.equal(pointInPolygon(105, 55, loop), true, 'it still holds what it holds');
+
+  // Rotate and scale about the OUTLINE's centre — what the user is turning.
+  const origin = boundsCentre(polygonBounds(loop));
+  const step = { origin, angle: Math.PI / 2, scale: 2 };
+  transformSelection(layer, null, [st.id], step);
+  loop = transformPolygon(loop, step);
+
+  const after = polygonBounds(loop);
+  assert.ok(Math.abs((after.maxX - after.minX) - 160) < 1e-6, 'the loop doubled');
+  assert.deepEqual(boundsCentre(after), origin, 'and turned about its own centre');
+  const inkCentre = boundsCentre(selectionBounds(layer, [st.id]));
+  assert.equal(pointInPolygon(inkCentre.x, inkCentre.y, loop), true,
+    'the ink must still be inside its own outline');
+});
+
+check('an empty polygon has no bounds and holds nothing', () => {
+  assert.equal(polygonBounds([]), null);
+  assert.equal(polygonBounds(null), null);
+  assert.equal(pointInPolygon(0.5, 0.5, [{ x: 0, y: 0 }, { x: 1, y: 1 }]), false,
+    'two points are a line, not a loop');
+  assert.deepEqual(transformPolygon(null, { dx: 1 }), null);
+});
+
+check('the surface keeps the loop and draws it, rather than a box', () => {
+  const code = $code('src/ink/ink-surface.js');
+  ok(code.includes('selectionLoop'), 'the loop is kept after it closes');
+  ok(!/strokeRect/.test(code), 'no bounding-box marquee survives');
+  ok(code.includes('transformPolygon'), 'the outline is transformed with the ink');
+  ok(code.includes('pointInPolygon'), 'a press inside is tested against the loop');
 });
 
 console.log('\n═══════════════════════════════════════════════════════════════');

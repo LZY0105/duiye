@@ -161,11 +161,53 @@ test('a pointer released outside the toolbar still ends the drag', () => {
   const { bar } = mountToolbar();
   const handle = bar.root.querySelector('[data-role="handle"]');
   pointer('pointerdown', { x: 40, y: 40, target: handle });
-  pointer('pointermove', { x: 990, y: 780 });
-  // Released on the page, far from the toolbar and its host.
-  pointer('pointerup', { x: 990, y: 780, target: document.body });
+  pointer('pointermove', { x: 995, y: 400 });
+  // Released on the page, far from the toolbar and its host. Mid-edge, not a
+  // corner: a corner release is a DOCK, which is its own test below.
+  pointer('pointerup', { x: 995, y: 400, target: document.body });
   assert.equal(bar.state.phase, 'expanded');
   assert.equal(bar.root.querySelectorAll('[data-role="handle"]').length, 1);
+});
+
+test('a corner release parks the bar as a puck, and a tap unfolds it', () => {
+  const { bar } = mountToolbar();
+  const handle = bar.root.querySelector('[data-role="handle"]');
+  pointer('pointerdown', { x: 40, y: 400, target: handle });
+  pointer('pointermove', { x: 970, y: 770 });
+  pointer('pointerup', { x: 970, y: 770, target: document.body });
+
+  assert.equal(bar.state.phase, 'docked', 'a corner does not unfold the bar');
+  assert.equal(bar.state.corner, 'bottom-right');
+  assert.equal(bar.root.querySelectorAll('.ink-token').length, 1, 'it stays a circle');
+  assert.equal(bar.root.querySelectorAll('.ink-tool').length, 0, 'and nothing unfolds');
+  assert.ok(bar.root.classList.contains('is-docked'));
+
+  // The puck is still the handle, so it can be picked up again.
+  const puck = bar.root.querySelector('[data-role="handle"]');
+  assert.ok(puck, 'the puck must be grabbable');
+
+  // A press that goes nowhere is a tap, and a tap expands.
+  pointer('pointerdown', { x: 960, y: 760, target: puck });
+  assert.equal(bar.state.phase, 'docked', 'a press alone must not move it');
+  pointer('pointerup', { x: 962, y: 761, target: puck });
+  assert.equal(bar.state.phase, 'expanded', 'the tap unfolded it');
+  assert.equal(bar.root.querySelectorAll('.ink-tool').length, TOOL_COUNT);
+});
+
+test('dragging the puck moves it instead of expanding it', () => {
+  const { bar } = mountToolbar();
+  const handle = bar.root.querySelector('[data-role="handle"]');
+  drag(bar, { from: [40, 400], to: [970, 770] });
+  assert.equal(bar.state.phase, 'docked');
+  void handle;
+
+  const puck = bar.root.querySelector('[data-role="handle"]');
+  pointer('pointerdown', { x: 960, y: 760, target: puck });
+  pointer('pointermove', { x: 500, y: 400 });
+  assert.equal(bar.state.phase, 'dragging', 'travel past the slop starts a drag');
+  pointer('pointerup', { x: 500, y: 400 });
+  assert.equal(bar.state.phase, 'expanded', 'released mid-page, it goes back to an edge');
+  assert.equal(bar.state.corner, null);
 });
 
 test('a second pointer cannot terminate the drag owned by the first', () => {

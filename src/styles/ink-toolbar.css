@@ -316,9 +316,13 @@
   outline-offset: 2px;
 }
 
-/* ── collapsed drag token ─────────────────────────────────────────────────── */
+/* ── collapsed token: in flight, and parked in a corner ───────────────────── */
 
-.ink-toolbar.is-dragging {
+/* The shell goes away in BOTH states, so the circle inside it is the only
+   thing on screen. Docked is not a second appearance for the token — it is the
+   same circle, standing still. */
+.ink-toolbar.is-dragging,
+.ink-toolbar.is-docked {
   padding: 0;
   border-radius: 50%;
   border-color: transparent;
@@ -348,6 +352,20 @@
   place-items: center;
   position: relative;
   animation: tokenPop 0.18s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Parked in a corner it is a control, so it says so and it answers a press.
+   Same spring as the pill buttons, so every round thing on this surface pushes
+   back the same way. */
+.ink-toolbar.is-docked .ink-token {
+  cursor: pointer;
+  transition: transform 200ms var(--spring-rebound, cubic-bezier(0.32, 0.72, 0, 1));
+}
+.ink-toolbar.is-docked .ink-token:hover { transform: scale(1.06); }
+.ink-toolbar.is-docked .ink-token:active { transform: scale(0.92); }
+.ink-toolbar.is-docked .ink-token:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 @keyframes tokenPop {
   from { transform: scale(0.7); opacity: 0.5; }
@@ -670,12 +688,15 @@
   --glass-glint-size: 110px;
   --glass-glint-core: rgba(255, 255, 255, 0.24);
 }
-[data-skin="liquid-math"] .ink-toolbar.is-dragging {
+[data-skin="liquid-math"] .ink-toolbar.is-dragging,
+[data-skin="liquid-math"] .ink-toolbar.is-docked {
   background: transparent;
   box-shadow: none;
 }
 [data-skin="liquid-math"] .ink-toolbar.is-dragging::before,
-[data-skin="liquid-math"] .ink-toolbar.is-dragging::after { display: none; }
+[data-skin="liquid-math"] .ink-toolbar.is-dragging::after,
+[data-skin="liquid-math"] .ink-toolbar.is-docked::before,
+[data-skin="liquid-math"] .ink-toolbar.is-docked::after { display: none; }
 
 [data-skin="liquid-math"] .ink-token {
   background: rgba(255, 255, 255, 0.24);
@@ -720,6 +741,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ink-toolbar.is-dragging .ink-token { transition: none; }
+  .ink-toolbar.is-dragging .ink-token,
+  .ink-toolbar.is-docked .ink-token { transition: none; }
   .ink-toolbar.is-corner-armed .ink-token { transform: none; }
+  .ink-toolbar.is-docked .ink-token:hover { transform: none; }
+  .ink-token { animation: none; }
 }

@@ -44,6 +44,32 @@ export function selectionBounds(layer, ids) {
   return box;
 }
 
+/** Bounding box of a polygon, in the polygon's own space, or null. */
+export function polygonBounds(polygon) {
+  if (!Array.isArray(polygon) || polygon.length === 0) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of polygon) {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/**
+ * The same affine step applied to the lasso outline.
+ *
+ * The outline has to travel with what it caught. If it did not, the shape on
+ * screen would stop describing the selection the moment the selection moved,
+ * and the next press would test containment against a loop that is no longer
+ * around anything.
+ */
+export function transformPolygon(polygon, transform) {
+  if (!Array.isArray(polygon) || !transform) return polygon;
+  return polygon.map(p => transformPoint(p, transform));
+}
+
 export function boundsCentre(box) {
   if (!box) return null;
   return { x: (box.minX + box.maxX) / 2, y: (box.minY + box.maxY) / 2 };

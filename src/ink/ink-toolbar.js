@@ -14,6 +14,7 @@
 
 import {
   CARDS,
+  CORNERS,
   DEFAULT_SWATCHES,
   EDGES,
   ERASER_TOOL,
@@ -24,6 +25,7 @@ import {
   createToolbarState,
   endDrag,
   isCornerPoint,
+  isDocked,
   isEraser,
   moveDrag,
   openCard,
@@ -36,11 +38,21 @@ import {
   setOpacity,
   setWidth,
   startDrag,
+  undock,
 } from './toolbar-state.js';
 import { INK_TOOLS } from './stroke.js';
 import { ERASER_MODES } from './ink-eraser.js';
 
 const STORAGE_KEY = 'ls_ink_toolbar';
+
+/**
+ * How far a pointer may travel and still count as a tap, in CSS pixels.
+ *
+ * The docked puck has two gestures on one target — tap to expand, drag to
+ * move — so one has to be told from the other. 6px is about the wobble a stylus
+ * makes while the tip is pressed and lifted; below it, the user meant to tap.
+ */
+const TAP_SLOP = 6;
 
 /**
  * Toolbar icons.
@@ -223,24 +235,26 @@ export class InkToolbar {
     this.root.dataset.edge = state.edge;
     this.root.dataset.orientation = orientation;
     this.root.dataset.phase = state.phase;
+    if (state.corner) this.root.dataset.corner = state.corner;
+    else delete this.root.dataset.corner;
     this.root.classList.toggle('is-dragging', state.phase === TOOLBAR_PHASE.DRAGGING);
+    this.root.classList.toggle('is-docked', state.phase === TOOLBAR_PHASE.DOCKED);
 
     if (state.phase === TOOLBAR_PHASE.DRAGGING) {
       this._positionToken();
-      // Build the token ONCE per drag, then only move it.
-      //
-      // This used to re-parse the whole innerHTML on every pointermove. A
-      // stylus emits those at 120Hz or better, so each frame of a drag threw
-      // away the token and built a new one — which is what made dragging the
-      // toolbar feel heavy and lag behind the pen.
-      if (!this.root.querySelector('.ink-token')) {
-        this.root.innerHTML = `
-          <div class="ink-token" aria-hidden="true">
-            <span class="ink-token-glyph">${iconFor(state.tool, 24)}</span>
-            <span class="ink-token-dot" style="background:${escapeAttr(state.color)}"></span>
-          </div>`;
-        this.cardLayer.replaceChildren();
-      }
+      this._renderToken();
+      return;
+    }
+
+    // Parked in a corner: the circle the drag collapsed it into simply stays.
+    //
+    // Nothing is rebuilt, so the token that travelled under the stylus is the
+    // same element that comes to rest — the motion is one continuous circle
+    // rather than a shape swapped for another shape at the end of the gesture.
+    if (state.phase === TOOLBAR_PHASE.DOCKED) {
+      this._renderToken();
+      this._positionDocked();
+      this.cardLayer.replaceChildren();
       return;
     }
 
@@ -283,6 +297,88 @@ export class InkToolbar {
     // is only known now. Clamp once it exists.
     this._clampIntoHost();
     if (!this._keepCard) this._renderCard();
+  }
+
+  /**
+   * The circular token, built ONCE and thereafter only moved and relabelled.
+   *
+   * This used to re-parse the whole innerHTML on every pointermove. A stylus
+   * emits those at 120Hz or better, so each frame of a drag threw away the
+   * token and built a new one — which is what made dragging the toolbar feel
+   * heavy and lag behind the pen.
+   *
+   * Keeping the element also carries it across the DRAGGING → DOCKED boundary
+   * unbroken: its entry animation does not replay on arrival, and the browser
+   * has one continuously-placed circle to move rather than two that alternate.
+   */
+  _renderToken() {
+    const docked = this.state.phase === TOOLBAR_PHASE.DOCKED;
+    let token = this.root.querySelector('.ink-token');
+    if (!token) {
+      this.root.innerHTML = `
+        <div class="ink-token">
+          <span class="ink-token-glyph"></span>
+          <span class="ink-token-dot"></span>
+        </div>`;
+      token = this.root.querySelector('.ink-token');
+      this.cardLayer.replaceChildren();
+    }
+
+    // The glyph tracks the active tool: saying which tool is in hand while the
+    // bar is not there to show it is the token's whole job.
+    const glyph = token.querySelector('.ink-token-glyph');
+    if (glyph.dataset.tool !== this.state.tool) {
+      glyph.dataset.tool = this.state.tool;
+      glyph.innerHTML = iconFor(this.state.tool, 24);
+    }
+    token.querySelector('.ink-token-dot').style.background = this.state.color;
+
+    // Docked, the puck is the only control the toolbar has left, so it takes
+    // the button semantics. In flight it is scenery attached to the pointer,
+    // and announcing a button that cannot be reached would be a lie.
+    if (docked) {
+      token.dataset.role = 'handle';
+      token.removeAttribute('aria-hidden');
+      token.setAttribute('role', 'button');
+      token.setAttribute('tabindex', '0');
+      token.setAttribute('aria-label', '展开笔迹工具栏');
+      token.setAttribute('title', '点按展开 · 拖动可移动');
+    } else {
+      delete token.dataset.role;
+      token.setAttribute('aria-hidden', 'true');
+      token.removeAttribute('role');
+      token.removeAttribute('tabindex');
+      token.removeAttribute('aria-label');
+      token.removeAttribute('title');
+    }
+  }
+
+  /**
+   * Pins the puck into its corner.
+   *
+   * Both axes are anchored directly, with no percentage and no translate: a
+   * corner is the one placement the edge-fraction machinery cannot describe,
+   * and anchoring to the two sides that meet there is what keeps the puck in
+   * the corner when the workspace resizes or the split divider moves.
+   */
+  _positionDocked() {
+    const s = this.root.style;
+    s.left = s.right = s.top = s.bottom = '';
+    s.transform = '';
+    const M = '10px';
+    const corner = this.state.corner || CORNERS.TOP_LEFT;
+    if (corner === CORNERS.TOP_LEFT) { s.left = M; s.top = M; }
+    else if (corner === CORNERS.TOP_RIGHT) { s.right = M; s.top = M; }
+    else if (corner === CORNERS.BOTTOM_LEFT) { s.left = M; s.bottom = M; }
+    else { s.right = M; s.bottom = M; }
+  }
+
+  /** Puck → bar, unfolding out of the corner it was parked in. */
+  _undock() {
+    if (!isDocked(this.state)) return;
+    const from = this.root.getBoundingClientRect();
+    this._set(undock(this.state), { pushTools: false });
+    this._absorb(from, false);
   }
 
   _positionExpanded() {
@@ -460,7 +556,7 @@ export class InkToolbar {
    * capture phase so they can enforce it before anything else sees the event.
    */
   _installDragController() {
-    this._drag = { pointerId: null };
+    this._drag = { pointerId: null, start: null, started: false, fromDocked: false };
 
     const toHostPoint = (e) => {
       const rect = this.host.getBoundingClientRect();
@@ -472,17 +568,39 @@ export class InkToolbar {
       if (!e.target.closest?.('[data-role="handle"]')) return;
       e.preventDefault();
       e.stopPropagation();
+      const point = toHostPoint(e);
       this._drag.pointerId = e.pointerId;
+      this._drag.start = point;
+      this._drag.fromDocked = isDocked(this.state);
+      this._drag.started = false;
       // Capture on the root, not the handle: the handle is about to be
       // replaced by the render on the next line.
       try { this.root.setPointerCapture(e.pointerId); } catch (_) { /* unsupported */ }
-      this._set(startDrag(this.state, toHostPoint(e)), { pushTools: false });
+
+      // A docked puck waits to find out what the gesture is.
+      //
+      // Tap expands it, drag moves it, and both begin with the same press. If
+      // the drag started here, a tap would yank the puck out of its corner to
+      // sit under the fingertip and then throw it back. The expanded bar has no
+      // such ambiguity — its handle does nothing but drag — so that one starts
+      // at once and stays glued to the pen from the first pixel.
+      if (this._drag.fromDocked) return;
+      this._drag.started = true;
+      this._set(startDrag(this.state, point), { pushTools: false });
     };
 
     this._onDragMove = (e) => {
       if (this._drag.pointerId !== e.pointerId) return;
       e.stopPropagation();
       const point = toHostPoint(e);
+
+      if (!this._drag.started) {
+        const from = this._drag.start;
+        if (Math.hypot(point.x - from.x, point.y - from.y) < TAP_SLOP) return;
+        this._drag.started = true;
+        this._set(startDrag(this.state, point), { pushTools: false });
+      }
+
       this._set(moveDrag(this.state, point), { pushTools: false });
 
       // Magnetism has to be visible before the finger lifts, or it is just a
@@ -502,8 +620,17 @@ export class InkToolbar {
       if (this._drag.pointerId === null || this._drag.pointerId !== e.pointerId) return;
       e.stopPropagation();
       const pointerId = this._drag.pointerId;
+      const { started, fromDocked } = this._drag;
       this._drag.pointerId = null;
+      this._drag.started = false;
       try { this.root.releasePointerCapture(pointerId); } catch (_) { /* already released */ }
+
+      // Never travelled, so it was a tap — and on a docked puck a tap expands.
+      if (!started) {
+        if (fromDocked) this._undock();
+        return;
+      }
+
       const rect = this.host.getBoundingClientRect();
       const point = toHostPoint(e);
       const viewport = { width: rect.width, height: rect.height };
@@ -516,7 +643,16 @@ export class InkToolbar {
       this._absorb(from, corner);
     };
 
+    // The puck is a button, so it answers the keys a button answers.
+    this._onKeyDown = (e) => {
+      if (!isDocked(this.state)) return;
+      if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+      e.preventDefault();
+      this._undock();
+    };
+
     this.root.addEventListener('pointerdown', this._onDragStart);
+    this.root.addEventListener('keydown', this._onKeyDown);
     window.addEventListener('pointermove', this._onDragMove, { capture: true });
     window.addEventListener('pointerup', this._onDragEnd, { capture: true });
     window.addEventListener('pointercancel', this._onDragEnd, { capture: true });
@@ -550,6 +686,7 @@ export class InkToolbar {
     }
 
     this.root.removeEventListener('pointerdown', this._onDragStart);
+    this.root.removeEventListener('keydown', this._onKeyDown);
     window.removeEventListener('pointermove', this._onDragMove, { capture: true });
     window.removeEventListener('pointerup', this._onDragEnd, { capture: true });
     window.removeEventListener('pointercancel', this._onDragEnd, { capture: true });

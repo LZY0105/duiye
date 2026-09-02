@@ -16,6 +16,7 @@ import {
   appendPoint,
   createStroke,
   isDrawable,
+  pointInPolygon,
 } from './stroke.js';
 import {
   ERASER_MODES,
@@ -26,9 +27,10 @@ import {
 } from './ink-eraser.js';
 import {
   boundsCentre,
-  pointInBounds,
+  polygonBounds,
   selectInPolygon,
   selectionBounds,
+  transformPolygon,
   snapshotStrokes,
   transformSelection,
 } from './ink-selection.js';
@@ -56,6 +58,14 @@ function moved(before, after) {
 
 /** Radius of the rotate/scale handle, in screen pixels. */
 const SELECT_HANDLE = 9;
+
+/**
+ * Minimum spacing between lasso samples, in document units.
+ *
+ * A hand-drawn loop only needs enough points to keep its curve; anything
+ * closer than this is the stylus reporting that it has not moved yet.
+ */
+const LOOP_SPACING = 2;
 
 export const INPUT_MODES = Object.freeze({
   /** Draw with any pointer. */
@@ -100,6 +110,7 @@ export class InkSurface {
     this.selecting = false;   // the lasso tool is the active tool
     this.selection = [];      // ids, document order irrelevant
     this._loop = null;        // the lasso being drawn, document space
+    this.selectionLoop = null; // the closed loop that caught it, document space
     this._grab = null;        // an in-progress move/rotate/scale of the selection
 
     this._bind();
@@ -131,6 +142,7 @@ export class InkSurface {
   clearSelection() {
     if (!this.selection.length && !this._loop) return;
     this.selection = [];
+    this.selectionLoop = null;
     this._loop = null;
     this._grab = null;
     this.render();
@@ -222,53 +234,72 @@ export class InkSurface {
   }
 
   /**
-   * The selection frame and its one handle.
+   * The selection outline: the loop the user drew, kept.
    *
-   * A dashed box says what is caught; the handle in the corner is where rotate
-   * and scale live. There is deliberately one handle rather than eight: this is
-   * a stylus interface, eight 8px targets round a box is a precision task, and
-   * the gesture people actually want on a diagram is "turn it and size it",
-   * which one handle does in a single movement.
+   * Not a bounding box. The lasso IS the shape — you draw a line round the
+   * working you meant and that line is what stays on screen, closed and
+   * dashed. A box would answer a different question: it would show the extent
+   * of what was caught rather than what you asked for, and around anything
+   * diagonal or L-shaped it would claim a large area of blank page that is not
+   * part of the selection at all.
+   *
+   * The loop travels with the ink under every move, rotation and scale, so it
+   * never stops describing what it holds.
+   *
+   * One handle sits at the outline's lower-right extreme, and that is where
+   * rotate and scale live. Deliberately one rather than eight: this is a stylus
+   * interface, eight 8px targets round a shape is a precision task, and the
+   * gesture a diagram actually wants is "turn it and size it", which one handle
+   * does in a single movement.
    */
   _drawSelection() {
-    const box = this.selectionBox();
-    if (!box) return;
-    const t = this.transform;
-    const x = (box.minX - t.offsetX) * t.scale;
-    const y = (box.minY - t.offsetY) * t.scale;
-    const w = (box.maxX - box.minX) * t.scale;
-    const h = (box.maxY - box.minY) * t.scale;
-
+    const loop = this.selectionLoop;
     const ctx = this.ctx;
+
+    if (!loop || loop.length < 3) return;
+
     ctx.save();
+    ctx.beginPath();
+    const first = this._toScreen(loop[0]);
+    ctx.moveTo(first.x, first.y);
+    for (let i = 1; i < loop.length; i++) {
+      const pt = this._toScreen(loop[i]);
+      ctx.lineTo(pt.x, pt.y);
+    }
+    ctx.closePath();
+
+    ctx.fillStyle = 'rgba(10, 96, 255, 0.06)';
+    ctx.fill();
     ctx.setLineDash([6, 4]);
     ctx.lineWidth = 1.5;
     ctx.strokeStyle = 'rgba(10, 96, 255, 0.9)';
-    ctx.strokeRect(x, y, w, h);
-    ctx.setLineDash([]);
-    ctx.fillStyle = 'rgba(10, 96, 255, 0.06)';
-    ctx.fillRect(x, y, w, h);
-
-    // The handle, bottom-right of the box.
-    ctx.beginPath();
-    ctx.arc(x + w, y + h, SELECT_HANDLE, 0, Math.PI * 2);
-    ctx.fillStyle = '#fff';
-    ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = 'rgba(10, 96, 255, 0.95)';
     ctx.stroke();
+    ctx.setLineDash([]);
+
+    const handle = this._handleAt();
+    if (handle) {
+      ctx.beginPath();
+      ctx.arc(handle.x, handle.y, SELECT_HANDLE, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = 'rgba(10, 96, 255, 0.95)';
+      ctx.stroke();
+    }
     ctx.restore();
+  }
+
+  /** Document point → canvas pixel. */
+  _toScreen(p) {
+    const t = this.transform;
+    return { x: (p.x - t.offsetX) * t.scale, y: (p.y - t.offsetY) * t.scale };
   }
 
   /** Screen-space position of the transform handle, or null. */
   _handleAt() {
-    const box = this.selectionBox();
+    const box = polygonBounds(this.selectionLoop) || this.selectionBox();
     if (!box) return null;
-    const t = this.transform;
-    return {
-      x: (box.maxX - t.offsetX) * t.scale,
-      y: (box.maxY - t.offsetY) * t.scale,
-    };
+    return this._toScreen({ x: box.maxX, y: box.maxY });
   }
 
   /**
@@ -350,7 +381,7 @@ export class InkSurface {
       const pt = this._docPoint(e);
 
       if (this.selecting) {
-        this._beginSelectionGesture(pt, e);
+        this._beginSelectionGesture(pt);
         return;
       }
 
@@ -389,8 +420,15 @@ export class InkSurface {
         return;
       }
       if (this._loop) {
-        this._loop.push(pt);
-        this.render();
+        // Only sample where the hand actually went somewhere. A stylus reports
+        // at 120Hz or better, so an unfiltered loop arrives with hundreds of
+        // near-identical points — every one of which would then be rotated and
+        // scaled on every frame of the next gesture, and tested on every press.
+        const last = this._loop[this._loop.length - 1];
+        if (Math.hypot(pt.x - last.x, pt.y - last.y) >= LOOP_SPACING) {
+          this._loop.push(pt);
+          this.render();
+        }
         return;
       }
 
@@ -448,6 +486,10 @@ export class InkSurface {
         this.selection = loop.length >= 3
           ? selectInPolygon(this.layer, loop, strokeIdsInRegion)
           : [];
+        // The loop is only kept when it caught something. An outline round
+        // empty page is not a selection, and leaving it on screen would offer
+        // a handle that transforms nothing.
+        this.selectionLoop = this.selection.length ? loop : null;
         this.render();
         return;
       }
@@ -479,14 +521,6 @@ export class InkSurface {
     c.addEventListener('pointercancel', finish);
   }
 
-  /** Erases along the current eraser drag, coalescing into one undo step. */
-  /**
-   * Applies the eraser at its current position.
-   *
-   * The two modes take different things, which is the whole distinction between
-   * them: STROKE lifts any whole stroke the head touches, REGION takes only the
-   * ink under the head and leaves the rest of the stroke behind, cut.
-   */
   /**
    * Decides what a press means while the lasso tool is active.
    *
@@ -494,14 +528,17 @@ export class InkSurface {
    * rotates and scales; inside an existing selection it moves it; anywhere else
    * it starts a new loop and abandons the old selection.
    */
-  _beginSelectionGesture(pt, e) {
+  _beginSelectionGesture(pt) {
     const handle = this._handleAt();
     if (handle && this.selection.length) {
       const sx = (pt.x - this.transform.offsetX) * this.transform.scale;
       const sy = (pt.y - this.transform.offsetY) * this.transform.scale;
       const near = Math.hypot(sx - handle.x, sy - handle.y) <= SELECT_HANDLE * 2.4;
       if (near) {
-        const box = this.selectionBox();
+        // The loop's centre, not the ink's. The user is turning the shape
+        // they drew, and pivoting about a point that shape is not centred on
+        // makes the selection swing rather than rotate.
+        const box = polygonBounds(this.selectionLoop) || this.selectionBox();
         const origin = boundsCentre(box);
         this._grab = {
           mode: 'transform',
@@ -515,13 +552,17 @@ export class InkSurface {
       }
     }
 
-    const box = this.selectionBox();
-    if (box && this.selection.length && pointInBounds(box, pt.x, pt.y)) {
+    // Inside the LOOP, not inside its bounding box: pressing in the empty
+    // corner of a diagonal selection's box is a press on the page, and it
+    // should start a new lasso rather than drag ink the user never enclosed.
+    const loop = this.selectionLoop;
+    if (this.selection.length && loop && pointInPolygon(pt.x, pt.y, loop)) {
       this._grab = { mode: 'move', last: pt, before: snapshotStrokes(this.layer, this.selection) };
       return;
     }
 
     this.selection = [];
+    this.selectionLoop = null;
     this._loop = [pt];
     this.render();
   }
@@ -544,6 +585,7 @@ export class InkSurface {
       const dy = pt.y - g.last.y;
       g.last = pt;
       if (transformSelection(this.layer, null, this.selection, { dx, dy })) {
+        this.selectionLoop = transformPolygon(this.selectionLoop, { dx, dy });
         this.render();
       }
       return;
@@ -558,12 +600,21 @@ export class InkSurface {
     // Rotation and scale in ONE step about the selection's centre, which is
     // what makes turning and resizing a single continuous movement instead of
     // two that fight over the origin.
-    if (transformSelection(this.layer, null, this.selection,
-      { origin: g.origin, angle, scale })) {
+    const step = { origin: g.origin, angle, scale };
+    if (transformSelection(this.layer, null, this.selection, step)) {
+      this.selectionLoop = transformPolygon(this.selectionLoop, step);
       this.render();
     }
   }
 
+  /**
+   * Applies the eraser at its current position, coalescing one drag into one
+   * undo step.
+   *
+   * The two modes take different things, which is the whole distinction between
+   * them: STROKE lifts any whole stroke the head touches, REGION takes only the
+   * ink under the head and leaves the rest of the stroke behind, cut.
+   */
   _eraseAlong() {
     if (this.eraserMode === ERASER_MODES.REGION) {
       const head = this._eraserDot;
