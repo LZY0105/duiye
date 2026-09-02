@@ -9,6 +9,8 @@
 // every step is exactly reversible: undo and redo are the same operation read
 // in opposite directions, which is what keeps 100 cycles from drifting.
 
+import { restorePoints } from './ink-selection.js';
+
 export const INK_OPS = Object.freeze({
   ADD: 'add',
   ERASE: 'erase',
@@ -19,6 +21,8 @@ export const INK_OPS = Object.freeze({
    * the stroke cut with nothing to show for it.
    */
   SPLIT: 'split',
+  /** A lasso selection moved, rotated or resized. */
+  TRANSFORM: 'transform',
 });
 
 const DEFAULT_LIMIT = 500;
@@ -70,6 +74,15 @@ export class InkHistory {
     this.record({ type: INK_OPS.SPLIT, removed, added: added || [] });
   }
 
+  /**
+   * @param {Array<{id:string, points:Array, width:number}>} before
+   * @param {Array<{id:string, points:Array, width:number}>} after
+   */
+  recordTransform(before, after) {
+    if (!before?.length) return;
+    this.record({ type: INK_OPS.TRANSFORM, before, after });
+  }
+
   recordClear(entries) {
     if (!entries.length) return;
     this.record({ type: INK_OPS.CLEAR, entries });
@@ -117,6 +130,9 @@ export class InkHistory {
         this.layer.removeByIds(op.added.map(e => e.stroke.id));
         this.layer.restore(op.removed);
         break;
+      case INK_OPS.TRANSFORM:
+        restorePoints(this.layer, op.before);
+        break;
       default:
         break;
     }
@@ -134,6 +150,9 @@ export class InkHistory {
       case INK_OPS.SPLIT:
         this.layer.removeByIds(op.removed.map(e => e.stroke.id));
         this.layer.restore(op.added);
+        break;
+      case INK_OPS.TRANSFORM:
+        restorePoints(this.layer, op.after);
         break;
       default:
         break;

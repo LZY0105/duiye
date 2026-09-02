@@ -30,6 +30,12 @@ import {
 import { InkLayer } from '../src/ink/ink-layer.js';
 import { InkHistory } from '../src/ink/ink-history.js';
 import {
+  boundsCentre,
+  selectionBounds,
+  snapshotStrokes,
+  transformSelection,
+} from '../src/ink/ink-selection.js';
+import {
   ERASER_MODES,
   eraseArea,
   eraseStrokes,
@@ -520,6 +526,92 @@ check('a head covering the whole stroke removes it outright', () => {
   assert.equal(layer.strokes.length, 0, 'nothing survived the head');
   history.undo();
   assert.equal(layer.strokes.length, 1, 'and it comes back whole');
+});
+
+// ═══════════════════════════════════════════════════════════════
+group('Lasso selection — move, rotate and scale what was caught');
+
+const boxStroke = () => {
+  const st = createStroke({ tool: INK_TOOLS.PEN, color: '#000', width: 2 });
+  appendPoint(st, 0, 0, 0.5);
+  appendPoint(st, 10, 0, 0.5);
+  appendPoint(st, 10, 10, 0.5);
+  appendPoint(st, 0, 10, 0.5);
+  return st;
+};
+
+check('a selection box is derived from the strokes, never stored', () => {
+  const layer = new InkLayer();
+  const st = boxStroke();
+  layer.add(st);
+  const box = selectionBounds(layer, [st.id]);
+  assert.ok(box, 'a selection must have a box');
+  assert.deepEqual(boundsCentre(box), { x: 5, y: 5 });
+  // Moving the ink moves the box, because the box is not state.
+  transformSelection(layer, null, [st.id], { dx: 100, dy: 50 });
+  assert.deepEqual(boundsCentre(selectionBounds(layer, [st.id])), { x: 105, y: 55 });
+});
+
+check('rotate and scale happen together, about the selection centre', () => {
+  const layer = new InkLayer();
+  const st = boxStroke();
+  layer.add(st);
+  transformSelection(layer, null, [st.id], { dx: 100, dy: 50 });
+
+  const origin = boundsCentre(selectionBounds(layer, [st.id]));
+  transformSelection(layer, null, [st.id], { origin, angle: Math.PI / 2, scale: 2 });
+
+  // (100,50) is (-5,-5) from the centre; a quarter turn takes it to (5,-5),
+  // doubling takes it to (10,-10), which lands at (115,45).
+  const p = layer.strokes[0].points[0];
+  assert.ok(Math.abs(p.x - 115) < 1e-6, `x was ${p.x}`);
+  assert.ok(Math.abs(p.y - 45) < 1e-6, `y was ${p.y}`);
+});
+
+check('line weight scales with the ink', () => {
+  const layer = new InkLayer();
+  const st = boxStroke();
+  layer.add(st);
+  transformSelection(layer, null, [st.id], { origin: { x: 5, y: 5 }, scale: 2 });
+  // A mark enlarged with its weight left behind stops being the same mark.
+  assert.equal(layer.strokes[0].width, 4);
+});
+
+check('a whole gesture is one undo step', () => {
+  const layer = new InkLayer();
+  const history = new InkHistory(layer);
+  const st = boxStroke();
+  layer.add(st);
+
+  // What the surface does: snapshot once, apply many increments, record once.
+  const before = snapshotStrokes(layer, [st.id]);
+  for (let i = 0; i < 20; i++) transformSelection(layer, null, [st.id], { dx: 1, dy: 0 });
+  history.recordTransform(before, snapshotStrokes(layer, [st.id]));
+
+  assert.equal(history.undoStack.length, 1, 'twenty increments, one step');
+  assert.equal(layer.strokes[0].points[0].x, 20);
+  history.undo();
+  assert.equal(layer.strokes[0].points[0].x, 0, 'undo returns to the start of the gesture');
+  history.redo();
+  assert.equal(layer.strokes[0].points[0].x, 20);
+});
+
+check('an identity transform is not a change', () => {
+  const layer = new InkLayer();
+  const st = boxStroke();
+  layer.add(st);
+  assert.equal(transformSelection(layer, null, [st.id], { dx: 0, dy: 0 }), false);
+  assert.equal(transformSelection(layer, null, [], { dx: 5 }), false);
+});
+
+check('bounds are rebuilt after a transform, so the ink stays hittable', () => {
+  const layer = new InkLayer();
+  const st = boxStroke();
+  layer.add(st);
+  transformSelection(layer, null, [st.id], { dx: 500, dy: 500 });
+  const b = layer.strokes[0].bounds;
+  assert.ok(b.minX > 400, 'stale bounds would leave the stroke hittable where it no longer is');
+  assert.ok(strokeHitByPoint(layer.strokes[0], 500, 500, 4));
 });
 
 console.log('\n═══════════════════════════════════════════════════════════════');

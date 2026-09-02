@@ -114,6 +114,8 @@ export const CARDS = Object.freeze({
 
 /** The eraser is a toolbar selection but not a stroke tool. */
 export const ERASER_TOOL = 'eraser';
+/** Selection, not drawing: the lasso catches strokes and transforms them. */
+export const LASSO_TOOL = 'lasso';
 
 /** Four quick swatches, as observed in the reference layout. */
 export const DEFAULT_SWATCHES = Object.freeze(['#111827', '#dc2626', '#2563eb', '#16a34a']);
@@ -261,6 +263,10 @@ export function selectTool(state, tool) {
   if (tool === ERASER_TOOL) {
     return next(state, { tool: ERASER_TOOL, openCard: CARDS.NONE });
   }
+  if (tool === LASSO_TOOL) {
+    // No settings card: the lasso's parameters are the gesture itself.
+    return next(state, { tool: LASSO_TOOL, openCard: CARDS.NONE });
+  }
   if (!Object.values(INK_TOOLS).includes(tool)) return state;
   const defaults = TOOL_DEFAULTS[tool];
   return next(state, {
@@ -309,6 +315,10 @@ export function openCard(state, card) {
 
 export function closeCard(state) {
   return state.openCard === CARDS.NONE ? state : next(state, { openCard: CARDS.NONE });
+}
+
+export function isLasso(state) {
+  return state.tool === LASSO_TOOL;
 }
 
 export function isEraser(state) {

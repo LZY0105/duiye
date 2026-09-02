@@ -17,6 +17,7 @@ import {
   DEFAULT_SWATCHES,
   EDGES,
   ERASER_TOOL,
+  LASSO_TOOL,
   ORIENTATION,
   TOOLBAR_PHASE,
   closeCard,
@@ -70,6 +71,9 @@ const ICON = {
   highlighter: '<path d="M8.5 3.5h7a1 1 0 0 1 1 1V11h-9V4.5a1 1 0 0 1 1-1z"/><path d="M7.5 11h9l-1.2 4.2a1 1 0 0 1-.96.7h-4.68a1 1 0 0 1-.96-.7L7.5 11z"/><path d="M4 20h16"/>',
   // The eraser already inline on the handwriting bar, unchanged.
   eraser: '<path d="M20 20H7L3 16c-.8-.8-.8-2 0-2.8L14.6 1.6c.8-.8 2-.8 2.8 0L21 5.2c.8.8.8 2 0 2.8L12 17"/><line x1="6" y1="20" x2="10" y2="20"/>',
+  // A dashed loop closing on itself, with the tail that says it was drawn by
+  // hand rather than dropped as a rectangle.
+  lasso: '<path stroke-dasharray="3 3" d="M12 4c4.4 0 8 2.4 8 5.5S16.4 15 12 15s-8-2.4-8-5.5S7.6 4 12 4z"/><path d="M8.5 14.3c-.6 1.6-.4 3.2.6 4.3"/><circle cx="9.6" cy="19.4" r="1.6"/>',
   // Grip and overflow share one family of dots, so the two chrome affordances
   // read as chrome rather than as two more tools.
   grip: '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>',
@@ -93,6 +97,7 @@ const TOOL_META = [
   { tool: INK_TOOLS.MARKER, label: '马克笔', icon: 'marker' },
   { tool: INK_TOOLS.HIGHLIGHTER, label: '荧光笔', icon: 'highlighter' },
   { tool: ERASER_TOOL, label: '橡皮', icon: 'eraser' },
+  { tool: LASSO_TOOL, label: '套索', icon: 'lasso' },
 ];
 
 const metaFor = (tool) => TOOL_META.find(t => t.tool === tool) || TOOL_META[0];
@@ -189,6 +194,10 @@ export class InkToolbar {
   _pushToSurface() {
     const surface = this.handlers.getSurface?.();
     if (!surface) return;
+    if (this.state.tool === LASSO_TOOL) {
+      surface.setTool(LASSO_TOOL);
+      return;
+    }
     if (isEraser(this.state)) {
       surface.setEraser(this.state.eraserMode);
       surface.eraserRadius = this.state.eraserWidth;
@@ -372,6 +381,15 @@ export class InkToolbar {
         easing: corner
           ? 'cubic-bezier(0.22, 1.2, 0.36, 1)'
           : 'cubic-bezier(0.32, 0.72, 0, 1)',
+        // ADDED to the bar's own transform, never replacing it.
+        //
+        // A docked bar rests on translateY(-50%) — the edge offset addresses its
+        // centre. Animating `transform` outright overrode that for the length of
+        // the animation and, because the last keyframe is `none`, landed the bar
+        // half its own height away from where it belongs; when the animation
+        // stopped applying, the element snapped back to its real position. That
+        // snap was the jump after every drag.
+        composite: 'add',
       },
     );
   }

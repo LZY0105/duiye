@@ -73,7 +73,9 @@ function mountToolbar() {
   const host = document.createElement('div');
   host.getBoundingClientRect = () => ({ ...HOST_RECT });
   document.body.appendChild(host);
-  return { host, bar: new InkToolbar(host, { getSurface: () => null }) };
+  const bar = new InkToolbar(host, { getSurface: () => null });
+  if (!TOOL_COUNT) TOOL_COUNT = bar.root.querySelectorAll('.ink-tool').length;
+  return { host, bar };
 }
 
 function pointer(type, { x = 0, y = 0, id = 1, target } = {}) {
@@ -94,6 +96,11 @@ function drag(bar, { from = [40, 40], to = [820, 300], endWith = 'pointerup', id
   pointer('pointermove', { x: to[0], y: to[1], id });
   pointer(endWith, { x: to[0], y: to[1], id });
 }
+
+// The tool count is read from the bar rather than hardcoded: these tests are
+// about the DRAG lifecycle, and they should not fail every time the toolbar
+// gains or loses a tool. TOOL_COUNT is captured from a freshly mounted bar.
+let TOOL_COUNT = 0;
 
 const isExpanded = (bar) => ({
   phase: bar.state.phase,
@@ -131,14 +138,14 @@ test('pointerup ends the drag and restores the whole toolbar', () => {
   const after = isExpanded(bar);
   assert.equal(after.phase, 'expanded', 'phase must leave dragging');
   assert.equal(after.handles, 1, 'the drag handle must come back');
-  assert.equal(after.tools, 5, 'every tool button must come back');
+  assert.equal(after.tools, TOOL_COUNT, 'every tool button must come back');
   assert.equal(after.tokens, 0, 'the drag token must be gone');
 });
 
 test('pointercancel ends the drag the same way', () => {
   const { bar } = mountToolbar();
   drag(bar, { endWith: 'pointercancel' });
-  assert.deepEqual(isExpanded(bar), { phase: 'expanded', handles: 1, tools: 5, tokens: 0 });
+  assert.deepEqual(isExpanded(bar), { phase: 'expanded', handles: 1, tools: TOOL_COUNT, tokens: 0 });
 });
 
 test('lostpointercapture ends the drag the same way', () => {
@@ -147,7 +154,7 @@ test('lostpointercapture ends the drag the same way', () => {
   pointer('pointerdown', { x: 40, y: 40, target: handle });
   pointer('pointermove', { x: 500, y: 300 });
   pointer('lostpointercapture', { x: 500, y: 300 });
-  assert.deepEqual(isExpanded(bar), { phase: 'expanded', handles: 1, tools: 5, tokens: 0 });
+  assert.deepEqual(isExpanded(bar), { phase: 'expanded', handles: 1, tools: TOOL_COUNT, tokens: 0 });
 });
 
 test('a pointer released outside the toolbar still ends the drag', () => {
@@ -190,7 +197,7 @@ test('20 consecutive drags each terminate cleanly', () => {
     const state = isExpanded(bar);
     assert.equal(state.phase, 'expanded', `drag ${i + 1} left the bar in ${state.phase}`);
     assert.equal(state.handles, 1, `drag ${i + 1} lost the handle`);
-    assert.equal(state.tools, 5, `drag ${i + 1} lost the tools`);
+    assert.equal(state.tools, TOOL_COUNT, `drag ${i + 1} lost the tools`);
     assert.equal(state.tokens, 0, `drag ${i + 1} left a stale drag token`);
   }
 });
