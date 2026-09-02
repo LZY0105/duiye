@@ -63,17 +63,29 @@ function moved(before, after) {
 /**
  * Radius of the rotate/scale handle, in screen pixels at 100% page zoom.
  *
- * It breathes with the page between HANDLE_MIN and HANDLE_MAX rather than
- * staying frozen. A control pinned to an absolute pixel size while everything
- * around it grows and shrinks does not read as attached to the page — the loop
- * swells under a pinch and the dot sits there refusing to, which is the thing
- * that looked wrong. Clamped at both ends because it is still a touch target:
- * it may not shrink to something a stylus cannot land on, and it may not grow
- * into a blob that hides the ink beneath it.
+ * It is sized against what it MANIPULATES, not pinned to an absolute number.
+ * A control that holds still while the thing it belongs to grows and shrinks
+ * does not read as attached to it, and the failure is worst in the shrinking
+ * direction: scale a selection down to a quarter and a fixed dot ends up
+ * larger than the ink it is supposed to be a corner of.
+ *
+ * Two influences, and the smaller wins:
+ *   - the page zoom, damped by a square root, so it always responds across the
+ *     whole practical range instead of moving 1:1 and running away at 4x;
+ *   - the selection's own on-screen size, capped at HANDLE_SHARE of its
+ *     shorter side, which is what makes it shrink with the selection.
+ *
+ * Then clamped, because it is still a touch target: it may not shrink below
+ * something a stylus can land on, and it may not grow into a blob that hides
+ * the ink underneath it.
  */
 const SELECT_HANDLE = 9;
-const HANDLE_MIN = 7;
-const HANDLE_MAX = 16;
+const HANDLE_MIN = 6;
+const HANDLE_MAX = 20;
+/** Never more than this fraction of the selection's shorter on-screen side. */
+const HANDLE_SHARE = 0.18;
+/** The hit target may not follow the dot all the way down. */
+const HANDLE_HIT_MIN = 15;
 
 /**
  * Minimum spacing between lasso samples, in document units.
@@ -302,10 +314,13 @@ export class InkSurface {
     const ctx = this.ctx;
     ctx.save();
     ctx.beginPath();
-    ctx.arc(handle.x, handle.y, this._handleRadius(), 0, Math.PI * 2);
+    const r = this._handleRadius();
+    ctx.arc(handle.x, handle.y, r, 0, Math.PI * 2);
     ctx.fillStyle = '#fff';
     ctx.fill();
-    ctx.lineWidth = 2;
+    // The ring's weight goes with its size. A 2px outline on a 40px dot reads
+    // as a thin hoop, and on a 12px one it swallows the white centre.
+    ctx.lineWidth = Math.min(3, Math.max(1.5, r / 4.5));
     ctx.strokeStyle = LASSO_STROKE;
     ctx.stroke();
     ctx.restore();
@@ -313,8 +328,31 @@ export class InkSurface {
 
   /** Drawn radius of the handle at the current zoom, in screen pixels. */
   _handleRadius() {
-    const scaled = SELECT_HANDLE * (this.transform?.scale || 1);
-    return Math.min(HANDLE_MAX, Math.max(HANDLE_MIN, scaled));
+    const zoom = this.transform?.scale || 1;
+    // sqrt, not the zoom itself: 1:1 would double the dot every time the page
+    // doubles, which is a blob at 4x and invisible at a quarter. Damped, it
+    // still moves everywhere in between — which is the whole point.
+    let r = SELECT_HANDLE * Math.sqrt(zoom);
+
+    const box = polygonBounds(this.selectionLoop);
+    if (box) {
+      const w = (box.maxX - box.minX) * zoom;
+      const h = (box.maxY - box.minY) * zoom;
+      r = Math.min(r, Math.min(w, h) * HANDLE_SHARE);
+    }
+    return Math.min(HANDLE_MAX, Math.max(HANDLE_MIN, r));
+  }
+
+  /**
+   * How close a press has to be to count as grabbing the handle.
+   *
+   * Tracks the drawn dot, so aim and appearance never part company — but with
+   * a floor of its own. On a very small selection the dot is deliberately
+   * tiny, and a hit target that shrank with it all the way down would leave a
+   * handle that can be seen and not pressed.
+   */
+  _handleHitRadius() {
+    return Math.max(HANDLE_HIT_MIN, this._handleRadius() * 2.4);
   }
 
   /** Document point → canvas pixel. */
@@ -579,10 +617,10 @@ export class InkSurface {
     if (handle && this.selection.length) {
       const sx = (pt.x - this.transform.offsetX) * this.transform.scale;
       const sy = (pt.y - this.transform.offsetY) * this.transform.scale;
-      // Measured against what is DRAWN, not against the constant. A hit radius
+      // Measured against what is DRAWN, not against a constant. A hit radius
       // that ignored the zoom would drift away from the dot the user is aiming
       // at — generous at one zoom, unreachable at another.
-      const near = Math.hypot(sx - handle.x, sy - handle.y) <= this._handleRadius() * 2.4;
+      const near = Math.hypot(sx - handle.x, sy - handle.y) <= this._handleHitRadius();
       if (near) {
         // Pin the handle to the loop vertex nearest the press, for the whole
         // gesture. The handle is then under the finger that grabbed it and

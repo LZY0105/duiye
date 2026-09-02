@@ -314,23 +314,67 @@ check('the settings reach the surface, and the surface takes only valid ones', (
   assert.equal(surface.lassoInside, true);
 });
 
-check('the handle breathes with the zoom, and its hit target with it', () => {
+/** A surface with a selection of the given document size, at the given zoom. */
+function sized(zoom, w, h) {
   const surface = Object.create(InkSurface.prototype);
-  const at = (scale) => {
-    surface.transform = { scale, offsetX: 0, offsetY: 0 };
-    return surface._handleRadius();
-  };
-  assert.equal(at(1), 9, 'at 100% it is the size it always was');
-  assert.ok(at(2) > at(1), 'zooming in grows it — a frozen dot reads as unattached');
-  assert.ok(at(0.5) < at(1), 'and zooming out shrinks it');
-  assert.equal(at(9), 16, 'but never into a blob that hides the ink');
-  assert.equal(at(0.05), 7, 'nor below something a stylus can land on');
+  surface.transform = { scale: zoom, offsetX: 0, offsetY: 0 };
+  surface.selectionLoop = w
+    ? [{ x: 0, y: 0 }, { x: w, y: 0 }, { x: w, y: h }, { x: 0, y: h }]
+    : null;
+  return surface;
+}
 
-  // The hit target is measured against the drawn size, so the two cannot part
-  // company at some zoom the constant never knew about.
+check('the handle scales with the page zoom, everywhere in the useful range', () => {
+  const r = (zoom) => sized(zoom, 200, 150)._handleRadius();
+  assert.equal(r(1), 9, 'at 100% it is the size it always was');
+
+  // Monotonic across the whole practical range. The earlier version clamped
+  // outside 0.78x–1.78x, so it was frozen for most of the zooms anyone uses,
+  // which is the same complaint in a narrower band.
+  let last = 0;
+  for (const z of [0.5, 0.75, 1, 1.5, 2, 3, 4]) {
+    const v = r(z);
+    assert.ok(v > last, `must still be growing at ${z}x`);
+    last = v;
+  }
+  assert.ok(r(4) < r(1) * 4, 'damped — 1:1 would be a blob at 4x');
+  assert.equal(r(64), 20, 'and it stops before it hides the ink');
+  assert.equal(r(0.001), 6, 'and before a stylus cannot land on it');
+});
+
+check('the handle shrinks with the SELECTION, not only with the page', () => {
+  // This is the one that actually goes wrong without it: scale a selection
+  // down and a fixed dot ends up larger than the ink it is a corner of.
+  const r = (w, h) => sized(1, w, h)._handleRadius();
+  assert.equal(r(200, 150), 9, 'a normal selection is unaffected');
+  assert.ok(r(50, 38) < 9, 'a small one gets a smaller handle');
+
+  for (const [w, h] of [[200, 150], [50, 38], [24, 18], [10, 8]]) {
+    const diameter = r(w, h) * 2;
+    assert.ok(diameter <= Math.min(w, h) || r(w, h) === 6,
+      `${w}x${h}: the dot must not outgrow what it is a handle for`);
+  }
+});
+
+check('the hit target follows the dot, but never all the way down', () => {
+  const big = sized(1, 200, 150);
+  assert.equal(big._handleHitRadius(), big._handleRadius() * 2.4, 'aim tracks appearance');
+
+  const tiny = sized(1, 10, 8);
+  assert.ok(tiny._handleRadius() < big._handleRadius());
+  assert.equal(tiny._handleHitRadius(), 15,
+    'a handle that can be seen and not pressed is worse than one drawn large');
+
   const code = $read('src/ink/ink-surface.js');
-  assert.ok(/this\._handleRadius\(\) \* 2\.4/.test(code));
   assert.ok(!/SELECT_HANDLE \* 2\.4/.test(code), 'the fixed hit radius is gone');
+  assert.ok(/_handleHitRadius\(\)/.test(code), 'one place decides what counts as a grab');
+});
+
+check('the ring keeps its weight in proportion', () => {
+  // A 2px outline on a 40px dot reads as a thin hoop; on a 12px one it
+  // swallows the white centre.
+  const code = $read('src/ink/ink-surface.js');
+  assert.ok(/ctx\.lineWidth = Math\.min\(3, Math\.max\(1\.5, r \/ 4\.5\)\)/.test(code));
 });
 
 check('the object-type row from the reference is deliberately absent', () => {
