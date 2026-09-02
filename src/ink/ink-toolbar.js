@@ -18,6 +18,8 @@ import {
   DEFAULT_SWATCHES,
   EDGES,
   ERASER_TOOL,
+  LASSO_MODES,
+  LASSO_SHAPES,
   LASSO_TOOL,
   ORIENTATION,
   TOOLBAR_PHASE,
@@ -35,6 +37,8 @@ import {
   setColor,
   setEraserMode,
   setEraserWidth,
+  setLassoMode,
+  setLassoShape,
   setOpacity,
   setWidth,
   startDrag,
@@ -208,6 +212,10 @@ export class InkToolbar {
     if (!surface) return;
     if (this.state.tool === LASSO_TOOL) {
       surface.setTool(LASSO_TOOL);
+      surface.setLasso({
+        shape: this.state.lassoShape,
+        mode: this.state.lassoMode,
+      });
       return;
     }
     if (isEraser(this.state)) {
@@ -512,8 +520,10 @@ export class InkToolbar {
         // Tapping the already-selected tool opens its settings card, which is
         // the demonstrated way to reach tool parameters.
         if (tool === this.state.tool) {
-          this._set(openCard(this.state, tool === ERASER_TOOL ? CARDS.ERASER : CARDS.TOOL),
-            { pushTools: false });
+          const card = tool === ERASER_TOOL ? CARDS.ERASER
+            : tool === LASSO_TOOL ? CARDS.LASSO
+              : CARDS.TOOL;
+          this._set(openCard(this.state, card), { pushTools: false });
           return;
         }
         this._set(selectTool(this.state, tool));
@@ -725,6 +735,7 @@ export class InkToolbar {
 
     if (state.openCard === CARDS.TOOL) card.innerHTML = this._toolCardHtml();
     else if (state.openCard === CARDS.ERASER) card.innerHTML = this._eraserCardHtml();
+    else if (state.openCard === CARDS.LASSO) card.innerHTML = this._lassoCardHtml();
     else if (state.openCard === CARDS.COLOR) card.innerHTML = this._colorCardHtml();
     else card.innerHTML = this._overflowCardHtml();
 
@@ -793,6 +804,49 @@ export class InkToolbar {
       <p class="ink-note">只会删除本页的手写笔迹，不会修改导入的 PDF。</p>`;
   }
 
+  /**
+   * The lasso card.
+   *
+   * Two questions, and only two: what shape the loop takes, and what counts as
+   * caught. The reference this is modelled on offers a third — which KINDS of
+   * object to select, across handwriting, images, text boxes and shapes — and
+   * that row is left out rather than copied, because this app holds one kind of
+   * object. Four toggles that can only ever have one answer are not a setting,
+   * they are furniture.
+   *
+   * The preview is the mark itself, at the size it is drawn, so the choice is
+   * made by looking rather than by reading two labels.
+   */
+  _lassoCardHtml() {
+    const { state } = this;
+    const free = state.lassoShape !== LASSO_SHAPES.RECT;
+    return `
+      <div class="ink-card-title">套索</div>
+      <div class="ink-lasso-preview" aria-hidden="true">
+        <svg viewBox="0 0 72 48" width="72" height="48" fill="none"
+             stroke="var(--math-gold, #d97706)" stroke-width="2"
+             stroke-linecap="round" stroke-dasharray="5 4">
+          ${free
+            ? '<path d="M36 8c14 0 25 7 25 16S50 40 36 40 11 33 11 24 22 8 36 8z"/>'
+            : '<rect x="11" y="9" width="50" height="30" rx="2"/>'}
+        </svg>
+      </div>
+      <div class="ink-seg">
+        <button type="button" class="ink-seg-btn${free ? ' is-selected' : ''}"
+                data-lasso-shape="${LASSO_SHAPES.FREE}">自由套索</button>
+        <button type="button" class="ink-seg-btn${free ? '' : ' is-selected'}"
+                data-lasso-shape="${LASSO_SHAPES.RECT}">矩形套索</button>
+      </div>
+      <div class="ink-card-label">选中方式</div>
+      <div class="ink-seg">
+        <button type="button" class="ink-seg-btn${state.lassoMode === LASSO_MODES.TOUCH ? ' is-selected' : ''}"
+                data-lasso-mode="${LASSO_MODES.TOUCH}">接触即选</button>
+        <button type="button" class="ink-seg-btn${state.lassoMode === LASSO_MODES.INSIDE ? ' is-selected' : ''}"
+                data-lasso-mode="${LASSO_MODES.INSIDE}">完全包含</button>
+      </div>
+      <p class="ink-note">圈中后可拖动移动，拖右下角的圆点可同时旋转和缩放。</p>`;
+  }
+
   _colorCardHtml() {
     const { state } = this;
     const palette = [
@@ -841,6 +895,14 @@ export class InkToolbar {
         const out = card.querySelector('[data-role="opacity-readout"]');
         if (out) out.textContent = String(Math.round(Number(slider.value)));
       });
+    });
+
+    card.querySelectorAll('[data-lasso-shape]').forEach((button) => {
+      button.addEventListener('click', () => this._set(setLassoShape(this.state, button.dataset.lassoShape)));
+    });
+
+    card.querySelectorAll('[data-lasso-mode]').forEach((button) => {
+      button.addEventListener('click', () => this._set(setLassoMode(this.state, button.dataset.lassoMode)));
     });
 
     card.querySelectorAll('[data-eraser-mode]').forEach((button) => {

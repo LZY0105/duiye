@@ -31,8 +31,11 @@ import { InkLayer } from '../src/ink/ink-layer.js';
 import { InkHistory } from '../src/ink/ink-history.js';
 import {
   boundsCentre,
-  handleVertex,
+  handleIndex,
+  nearestIndex,
   polygonBounds,
+  rectLoop,
+  selectInPolygon,
   selectionBounds,
   transformPolygon,
   snapshotStrokes,
@@ -681,15 +684,85 @@ check('the transform handle sits ON the loop, not beside it', () => {
   // There is no bounding box drawn any more, so a handle at the box's corner
   // would float in blank page with nothing connecting it to the selection.
   const loop = ring(100, 100, 50);
-  const h = handleVertex(loop);
+  const h = loop[handleIndex(loop)];
   const r = Math.hypot(h.x - 100, h.y - 100);
   assert.ok(Math.abs(r - 50) < 1e-6, 'the handle must lie on the outline itself');
   assert.ok(h.x > 100 && h.y > 100, 'and on its lower-right, where a handle is looked for');
 
   const box = polygonBounds(loop);
   assert.ok(h.x < box.maxX && h.y < box.maxY, 'strictly inside the box corner');
-  assert.equal(handleVertex([]), null);
-  assert.equal(handleVertex(null), null);
+  assert.equal(handleIndex([]), -1);
+  assert.equal(handleIndex(null), -1);
+});
+
+check('the handle is pinned to a vertex, so a transform cannot make it hop', () => {
+  // This is the bug the index exists to kill. Recomputing "furthest
+  // down-right" every frame makes the handle jump between sample points while
+  // the shape is being turned — it skates around the outline under a finger
+  // that is holding still.
+  const loop = ring(100, 100, 50, 32);
+  const pinned = handleIndex(loop);
+
+  let turned = loop;
+  let searched = 0;
+  for (let i = 0; i < 32; i++) {
+    turned = transformPolygon(turned, {
+      origin: { x: 100, y: 100 }, angle: Math.PI / 16, scale: 1.02,
+    });
+    if (handleIndex(turned) !== pinned) searched++;
+  }
+  assert.ok(searched > 8, 'a re-searched handle really does hop — otherwise this proves nothing');
+
+  // The pinned one is the same physical point throughout: still on the loop,
+  // and still the vertex it started as.
+  const start = loop[pinned];
+  const end = turned[pinned];
+  const a0 = Math.atan2(start.y - 100, start.x - 100);
+  const a1 = Math.atan2(end.y - 100, end.x - 100);
+  const turnedBy = ((a1 - a0) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+  assert.ok(Math.abs(turnedBy - (2 * Math.PI * ((32 / 32) % 1))) < 1e-6
+    || Math.abs(turnedBy) < 1e-6, 'a full turn brings the pinned vertex back to itself');
+});
+
+check('a grab pins the handle to the vertex under the finger', () => {
+  const loop = ring(100, 100, 50, 24);
+  const press = { x: 150, y: 100 };
+  const i = nearestIndex(loop, press.x, press.y);
+  const v = loop[i];
+  assert.ok(Math.hypot(v.x - press.x, v.y - press.y) < 14, 'the nearest vertex, not any vertex');
+  for (const p of loop) {
+    assert.ok(
+      Math.hypot(p.x - press.x, p.y - press.y) >= Math.hypot(v.x - press.x, v.y - press.y) - 1e-9,
+      'and genuinely the nearest',
+    );
+  }
+  assert.equal(nearestIndex([], 0, 0), -1);
+});
+
+check('the rectangle lasso is four corners, whichever way it was dragged', () => {
+  const a = rectLoop({ x: 90, y: 80 }, { x: 10, y: 20 });
+  const b = rectLoop({ x: 10, y: 20 }, { x: 90, y: 80 });
+  assert.equal(a.length, 4, 'a box has four corners however far the hand wandered');
+  assert.deepEqual(a, b, 'dragging up-left must give the same box as down-right');
+  assert.deepEqual(polygonBounds(a), { minX: 10, minY: 20, maxX: 90, maxY: 80 });
+  assert.equal(pointInPolygon(50, 50, a), true);
+  assert.equal(pointInPolygon(5, 50, a), false);
+  assert.deepEqual(rectLoop(null, { x: 1, y: 1 }), []);
+});
+
+check('完全包含 takes only what is wholly inside; 接触即选 takes what it crosses', () => {
+  const layer = new InkLayer();
+  const inside = strokeThrough([[20, 20], [30, 30]]);
+  const crossing = strokeThrough([[40, 40], [200, 200]]);
+  layer.add(inside);
+  layer.add(crossing);
+  const box = rectLoop({ x: 0, y: 0 }, { x: 100, y: 100 });
+
+  const touch = selectInPolygon(layer, box, strokeIdsInRegion, false);
+  assert.equal(touch.length, 2, 'the forgiving reading takes the stroke it crosses');
+
+  const strict = selectInPolygon(layer, box, strokeIdsInRegion, true);
+  assert.deepEqual(strict, [inside.id], 'the strict one leaves the trailing stroke behind');
 });
 
 check('an empty polygon has no bounds and holds nothing', () => {

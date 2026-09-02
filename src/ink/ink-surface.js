@@ -27,8 +27,10 @@ import {
 } from './ink-eraser.js';
 import {
   boundsCentre,
-  handleVertex,
+  handleIndex,
+  nearestIndex,
   polygonBounds,
+  rectLoop,
   selectInPolygon,
   selectionBounds,
   transformPolygon,
@@ -58,8 +60,20 @@ function moved(before, after) {
   return false;
 }
 
-/** Radius of the rotate/scale handle, in screen pixels. */
+/**
+ * Radius of the rotate/scale handle, in screen pixels at 100% page zoom.
+ *
+ * It breathes with the page between HANDLE_MIN and HANDLE_MAX rather than
+ * staying frozen. A control pinned to an absolute pixel size while everything
+ * around it grows and shrinks does not read as attached to the page — the loop
+ * swells under a pinch and the dot sits there refusing to, which is the thing
+ * that looked wrong. Clamped at both ends because it is still a touch target:
+ * it may not shrink to something a stylus cannot land on, and it may not grow
+ * into a blob that hides the ink beneath it.
+ */
 const SELECT_HANDLE = 9;
+const HANDLE_MIN = 7;
+const HANDLE_MAX = 16;
 
 /**
  * Minimum spacing between lasso samples, in document units.
@@ -113,6 +127,10 @@ export class InkSurface {
     this.selection = [];      // ids, document order irrelevant
     this._loop = null;        // the lasso being drawn, document space
     this.selectionLoop = null; // the closed loop that caught it, document space
+    this._anchor = -1;        // which loop vertex carries the transform handle
+    this._loopFrom = null;    // where a rectangle lasso started
+    this.lassoShape = 'free';
+    this.lassoInside = false; // require strokes to fall entirely inside
     this._grab = null;        // an in-progress move/rotate/scale of the selection
 
     this._bind();
@@ -141,11 +159,19 @@ export class InkSurface {
     this.width = TOOL_DEFAULTS[tool]?.width ?? this.width;
   }
 
+  /** Shape of the loop, and what counts as caught. */
+  setLasso({ shape, mode } = {}) {
+    if (shape === 'free' || shape === 'rect') this.lassoShape = shape;
+    if (mode === 'touch' || mode === 'inside') this.lassoInside = mode === 'inside';
+  }
+
   clearSelection() {
     if (!this.selection.length && !this._loop) return;
     this.selection = [];
     this.selectionLoop = null;
+    this._anchor = -1;
     this._loop = null;
+    this._loopFrom = null;
     this._grab = null;
     this.render();
   }
@@ -231,7 +257,15 @@ export class InkSurface {
       drawStroke(this.ctx, this._active, this.transform);
     }
     if (this._eraserDot) this._drawEraserDot();
-    if (this._loop) drawLasso(this.ctx, this._loop, this.transform, { tip: true });
+    // The tip ring marks where a freehand loop will close back to. A dragged
+    // rectangle has no such point — it is already closed, and a ring on one of
+    // its corners would only claim a meaning it does not have.
+    if (this._loop) {
+      drawLasso(this.ctx, this._loop, this.transform, {
+        tip: this.lassoShape !== 'rect',
+        closed: this.lassoShape === 'rect',
+      });
+    }
     if (this.selection.length) this._drawSelection();
   }
 
@@ -248,8 +282,9 @@ export class InkSurface {
    * The loop travels with the ink under every move, rotation and scale, so it
    * never stops describing what it holds.
    *
-   * One handle sits at the outline's lower-right extreme, and that is where
-   * rotate and scale live. Deliberately one rather than eight: this is a stylus
+   * One handle carries rotate and scale, pinned to a VERTEX of the loop — the
+   * lower-right extreme to begin with, and thereafter whichever vertex the
+   * user grabbed. Deliberately one handle rather than eight: this is a stylus
    * interface, eight 8px targets round a shape is a precision task, and the
    * gesture a diagram actually wants is "turn it and size it", which one handle
    * does in a single movement.
@@ -267,7 +302,7 @@ export class InkSurface {
     const ctx = this.ctx;
     ctx.save();
     ctx.beginPath();
-    ctx.arc(handle.x, handle.y, SELECT_HANDLE, 0, Math.PI * 2);
+    ctx.arc(handle.x, handle.y, this._handleRadius(), 0, Math.PI * 2);
     ctx.fillStyle = '#fff';
     ctx.fill();
     ctx.lineWidth = 2;
@@ -276,16 +311,29 @@ export class InkSurface {
     ctx.restore();
   }
 
+  /** Drawn radius of the handle at the current zoom, in screen pixels. */
+  _handleRadius() {
+    const scaled = SELECT_HANDLE * (this.transform?.scale || 1);
+    return Math.min(HANDLE_MAX, Math.max(HANDLE_MIN, scaled));
+  }
+
   /** Document point → canvas pixel. */
   _toScreen(p) {
     const t = this.transform;
     return { x: (p.x - t.offsetX) * t.scale, y: (p.y - t.offsetY) * t.scale };
   }
 
-  /** Screen-space position of the transform handle, or null. */
+  /**
+   * Screen-space position of the transform handle, or null.
+   *
+   * Reads the pinned vertex rather than searching for one, so the handle moves
+   * with the loop instead of hopping between its points as the shape turns.
+   */
   _handleAt() {
-    const onLoop = handleVertex(this.selectionLoop);
-    if (onLoop) return this._toScreen(onLoop);
+    const loop = this.selectionLoop;
+    if (loop && this._anchor >= 0 && this._anchor < loop.length) {
+      return this._toScreen(loop[this._anchor]);
+    }
     const box = this.selectionBox();
     return box ? this._toScreen({ x: box.maxX, y: box.maxY }) : null;
   }
@@ -408,6 +456,14 @@ export class InkSurface {
         return;
       }
       if (this._loop) {
+        // A rectangle is not sampled: it is redrawn from the two corners, so
+        // the box always has exactly four points however far the hand wandered
+        // getting to the second one.
+        if (this.lassoShape === 'rect') {
+          this._loop = rectLoop(this._loopFrom, pt);
+          this.render();
+          return;
+        }
         // Only sample where the hand actually went somewhere. A stylus reports
         // at 120Hz or better, so an unfiltered loop arrives with hundreds of
         // near-identical points — every one of which would then be rotated and
@@ -471,13 +527,15 @@ export class InkSurface {
       if (this._loop) {
         const loop = this._loop;
         this._loop = null;
+        this._loopFrom = null;
         this.selection = loop.length >= 3
-          ? selectInPolygon(this.layer, loop, strokeIdsInRegion)
+          ? selectInPolygon(this.layer, loop, strokeIdsInRegion, this.lassoInside)
           : [];
         // The loop is only kept when it caught something. An outline round
         // empty page is not a selection, and leaving it on screen would offer
         // a handle that transforms nothing.
         this.selectionLoop = this.selection.length ? loop : null;
+        this._anchor = this.selectionLoop ? handleIndex(loop) : -1;
         this.render();
         return;
       }
@@ -521,8 +579,18 @@ export class InkSurface {
     if (handle && this.selection.length) {
       const sx = (pt.x - this.transform.offsetX) * this.transform.scale;
       const sy = (pt.y - this.transform.offsetY) * this.transform.scale;
-      const near = Math.hypot(sx - handle.x, sy - handle.y) <= SELECT_HANDLE * 2.4;
+      // Measured against what is DRAWN, not against the constant. A hit radius
+      // that ignored the zoom would drift away from the dot the user is aiming
+      // at — generous at one zoom, unreachable at another.
+      const near = Math.hypot(sx - handle.x, sy - handle.y) <= this._handleRadius() * 2.4;
       if (near) {
+        // Pin the handle to the loop vertex nearest the press, for the whole
+        // gesture. The handle is then under the finger that grabbed it and
+        // stays there while the shape turns and grows, instead of sliding
+        // around the outline as the down-right extreme changes.
+        const pinned = nearestIndex(this.selectionLoop, pt.x, pt.y);
+        if (pinned >= 0) this._anchor = pinned;
+
         // The loop's centre, not the ink's. The user is turning the shape
         // they drew, and pivoting about a point that shape is not centred on
         // makes the selection swing rather than rotate.
@@ -551,7 +619,9 @@ export class InkSurface {
 
     this.selection = [];
     this.selectionLoop = null;
-    this._loop = [pt];
+    this._anchor = -1;
+    this._loopFrom = pt;
+    this._loop = this.lassoShape === 'rect' ? rectLoop(pt, pt) : [pt];
     this.render();
   }
 

@@ -1022,12 +1022,21 @@ export class PdfWorkspace {
     panel.dataset.forPage = String(pane.state.pageNumber);
     renderAnswerLoading(panel, { page: pane.state.pageNumber });
 
+    // Every notice below is dismissible, through the same path the matched
+    // answers use. A panel that says why it could not help is the one the
+    // reader most wants out of the way, and it used to be the only one with
+    // no way to close it.
+    const notice = (message, hint) => renderAnswerNotice(panel, message, {
+      hint,
+      onDismiss: () => this.hideAnswers(slot),
+    });
+
     if (!other?.isLoaded()) {
-      renderAnswerNotice(panel, '请在另一侧打开答案册');
+      notice('请在另一侧打开答案册');
       return;
     }
     if (other.meta?.role !== DOC_ROLES.ANSWER) {
-      renderAnswerNotice(panel, '另一侧的文档没有标记为答案册');
+      notice('另一侧的文档没有标记为答案册');
       return;
     }
 
@@ -1049,7 +1058,7 @@ export class PdfWorkspace {
         // Every branch of describeUnusable means one of the two books did not
         // index, and the first thing to check is always the same: whether the
         // right file went in, under the right role.
-        renderAnswerNotice(panel, blocked, { hint: '请检查答案是否上传正确' });
+        notice(blocked, '请检查答案是否上传正确');
         return;
       }
 
@@ -1061,7 +1070,7 @@ export class PdfWorkspace {
       const page = pane.state.pageNumber;
       const questions = questionsOnPage(pane.questionIndex, page);
       if (questions.length === 0) {
-        renderAnswerNotice(panel, `第 ${page} 页没有识别到编号题目`);
+        notice(`第 ${page} 页没有识别到编号题目`);
         return;
       }
 
@@ -1092,10 +1101,7 @@ export class PdfWorkspace {
         });
       }
       if (pane.pairVerdict.status === PAIR_STATUS.REJECTED_PAIR) {
-        renderAnswerNotice(
-          panel,
-          `这两本书看起来不是一对：${pane.pairVerdict.reasonCodes?.join('、') || '文档身份不匹配'}`,
-        );
+        notice(`这两本书看起来不是一对：${pane.pairVerdict.reasonCodes?.join('、') || '文档身份不匹配'}`);
         return;
       }
 
@@ -1126,7 +1132,7 @@ export class PdfWorkspace {
       });
     } catch (error) {
       Logger.error('PDF', 'answer lookup failed', error);
-      renderAnswerNotice(panel, '匹配答案失败: ' + (error?.message || ''));
+      notice('匹配答案失败: ' + (error?.message || ''));
     }
   }
 

@@ -506,6 +506,23 @@
     0 0 0 3.5px var(--accent);
 }
 
+/* The mark itself, at the size it is drawn on the page, so the choice between
+   the two shapes is made by looking rather than by reading two labels. */
+.ink-lasso-preview {
+  display: grid;
+  place-items: center;
+  padding: 0.45rem 0 0.7rem;
+}
+
+/* A group label inside a card. Quieter than the title, and it has to be, or
+   the card reads as two cards stacked. */
+.ink-card-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 0 0 0.35rem;
+}
+
 .ink-seg {
   display: flex;
   gap: 4px;

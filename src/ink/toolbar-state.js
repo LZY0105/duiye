@@ -109,7 +109,34 @@ export const CARDS = Object.freeze({
   TOOL: 'tool',
   COLOR: 'color',
   ERASER: 'eraser',
+  LASSO: 'lasso',
   OVERFLOW: 'overflow',
+});
+
+/**
+ * The two shapes a lasso can take.
+ *
+ * FREE follows the hand. RECT is a dragged box — which is not a lesser lasso
+ * but the right tool for the thing this app is full of: a worked solution laid
+ * out in lines, where "everything between here and here" is a rectangle and
+ * drawing round it by hand is just slower.
+ */
+export const LASSO_SHAPES = Object.freeze({
+  FREE: 'free',
+  RECT: 'rect',
+});
+
+/**
+ * What counts as caught.
+ *
+ * TOUCH takes any stroke the loop crosses; INSIDE takes only strokes that fall
+ * entirely within it. TOUCH is the forgiving default — a loop round a diagram
+ * should take the diagram — but INSIDE is what you need to pull one line out
+ * of a paragraph without dragging the descenders of the line above it.
+ */
+export const LASSO_MODES = Object.freeze({
+  TOUCH: 'touch',
+  INSIDE: 'inside',
 });
 
 /** The eraser is a toolbar selection but not a stroke tool. */
@@ -145,6 +172,10 @@ export function createToolbarState(initial = {}) {
     eraserMode: initial.eraserMode === ERASER_MODES.REGION
       ? ERASER_MODES.REGION : ERASER_MODES.STROKE,
     eraserWidth: Number.isFinite(initial.eraserWidth) ? initial.eraserWidth : 8,
+    lassoShape: initial.lassoShape === LASSO_SHAPES.RECT
+      ? LASSO_SHAPES.RECT : LASSO_SHAPES.FREE,
+    lassoMode: initial.lassoMode === LASSO_MODES.INSIDE
+      ? LASSO_MODES.INSIDE : LASSO_MODES.TOUCH,
     swatches: Object.freeze([...(initial.swatches || DEFAULT_SWATCHES)]),
 
     openCard: CARDS.NONE,
@@ -327,7 +358,6 @@ export function selectTool(state, tool) {
     return next(state, { tool: ERASER_TOOL, openCard: CARDS.NONE });
   }
   if (tool === LASSO_TOOL) {
-    // No settings card: the lasso's parameters are the gesture itself.
     return next(state, { tool: LASSO_TOOL, openCard: CARDS.NONE });
   }
   if (!Object.values(INK_TOOLS).includes(tool)) return state;
@@ -358,6 +388,16 @@ export function setOpacity(state, opacity) {
 export function setEraserMode(state, mode) {
   const value = mode === ERASER_MODES.REGION ? ERASER_MODES.REGION : ERASER_MODES.STROKE;
   return next(state, { tool: ERASER_TOOL, eraserMode: value });
+}
+
+export function setLassoShape(state, shape) {
+  const value = shape === LASSO_SHAPES.RECT ? LASSO_SHAPES.RECT : LASSO_SHAPES.FREE;
+  return value === state.lassoShape ? state : next(state, { tool: LASSO_TOOL, lassoShape: value });
+}
+
+export function setLassoMode(state, mode) {
+  const value = mode === LASSO_MODES.INSIDE ? LASSO_MODES.INSIDE : LASSO_MODES.TOUCH;
+  return value === state.lassoMode ? state : next(state, { tool: LASSO_TOOL, lassoMode: value });
 }
 
 export function setEraserWidth(state, width) {
@@ -403,6 +443,8 @@ export function serializeToolbarState(state) {
     opacity: state.opacity,
     eraserMode: state.eraserMode,
     eraserWidth: state.eraserWidth,
+    lassoShape: state.lassoShape,
+    lassoMode: state.lassoMode,
     swatches: [...state.swatches],
     autoMinimize: state.autoMinimize,
   };

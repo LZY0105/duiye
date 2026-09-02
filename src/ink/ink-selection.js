@@ -16,13 +16,17 @@ import { recomputeBounds } from './stroke.js';
 /**
  * Ids of every stroke the lasso caught.
  *
- * A stroke counts as selected when any part of it falls inside the loop, which
- * is the forgiving reading: a lasso drawn round a diagram should take the whole
- * diagram, not the strokes that happen to lie entirely within the line.
+ * By default a stroke counts as selected when ANY part of it falls inside the
+ * loop — the forgiving reading: a lasso drawn round a diagram should take the
+ * whole diagram, not just the strokes lying entirely within the line.
+ *
+ * `requireFullyInside` is the strict reading, and it exists because the
+ * forgiving one cannot do everything: pulling one line out of a paragraph
+ * catches the descenders of the line above it, every time.
  */
-export function selectInPolygon(layer, polygon, strokeIdsInRegion) {
+export function selectInPolygon(layer, polygon, strokeIdsInRegion, requireFullyInside = false) {
   if (!layer || !Array.isArray(polygon) || polygon.length < 3) return [];
-  return strokeIdsInRegion(layer, polygon, { requireFullyInside: false });
+  return strokeIdsInRegion(layer, polygon, { requireFullyInside });
 }
 
 /** Bounding box of a set of strokes, in document space, or null. */
@@ -71,23 +75,54 @@ export function transformPolygon(polygon, transform) {
 }
 
 /**
- * The point on the loop where the transform handle sits.
+ * WHICH vertex of the loop the transform handle is pinned to.
  *
- * The vertex furthest along the down-right diagonal, so the handle lands ON
- * the outline rather than at the corner of a bounding box. There is no box
- * drawn any more, and a circle floating in the blank space beside the loop
- * would read as unattached to anything — which is exactly the confusion the
- * box was removed to avoid.
+ * An index, not a point, and this is the whole trick. The handle used to be
+ * recomputed on every frame as "whichever vertex is furthest down-right", and
+ * a selection being rotated or resized changes which vertex that is — so the
+ * handle jumped from one sample to the next, several times a second, while the
+ * user was dragging it. It skated around the outline under a finger that was
+ * holding still. Pinning it to an index makes it part of the shape: it goes
+ * exactly where the shape goes, continuously, because it IS one of the shape's
+ * own points.
+ *
+ * The initial choice is the down-right extreme, which is where a hand looks
+ * for a resize grip.
  */
-export function handleVertex(polygon) {
-  if (!Array.isArray(polygon) || polygon.length === 0) return null;
-  let best = polygon[0];
-  let bestScore = best.x + best.y;
-  for (const p of polygon) {
-    const score = p.x + p.y;
-    if (score > bestScore) { best = p; bestScore = score; }
+export function handleIndex(polygon) {
+  if (!Array.isArray(polygon) || polygon.length === 0) return -1;
+  let best = 0;
+  let bestScore = polygon[0].x + polygon[0].y;
+  for (let i = 1; i < polygon.length; i++) {
+    const score = polygon[i].x + polygon[i].y;
+    if (score > bestScore) { best = i; bestScore = score; }
   }
-  return { x: best.x, y: best.y };
+  return best;
+}
+
+/** The vertex nearest a point, so a grab can pin the handle under the finger. */
+export function nearestIndex(polygon, x, y) {
+  if (!Array.isArray(polygon) || polygon.length === 0) return -1;
+  let best = 0;
+  let bestDistance = Infinity;
+  for (let i = 0; i < polygon.length; i++) {
+    const d = (polygon[i].x - x) ** 2 + (polygon[i].y - y) ** 2;
+    if (d < bestDistance) { best = i; bestDistance = d; }
+  }
+  return best;
+}
+
+/** The rectangle lasso: a closed box from the drag's two corners. */
+export function rectLoop(from, to) {
+  if (!from || !to) return [];
+  const minX = Math.min(from.x, to.x);
+  const maxX = Math.max(from.x, to.x);
+  const minY = Math.min(from.y, to.y);
+  const maxY = Math.max(from.y, to.y);
+  return [
+    { x: minX, y: minY }, { x: maxX, y: minY },
+    { x: maxX, y: maxY }, { x: minX, y: maxY },
+  ];
 }
 
 export function boundsCentre(box) {

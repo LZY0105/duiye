@@ -856,7 +856,16 @@
   border-bottom: 0.5px solid var(--border-color);
 }
 
-.answer-notice { padding: 1rem 0.4rem 0.5rem; color: var(--muted); text-align: center; }
+/* The close sits on its own row above the message rather than beside it: the
+   message is centred, and a button in the same row would either push it off
+   centre or overlap it on a narrow pane. */
+.answer-notice-head {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 22px;
+}
+
+.answer-notice { padding: 0.25rem 0.4rem 0.5rem; color: var(--muted); text-align: center; }
 
 /* The next step, in the app's gold.
    Loud enough to be read after the grey line above it has been skimmed, quiet

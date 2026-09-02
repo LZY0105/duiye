@@ -12,6 +12,11 @@ import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
 
 import { LASSO_STROKE, createTransform, drawLasso } from '../src/ink/ink-renderer.js';
+import {
+  LASSO_MODES, LASSO_SHAPES, LASSO_TOOL,
+  createToolbarState, serializeToolbarState, setLassoMode, setLassoShape,
+} from '../src/ink/toolbar-state.js';
+import { InkSurface } from '../src/ink/ink-surface.js';
 import { renderAnswerNotice } from '../src/pdf/answer-panel.js';
 import { onDoubleTap } from '../src/ui/double-tap.js';
 
@@ -162,8 +167,14 @@ check('the surface paints the live loop and the settled one the same way', () =>
   // Same renderer for both, so releasing the stylus cannot change how the
   // selection looks — it only closes.
   const code = $read('src/ink/ink-surface.js');
-  assert.ok(/drawLasso\(this\.ctx, this\._loop, this\.transform, \{ tip: true \}\)/.test(code));
-  assert.ok(/drawLasso\(this\.ctx, loop, this\.transform, \{ closed: true \}\)/.test(code));
+  assert.ok(/drawLasso\(this\.ctx, this\._loop, this\.transform, \{/.test(code),
+    'the live loop goes through it');
+  assert.ok(/drawLasso\(this\.ctx, loop, this\.transform, \{ closed: true \}\)/.test(code),
+    'and so does the settled one');
+  assert.equal((code.match(/drawLasso\(/g) || []).length, 2,
+    'two call sites, one renderer — no second way of drawing a loop');
+  // A dragged box is already closed, so it gets no tip ring to close back to.
+  assert.ok(/tip: this\.lassoShape !== 'rect'/.test(code));
   assert.ok(!/rgba\(10, 96, 255/.test(code), 'the blue marquee is gone');
 });
 
@@ -197,9 +208,41 @@ check('both lines are escaped, not interpreted', () => {
 check('the blocked-index notice is the one that carries the hint', () => {
   const code = $read('src/pdf/pdf-workspace.js');
   assert.ok(
-    /renderAnswerNotice\(panel, blocked, \{ hint: '请检查答案是否上传正确' \}\)/.test(code),
+    code.includes("notice(blocked, '请检查答案是否上传正确')"),
     'every describeUnusable branch means a book did not index',
   );
+});
+
+check('every notice can be dismissed, not only the ones with answers in them', () => {
+  const code = $read('src/pdf/pdf-workspace.js');
+  assert.equal(
+    (code.match(/renderAnswerNotice\(/g) || []).length, 1,
+    'one call site, so no branch can quietly ship an undismissable panel',
+  );
+  assert.ok(/onDismiss: \(\) => this\.hideAnswers\(slot\)/.test(code));
+  // Six messages, all through the same helper.
+  assert.ok((code.match(/\bnotice\(/g) || []).length >= 6);
+});
+
+check('the close button dismisses the notice', () => {
+  const host = document.createElement('div');
+  let dismissed = 0;
+  renderAnswerNotice(host, '习题册中没有识别到编号题目', {
+    hint: '请检查答案是否上传正确',
+    onDismiss: () => { dismissed++; },
+  });
+  const close = host.querySelector('[data-role="close-answers"]');
+  assert.ok(close, 'a panel that reports a failure needs a way out');
+  assert.ok(close.getAttribute('aria-label'), 'and a name, for a reader who cannot see the ✕');
+  close.dispatchEvent(new dom.window.Event('click', { bubbles: true }));
+  assert.equal(dismissed, 1);
+});
+
+check('the notice and the answer header share one close button', () => {
+  // Two hand-written copies of the same control drift; this one is built once.
+  const code = $read('src/pdf/answer-panel.js');
+  assert.equal((code.match(/class="answer-close"/g) || []).length, 1);
+  assert.ok(/closeButtonHtml\('完成，收起答案'\)/.test(code));
 });
 
 check('the hint is styled in the gold, not in an error red', () => {
@@ -222,7 +265,85 @@ check('the hint is styled in the gold, not in an error red', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-group('3. A double-tap opens the row');
+group('3. The lasso has a card of its own');
+
+check('re-tapping the lasso opens its card, the way every other tool does', () => {
+  const code = $read('src/ink/ink-toolbar.js');
+  assert.ok(/tool === LASSO_TOOL \? CARDS\.LASSO/.test(code));
+  assert.ok(/_lassoCardHtml/.test(code), 'and the card exists');
+});
+
+check('the card offers the two shapes and the two ways of catching', () => {
+  const state = createToolbarState();
+  assert.equal(state.lassoShape, LASSO_SHAPES.FREE, 'freehand is the default');
+  assert.equal(state.lassoMode, LASSO_MODES.TOUCH, 'and the forgiving reading');
+
+  const rect = setLassoShape(state, LASSO_SHAPES.RECT);
+  assert.equal(rect.lassoShape, LASSO_SHAPES.RECT);
+  assert.equal(rect.tool, LASSO_TOOL, 'choosing a lasso setting selects the lasso');
+
+  const strict = setLassoMode(state, LASSO_MODES.INSIDE);
+  assert.equal(strict.lassoMode, LASSO_MODES.INSIDE);
+  assert.equal(strict.tool, LASSO_TOOL);
+
+  assert.equal(setLassoShape(state, 'nonsense').lassoShape, LASSO_SHAPES.FREE);
+  assert.equal(setLassoMode(state, 'nonsense').lassoMode, LASSO_MODES.TOUCH);
+});
+
+check('both settings survive a restart', () => {
+  const chosen = setLassoMode(
+    setLassoShape(createToolbarState(), LASSO_SHAPES.RECT), LASSO_MODES.INSIDE,
+  );
+  const back = createToolbarState(serializeToolbarState(chosen));
+  assert.equal(back.lassoShape, LASSO_SHAPES.RECT);
+  assert.equal(back.lassoMode, LASSO_MODES.INSIDE);
+});
+
+check('the settings reach the surface, and the surface takes only valid ones', () => {
+  const code = $read('src/ink/ink-toolbar.js');
+  assert.ok(/surface\.setLasso\(\{/.test(code), 'the card must actually do something');
+
+  const surface = Object.create(InkSurface.prototype);
+  surface.lassoShape = 'free';
+  surface.lassoInside = false;
+  surface.setLasso({ shape: 'rect', mode: 'inside' });
+  assert.equal(surface.lassoShape, 'rect');
+  assert.equal(surface.lassoInside, true);
+  surface.setLasso({ shape: 'circle', mode: 'whatever' });
+  assert.equal(surface.lassoShape, 'rect', 'a value it does not know is ignored, not stored');
+  assert.equal(surface.lassoInside, true);
+});
+
+check('the handle breathes with the zoom, and its hit target with it', () => {
+  const surface = Object.create(InkSurface.prototype);
+  const at = (scale) => {
+    surface.transform = { scale, offsetX: 0, offsetY: 0 };
+    return surface._handleRadius();
+  };
+  assert.equal(at(1), 9, 'at 100% it is the size it always was');
+  assert.ok(at(2) > at(1), 'zooming in grows it — a frozen dot reads as unattached');
+  assert.ok(at(0.5) < at(1), 'and zooming out shrinks it');
+  assert.equal(at(9), 16, 'but never into a blob that hides the ink');
+  assert.equal(at(0.05), 7, 'nor below something a stylus can land on');
+
+  // The hit target is measured against the drawn size, so the two cannot part
+  // company at some zoom the constant never knew about.
+  const code = $read('src/ink/ink-surface.js');
+  assert.ok(/this\._handleRadius\(\) \* 2\.4/.test(code));
+  assert.ok(!/SELECT_HANDLE \* 2\.4/.test(code), 'the fixed hit radius is gone');
+});
+
+check('the object-type row from the reference is deliberately absent', () => {
+  // The reference offers 手写 / 图片 / 文本框 / 图形. This app holds one kind
+  // of object, so those are four toggles that can only have one answer.
+  const code = $read('src/ink/ink-toolbar.js');
+  for (const dead of ['图片', '文本框', '图形']) {
+    assert.ok(!code.includes(dead), `${dead} cannot be selected in this app`);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+group('4. A double-tap opens the row');
 
 const tap = (el, { x = 50, y = 50, target = el } = {}) => {
   const e = new dom.window.PointerEvent('pointerup', {

@@ -84,6 +84,17 @@ export function renderAnswerLoading(host, { page, count = 3 } = {}) {
     </div>`;
 }
 
+/** The dismiss control, shared by the notice and the matched-answer header. */
+function closeButtonHtml(title = '收起') {
+  return `<button type="button" class="answer-close" data-role="close-answers"
+            title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+           stroke-linecap="round" width="13" height="13" aria-hidden="true">
+        <path d="M5 5l14 14M19 5L5 19"/>
+      </svg>
+    </button>`;
+}
+
 /**
  * A plain message: no answer book, scanned document, nothing on this page.
  *
@@ -92,16 +103,24 @@ export function renderAnswerLoading(host, { page, count = 3 } = {}) {
  * and the answer is almost always the file — so when there is a next step
  * worth taking, it is said here rather than left to be inferred.
  *
- * @param {{hint?: string}} [opts]
+ * The panel is dismissible whatever it says. It was not: a notice covered the
+ * top of the page it was reporting on and the only way to clear it was to press
+ * the answer button a second time, which is an odd thing to have to work out —
+ * and a panel that reports a FAILURE is the one the reader most wants gone.
+ *
+ * @param {{hint?: string, onDismiss?: function}} [opts]
  */
-export function renderAnswerNotice(host, message, { hint } = {}) {
+export function renderAnswerNotice(host, message, { hint, onDismiss } = {}) {
   if (!host) return;
-  const tail = hint
-    ? `<div class="answer-notice-hint">${escapeHtml(hint)}</div>`
-    : '';
-  host.innerHTML = `<div class="answer-panel">
-      <div class="answer-notice">${escapeHtml(message)}</div>${tail}
-    </div>`;
+  const wrap = document.createElement('div');
+  wrap.className = 'answer-panel';
+  wrap.innerHTML = `
+    <div class="answer-notice-head">${closeButtonHtml('关闭')}</div>
+    <div class="answer-notice">${escapeHtml(message)}</div>
+    ${hint ? `<div class="answer-notice-hint">${escapeHtml(hint)}</div>` : ''}`;
+  wrap.querySelector('[data-role="close-answers"]')
+    ?.addEventListener('click', () => onDismiss?.());
+  host.replaceChildren(wrap);
 }
 
 /**
@@ -127,13 +146,7 @@ export function renderAnswerMatches(host, matches, {
       <span>第 ${page} 页 · ${matches.length} 题</span>
       <span class="answer-head-end">
         <span class="answer-stage">${aligned ? '已按目录章节对齐' : '未使用目录对齐'}</span>
-        <button type="button" class="answer-close" data-role="close-answers"
-                title="完成，收起答案" aria-label="收起答案">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
-               stroke-linecap="round" width="13" height="13" aria-hidden="true">
-            <path d="M5 5l14 14M19 5L5 19"/>
-          </svg>
-        </button>
+        ${closeButtonHtml('完成，收起答案')}
       </span>
     </div>`;
 
