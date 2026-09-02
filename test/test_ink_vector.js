@@ -28,6 +28,7 @@ import {
   strokeIntersectsPolygon,
 } from '../src/ink/stroke.js';
 import { InkLayer } from '../src/ink/ink-layer.js';
+import { InkSurface } from '../src/ink/ink-surface.js';
 import { InkHistory } from '../src/ink/ink-history.js';
 import {
   boundsCentre,
@@ -618,6 +619,117 @@ check('bounds are rebuilt after a transform, so the ink stays hittable', () => {
   const b = layer.strokes[0].bounds;
   assert.ok(b.minX > 400, 'stale bounds would leave the stroke hittable where it no longer is');
   assert.ok(strokeHitByPoint(layer.strokes[0], 500, 500, 4));
+});
+
+// ═══════════════════════════════════════════════════════════════
+group('Tool modes are mutually exclusive — no tool can disable another');
+
+/**
+ * A surface with no DOM behind it.
+ *
+ * The mode flags are plain fields and the branch that reads them is the one
+ * under test, so a canvas would add nothing here except a reason for the test
+ * not to run.
+ */
+function modeSurface() {
+  const surface = Object.create(InkSurface.prototype);
+  surface.tool = INK_TOOLS.PEN;
+  surface.width = 2;
+  surface.erasing = false;
+  surface.selecting = false;
+  surface.selection = [];
+  surface.selectionLoop = null;
+  surface._loop = null;
+  surface._grab = null;
+  surface._anchor = -1;
+  surface._loopFrom = null;
+  surface.render = () => {};
+  return surface;
+}
+
+/** What a press would actually do, in the order pointerdown decides it. */
+const modeOf = (s) => (s.selecting ? 'select' : s.erasing ? 'erase' : 'draw');
+
+check('picking the eraser after the lasso ERASES', () => {
+  // The regression. `setEraser()` is the call the toolbar makes for the
+  // eraser — not `setTool('eraser')` — and it used to set `erasing` while
+  // leaving `selecting` true from the lasso. pointerdown tests `selecting`
+  // first, so every press ran the lasso and the eraser did nothing at all.
+  const s = modeSurface();
+  s.setTool('lasso');
+  assert.equal(modeOf(s), 'select', 'precondition: the lasso is in hand');
+
+  s.setEraser(ERASER_MODES.STROKE);
+  assert.equal(s.selecting, false, 'the lasso must let go');
+  assert.equal(modeOf(s), 'erase', 'a press must reach the eraser');
+});
+
+check('every order of every tool leaves exactly one mode live', () => {
+  // Two flags with three writers cannot be kept consistent by remembering to,
+  // so this walks every ordered pair of entry points.
+  const enter = {
+    pen: (s) => s.setTool(INK_TOOLS.PEN),
+    highlighter: (s) => s.setTool(INK_TOOLS.HIGHLIGHTER),
+    'eraser/setTool': (s) => s.setTool('eraser'),
+    'eraser/setEraser': (s) => s.setEraser(ERASER_MODES.REGION),
+    lasso: (s) => s.setTool('lasso'),
+  };
+  const expected = {
+    pen: 'draw',
+    highlighter: 'draw',
+    'eraser/setTool': 'erase',
+    'eraser/setEraser': 'erase',
+    lasso: 'select',
+  };
+
+  for (const first of Object.keys(enter)) {
+    for (const second of Object.keys(enter)) {
+      const s = modeSurface();
+      enter[first](s);
+      enter[second](s);
+      assert.equal(modeOf(s), expected[second], `${first} → ${second}`);
+      assert.ok(!(s.erasing && s.selecting), `${first} → ${second}: both flags set`);
+    }
+  }
+});
+
+check('leaving the lasso drops the selection, whichever way you leave', () => {
+  for (const leave of [
+    (s) => s.setTool(INK_TOOLS.PEN),
+    (s) => s.setTool('eraser'),
+    (s) => s.setEraser(ERASER_MODES.STROKE),
+  ]) {
+    const s = modeSurface();
+    s.setTool('lasso');
+    s.selection = ['a', 'b'];
+    s.selectionLoop = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }];
+    s._anchor = 2;
+    leave(s);
+    assert.deepEqual(s.selection, [], 'a selection no gesture can act on is decoration');
+    assert.equal(s.selectionLoop, null);
+    assert.equal(s._anchor, -1);
+  }
+});
+
+check('re-selecting the lasso keeps what is already selected', () => {
+  // Only LEAVING drops it. Reopening the card, or the toolbar re-pushing its
+  // state when the active pane changes, must not throw the selection away.
+  const s = modeSurface();
+  s.setTool('lasso');
+  s.selection = ['a'];
+  s.selectionLoop = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }];
+  s.setTool('lasso');
+  assert.deepEqual(s.selection, ['a']);
+});
+
+check('the mode is written in one place and nowhere else', () => {
+  const code = $code('src/ink/ink-surface.js');
+  const writes = (code.match(/this\.(erasing|selecting) =/g) || []);
+  assert.equal(writes.length, 2, 'both flags assigned once, inside _setMode');
+  const setMode = code.match(/_setMode\(mode\) \{[\s\S]*?\n  \}/);
+  assert.ok(setMode, '_setMode must exist');
+  assert.ok(/this\.erasing = mode === 'erase'/.test(setMode[0]));
+  assert.ok(/this\.selecting = mode === 'select'/.test(setMode[0]));
 });
 
 // ═══════════════════════════════════════════════════════════════

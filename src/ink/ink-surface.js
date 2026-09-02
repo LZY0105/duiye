@@ -127,7 +127,6 @@ export class InkSurface {
     this.eraserRadius = 8;
     this.inputMode = INPUT_MODES.ANY;
     this.enabled = true;
-    this.erasing = false;
 
     this._active = null;      // in-progress stroke
     this._eraserPath = null;  // in-progress eraser drag, document space
@@ -135,7 +134,6 @@ export class InkSurface {
     this._pointerId = null;
 
     // ── lasso ──
-    this.selecting = false;   // the lasso tool is the active tool
     this.selection = [];      // ids, document order irrelevant
     this._loop = null;        // the lasso being drawn, document space
     this.selectionLoop = null; // the closed loop that caught it, document space
@@ -145,28 +143,43 @@ export class InkSurface {
     this.lassoInside = false; // require strokes to fall entirely inside
     this._grab = null;        // an in-progress move/rotate/scale of the selection
 
+    // `erasing` and `selecting` are born here, through the same door every
+    // later change uses. Declaring them separately is how they came to be set
+    // in four places, two of which forgot the other flag.
+    this._setMode('draw');
+
     this._bind();
   }
 
   // ── configuration ─────────────────────────────────────────────────────────
 
-  setTool(tool) {
-    if (tool === 'eraser') {
-      this.erasing = true;
-      this.selecting = false;
-      this.clearSelection();
-      return;
-    }
-    if (tool === 'lasso') {
-      this.selecting = true;
-      this.erasing = false;
-      return;
-    }
-    this.erasing = false;
+  /**
+   * The ONE place the surface's mode is decided.
+   *
+   * `erasing` and `selecting` are mutually exclusive, and pointerdown tests
+   * them in order — so any path that sets one without clearing the other
+   * silently disables whichever loses the race. That is exactly what happened:
+   * `setEraser()` set `erasing` and left `selecting` alone, so picking the
+   * lasso and then the eraser left both true, the lasso branch ran first, and
+   * the eraser did nothing at all until some other tool was chosen in between.
+   *
+   * Two flags with three writers cannot be kept consistent by remembering to.
+   * They are now written here and nowhere else.
+   *
+   * @param {'draw'|'erase'|'select'} mode
+   */
+  _setMode(mode) {
     // Leaving the lasso drops the selection: a highlighted set that no gesture
     // can act on any more is just decoration on the page.
-    if (this.selecting) this.clearSelection();
-    this.selecting = false;
+    if (this.selecting && mode !== 'select') this.clearSelection();
+    this.erasing = mode === 'erase';
+    this.selecting = mode === 'select';
+  }
+
+  setTool(tool) {
+    if (tool === 'eraser') { this._setMode('erase'); return; }
+    if (tool === 'lasso') { this._setMode('select'); return; }
+    this._setMode('draw');
     this.tool = tool;
     this.width = TOOL_DEFAULTS[tool]?.width ?? this.width;
   }
@@ -194,7 +207,7 @@ export class InkSurface {
   }
 
   setEraser(mode) {
-    this.erasing = true;
+    this._setMode('erase');
     this.eraserMode = mode === ERASER_MODES.REGION ? ERASER_MODES.REGION : ERASER_MODES.STROKE;
   }
 

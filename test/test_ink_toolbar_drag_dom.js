@@ -66,6 +66,7 @@ dom.window.Element.prototype.setPointerCapture = function () {};
 dom.window.Element.prototype.releasePointerCapture = function () {};
 
 const { InkToolbar } = await import('../src/ink/ink-toolbar.js');
+const { InkSurface } = await import('../src/ink/ink-surface.js');
 
 function mountToolbar() {
   dom.window.localStorage.clear();
@@ -76,6 +77,33 @@ function mountToolbar() {
   const bar = new InkToolbar(host, { getSurface: () => null });
   if (!TOOL_COUNT) TOOL_COUNT = bar.root.querySelectorAll('.ink-tool').length;
   return { host, bar };
+}
+
+/**
+ * A toolbar wired to a REAL surface.
+ *
+ * Tool buttons reach the surface through `_pushToSurface`, and that method is
+ * where the eraser regression lived: it calls `setEraser()` for the eraser and
+ * `setTool()` for everything else, so a test that only drives the surface
+ * directly never touches the path the user actually takes.
+ */
+function mountWithSurface() {
+  dom.window.localStorage.clear();
+  document.body.innerHTML = '';
+  const host = document.createElement('div');
+  host.getBoundingClientRect = () => ({ ...HOST_RECT });
+  document.body.appendChild(host);
+
+  const canvas = document.createElement('canvas');
+  canvas.getContext = () => ({
+    save() {}, restore() {}, beginPath() {}, moveTo() {}, lineTo() {},
+    closePath() {}, arc() {}, stroke() {}, fill() {}, clearRect() {},
+    setLineDash() {}, setTransform() {}, quadraticCurveTo() {}, bezierCurveTo() {},
+  });
+  const surface = new InkSurface(canvas, {});
+
+  const bar = new InkToolbar(host, { getSurface: () => surface });
+  return { bar, surface };
 }
 
 function pointer(type, { x = 0, y = 0, id = 1, target } = {}) {
@@ -354,6 +382,28 @@ test('a toolbar destroyed mid-drag cannot be driven by the rest of that gesture'
 // the drag with it, and the control moves once and then goes dead — clickable,
 // not draggable. That is the third time this shape of bug has appeared in this
 // file's subject (the handle, the lens, now the sliders), so it gets a test.
+
+test('the eraser still erases after the lasso has been used', () => {
+  // The bug as the user hit it: pick the lasso, pick the eraser, and every
+  // press ran the lasso instead. Driven through the buttons, not the surface,
+  // because the toolbar reaches the eraser by a different method than every
+  // other tool and that asymmetry is what broke.
+  const { bar, surface } = mountWithSurface();
+  const press = (tool) => bar.root.querySelector(`[data-tool="${tool}"]`).click();
+
+  press('lasso');
+  assert.equal(surface.selecting, true, 'precondition: the lasso is in hand');
+
+  press('eraser');
+  assert.equal(surface.erasing, true, 'the eraser must be live');
+  assert.equal(surface.selecting, false, 'and the lasso must have let go');
+
+  press('lasso');
+  press('pen');
+  assert.equal(surface.selecting, false);
+  assert.equal(surface.erasing, false);
+  assert.equal(surface.tool, 'pen', 'and a pen draws again');
+});
 
 test('a slider is not destroyed by its own input event', () => {
   const { bar } = mountToolbar();
