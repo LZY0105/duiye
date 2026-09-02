@@ -19,6 +19,7 @@ import {
 } from './stroke.js';
 import {
   ERASER_MODES,
+  eraseArea,
   eraseStrokes,
   strokeIdsAlongPath,
 } from './ink-eraser.js';
@@ -112,12 +113,25 @@ export class InkSurface {
 
   /** Resizes the backing store to match the CSS box; contents are repainted. */
   resize(cssWidth, cssHeight, dpr = 1) {
-    this.canvas.width = Math.max(1, Math.floor(cssWidth * dpr));
-    this.canvas.height = Math.max(1, Math.floor(cssHeight * dpr));
-    this.canvas.style.width = `${cssWidth}px`;
-    this.canvas.style.height = `${cssHeight}px`;
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const w = Math.max(1, Math.floor(cssWidth * dpr));
+    const h = Math.max(1, Math.floor(cssHeight * dpr));
+
+    // Only touch the backing store when it actually changes size.
+    //
+    // Assigning canvas.width reallocates and clears the bitmap even when the
+    // value is identical — and this is called from _syncInk on every position
+    // change, which means every frame of a pan. A 1.6MP surface was being
+    // thrown away and rebuilt, and every stroke repainted, sixty times a second
+    // while dragging a page that had not resized at all.
+    if (this.canvas.width !== w || this.canvas.height !== h) {
+      this.canvas.width = w;
+      this.canvas.height = h;
+      this.canvas.style.width = `${cssWidth}px`;
+      this.canvas.style.height = `${cssHeight}px`;
+      this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
     this._viewport = { width: cssWidth, height: cssHeight };
+    // The repaint stays: the transform may have moved even when the size did not.
     this.render();
   }
 
@@ -315,7 +329,24 @@ export class InkSurface {
   }
 
   /** Erases along the current eraser drag, coalescing into one undo step. */
+  /**
+   * Applies the eraser at its current position.
+   *
+   * The two modes take different things, which is the whole distinction between
+   * them: STROKE lifts any whole stroke the head touches, REGION takes only the
+   * ink under the head and leaves the rest of the stroke behind, cut.
+   */
   _eraseAlong() {
+    if (this.eraserMode === ERASER_MODES.REGION) {
+      const head = this._eraserDot;
+      if (!head) return;
+      if (eraseArea(this.layer, this.history, { x: head.x, y: head.y, radius: this.eraserRadius })) {
+        this.handlers.onChange?.(this.layer);
+        this.render();
+      }
+      return;
+    }
+
     const ids = strokeIdsAlongPath(this.layer, this._eraserPath, this.eraserRadius);
     if (!ids.length) return;
     const removed = eraseStrokes(this.layer, this.history, ids);

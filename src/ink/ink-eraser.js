@@ -9,7 +9,12 @@
 // removed strokes are handed to history) and it structurally cannot touch the
 // PDF: this module has no reference to one.
 
-import { strokeHitByPoint, strokeIntersectsPolygon, pointInPolygon } from './stroke.js';
+import {
+  strokeHitByPoint,
+  strokeIntersectsPolygon,
+  pointInPolygon,
+  recomputeBounds,
+} from './stroke.js';
 
 export const ERASER_MODES = Object.freeze({
   /** Removes any whole stroke the eraser tip touches. */
@@ -98,4 +103,105 @@ export function eraseStrokes(layer, history, ids) {
   const removed = layer.removeByIds(ids);
   if (removed.length && history) history.recordErase(removed);
   return removed;
+}
+
+/**
+ * Area erase: takes only the ink the eraser head actually covered.
+ *
+ * REGION used to mean "remove every whole stroke the head touched", which is
+ * the stroke eraser wearing a different name — clip one corner of a long
+ * underline and the entire underline vanished. An area eraser has to cut, so a
+ * stroke that is crossed in the middle comes back as two strokes with a gap
+ * where the head passed.
+ *
+ * The cut is per POINT: a sample inside the head is dropped, and each surviving
+ * run becomes its own stroke carrying the original's tool, colour, width and
+ * opacity. Runs shorter than two points are discarded — a single point is not a
+ * line, and keeping it would leave invisible debris behind that still costs
+ * hit-testing.
+ *
+ * The whole gesture is one history entry, because undoing half of a cut would
+ * leave the stroke severed with nothing to show for it.
+ *
+ * @param {InkLayer} layer
+ * @param {InkHistory} history
+ * @param {{x:number, y:number, radius:number}} head eraser head, document space
+ * @returns {boolean} whether anything changed
+ */
+export function eraseArea(layer, history, head) {
+  if (!layer || !head || !(head.radius > 0)) return false;
+  const { x, y, radius } = head;
+
+  const probe = {
+    minX: x - radius, minY: y - radius,
+    maxX: x + radius, maxY: y + radius,
+  };
+  const candidates = layer.candidatesInBounds(probe)
+    .filter(stroke => strokeHitByPoint(stroke, x, y, radius));
+  if (candidates.length === 0) return false;
+
+  const cuts = [];
+  for (const stroke of candidates) {
+    const runs = surviveOutside(stroke, x, y, radius);
+    // Untouched: every point survived in one run. Nothing to do.
+    if (runs.length === 1 && runs[0].length === stroke.points.length) continue;
+    cuts.push({ stroke, runs });
+  }
+  if (cuts.length === 0) return false;
+
+  const removed = layer.removeByIds(cuts.map(c => c.stroke.id));
+  const added = [];
+  // Re-inserted lowest index first so each fragment lands where its original
+  // was, and z-order survives the cut.
+  for (const entry of [...removed].sort((a, b) => a.index - b.index)) {
+    const cut = cuts.find(c => c.stroke.id === entry.stroke.id);
+    let at = entry.index;
+    for (const run of cut.runs) {
+      const fragment = fragmentOf(cut.stroke, run);
+      const index = layer.insertAt(at, fragment);
+      added.push({ index, stroke: fragment });
+      at = index + 1;
+    }
+  }
+
+  history?.recordSplit(removed, added);
+  return true;
+}
+
+/** Runs of consecutive points that the head did not cover. */
+function surviveOutside(stroke, x, y, radius) {
+  const reach = radius + halfWidthOf(stroke);
+  const reach2 = reach * reach;
+  const runs = [];
+  let run = [];
+  for (const p of stroke.points) {
+    const dx = p.x - x;
+    const dy = p.y - y;
+    if (dx * dx + dy * dy <= reach2) {
+      if (run.length) { runs.push(run); run = []; }
+    } else {
+      run.push(p);
+    }
+  }
+  if (run.length) runs.push(run);
+  return runs.filter(r => r.length >= 2);
+}
+
+function fragmentOf(stroke, points) {
+  const fragment = {
+    ...stroke,
+    id: `${stroke.id}~${Math.random().toString(36).slice(2, 8)}`,
+    points: points.map(p => ({ ...p })),
+    bounds: null,
+  };
+  // Bounds MUST be rebuilt, not inherited and not left null. `candidatesInBounds`
+  // pre-filters on them and `boundsIntersect(null, …)` is false, so a fragment
+  // without them would draw on screen while being invisible to hit-testing — it
+  // could never be selected, erased or cut again.
+  recomputeBounds(fragment);
+  return fragment;
+}
+
+function halfWidthOf(stroke) {
+  return Math.max(0.5, (Number(stroke.width) || 1) / 2);
 }

@@ -31,6 +31,7 @@ import { InkLayer } from '../src/ink/ink-layer.js';
 import { InkHistory } from '../src/ink/ink-history.js';
 import {
   ERASER_MODES,
+  eraseArea,
   eraseStrokes,
   strokeIdsAlongPath,
   strokeIdsAtPoint,
@@ -442,6 +443,84 @@ for (const name of ['ink-layer', 'ink-history', 'stroke']) {
     `${name} stores vectors, never ImageData snapshots`,
   );
 }
+
+// ═══════════════════════════════════════════════════════════════
+group('Area erasing — the head takes only what it covers');
+
+const lineStroke = () => {
+  const st = createStroke({ tool: INK_TOOLS.PEN, color: '#000', width: 2 });
+  for (let x = 0; x <= 100; x += 5) appendPoint(st, x, 50, 0.5);
+  return st;
+};
+
+check('a head crossing the middle cuts the stroke in two', () => {
+  const layer = new InkLayer();
+  const history = new InkHistory(layer);
+  layer.add(lineStroke());
+
+  assert.equal(eraseArea(layer, history, { x: 50, y: 50, radius: 12 }), true);
+  assert.equal(layer.strokes.length, 2, 'the stroke must survive as two fragments');
+
+  const [a, b] = layer.strokes;
+  assert.ok(a.points[a.points.length - 1].x < 50, 'the first fragment stops before the head');
+  assert.ok(b.points[0].x > 50, 'the second resumes after it');
+  // This is the whole difference from the stroke eraser: the ink outside the
+  // head is still there.
+  assert.ok(a.points.length >= 2 && b.points.length >= 2);
+});
+
+check('fragments carry the original ink and REAL bounds', () => {
+  const layer = new InkLayer();
+  layer.add(lineStroke());
+  eraseArea(layer, new InkHistory(layer), { x: 50, y: 50, radius: 12 });
+
+  for (const f of layer.strokes) {
+    assert.equal(f.tool, INK_TOOLS.PEN);
+    assert.equal(f.color, '#000');
+    assert.equal(f.width, 2);
+    // candidatesInBounds pre-filters on bounds and boundsIntersect(null, ...) is
+    // false, so a fragment without them would paint but be unhittable — never
+    // selectable, erasable or cuttable again.
+    assert.ok(f.bounds, 'a fragment must have bounds');
+    assert.ok(f.bounds.maxX >= f.bounds.minX);
+  }
+});
+
+check('one cut is one undo, and redo puts it back', () => {
+  const layer = new InkLayer();
+  const history = new InkHistory(layer);
+  layer.add(lineStroke());
+  const before = layer.strokes[0].points.length;
+
+  eraseArea(layer, history, { x: 50, y: 50, radius: 12 });
+  assert.equal(layer.strokes.length, 2);
+
+  history.undo();
+  assert.equal(layer.strokes.length, 1, 'undo restores ONE stroke, not two halves');
+  assert.equal(layer.strokes[0].points.length, before, 'and all of its points');
+
+  history.redo();
+  assert.equal(layer.strokes.length, 2);
+});
+
+check('a head that misses everything changes nothing', () => {
+  const layer = new InkLayer();
+  const history = new InkHistory(layer);
+  layer.add(lineStroke());
+  assert.equal(eraseArea(layer, history, { x: 50, y: 400, radius: 12 }), false);
+  assert.equal(layer.strokes.length, 1);
+  assert.equal(history.canUndo(), false, 'a no-op must not consume an undo step');
+});
+
+check('a head covering the whole stroke removes it outright', () => {
+  const layer = new InkLayer();
+  const history = new InkHistory(layer);
+  layer.add(lineStroke());
+  assert.equal(eraseArea(layer, history, { x: 50, y: 50, radius: 400 }), true);
+  assert.equal(layer.strokes.length, 0, 'nothing survived the head');
+  history.undo();
+  assert.equal(layer.strokes.length, 1, 'and it comes back whole');
+});
 
 console.log('\n═══════════════════════════════════════════════════════════════');
 console.log(`  ${PASS} passed, ${FAIL} failed`);

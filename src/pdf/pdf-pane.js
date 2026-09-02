@@ -275,15 +275,26 @@ export class PdfPane {
     this.minZoom = Number.isFinite(floor) && floor > 0 ? floor : ZOOM_MIN;
     if (!this.state) return;
     if (this.state.zoom < this.minZoom - 1e-6) {
-      this._apply(setZoom(this.state, this.minZoom), true);
+      // Re-fit under the new floor rather than setting a bare zoom, so a
+      // fit-to-width pane stays a fit-to-width pane.
+      this._apply(
+        this.state.fitMode === FIT_MODES.NONE
+          ? setZoom(this.state, this.minZoom)
+          : refit(this.state, this._viewport(), this.pageSize, this.minZoom),
+        true,
+      );
     } else {
       this._position();
     }
   }
 
   _apply(nextState, needsRepaint) {
-    // The floor applies wherever the zoom came from — a fit, a pinch, a step.
-    if (nextState && this.minZoom && nextState.zoom < this.minZoom - 1e-6) {
+    // The floor applies to a MANUAL zoom here. A fit clamps itself inside
+    // applyFit and keeps its mode; forcing setZoom on it would drop the mode to
+    // NONE and stop the pane responding to resizes at all.
+    if (nextState && this.minZoom
+        && nextState.fitMode === FIT_MODES.NONE
+        && nextState.zoom < this.minZoom - 1e-6) {
       nextState = setZoom(nextState, this.minZoom);
     }
     // Zoom about the middle of the frame, not the top-left corner.
@@ -465,7 +476,7 @@ export class PdfPane {
       //
       // A restored session keeps its exact zoom; a fresh open fits to width.
       if (!restoredView) {
-        this.state = applyFit(this.state, FIT_MODES.WIDTH, this._viewport(), this.pageSize);
+        this.state = applyFit(this.state, FIT_MODES.WIDTH, this._viewport(), this.pageSize, this.minZoom);
       }
 
       await this._render();
@@ -627,7 +638,7 @@ export class PdfPane {
   resize() {
     if (!this.doc || !this.state) return;
     const before = this.state;
-    this.state = refit(this.state, this._viewport(), this.pageSize);
+    this.state = refit(this.state, this._viewport(), this.pageSize, this.minZoom);
     if (this.state !== before) {
       this._render();
       this.handlers.onStateChange?.(this.state);

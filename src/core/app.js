@@ -19,7 +19,6 @@ import { initI18n, translateDOM, onLangChange } from './i18n.js';
 import { initSettings } from '../settings/settings.js';
 import { initCustomSelects, syncCustomSelects } from '../ui/custom-select.js';
 import { initPdfWorkspace } from '../pdf/pdf-workspace-ui.js';
-import { initParticles } from '../ui/particles.js';
 import { initLiquidGlass } from '../ui/liquid-glass.js';
 
 export async function createApp() {
@@ -47,7 +46,9 @@ export async function start() {
   onLangChange(() => syncCustomSelects());
 
   hideSplash();
-  initParticles('mathBg');
+  // The background is started by bootstrap's tab wiring, which knows which
+  // surface is showing; starting it here too would run it on 课本, where it is
+  // painted entirely behind an opaque workspace.
   initLiquidGlass();
 }
 

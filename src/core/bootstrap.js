@@ -22,6 +22,7 @@ export async function bootstrap() {
   // Tab navigation. 课本 is the landing surface now that 识别 is retired.
   setupTabs();
   document.getElementById('page-pdf')?.classList.add('active');
+  syncBackgroundToPage('pdf');
 
   // PWA install prompt
   setupInstallPrompt();
@@ -46,8 +47,29 @@ function setupTabs() {
       document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
       const page = document.getElementById('page-' + tab.dataset.page);
       if (page && !page.classList.contains('is-retired')) page.classList.add('active');
+      syncBackgroundToPage(tab.dataset.page);
     });
   });
+}
+
+/**
+ * Runs the decorative background only where it can actually be seen.
+ *
+ * `#mathBg` is a full-viewport canvas — 1.6 megapixels on this tablet — cleared
+ * and repainted on a permanent animation loop. The workspace is opaque and
+ * full-bleed, so on 课本 every one of those frames was drawn underneath it and
+ * thrown away, competing for the main thread with the stylus pipeline that has
+ * to keep up with a 120Hz pen.
+ *
+ * It is not a small saving and it costs nothing visible: the only surface the
+ * background shows through is 设定.
+ */
+function syncBackgroundToPage(page) {
+  const wanted = page !== 'pdf';
+  import('../ui/particles.js').then(({ initParticles, stopParticles }) => {
+    if (wanted) initParticles('mathBg');
+    else stopParticles();
+  }).catch(() => { /* decoration is optional */ });
 }
 
 function setupInstallPrompt() {

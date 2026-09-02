@@ -949,12 +949,14 @@
     border-color 180ms ease;
 }
 
-@supports (backdrop-filter: url(#lg-refract-soft)) {
-  .pdf-bar-btn {
-    backdrop-filter: url(#lg-refract-soft);
-    -webkit-backdrop-filter: url(#lg-refract-soft);
-  }
-}
+/* No displacement filter here, deliberately.
+ 
+   An SVG filter used as a backdrop is the most expensive thing this app paints,
+   and there are three of these capsules sitting permanently in the page bar. The
+   sliding pill keeps the refraction because it is the signature and there is one
+   of it; these keep the rim, the cast and the saturation lift, which is what
+   makes them read as capsules in the first place. The lens was costing three
+   filtered compositing layers to add an effect nobody was looking at. */
 
 .pdf-bar-btn:hover {
   border-color: rgba(255, 255, 255, 1);
@@ -1229,3 +1231,23 @@
   .ocr-btn:active,
   .answer-close:active { transform: none; }
 }
+
+/* ── Column corners ──────────────────────────────────────────────────────────
+   The panes carry a larger radius than a content card does. They are the two
+   physical objects on this screen — sheets of paper set side by side — and at
+   22px they read as boxes with rounded corners; at 30 they read as objects.
+   The inner surfaces follow, so the page does not square off inside a soft
+   frame. */
+.pdf-ws-slot {
+  border-radius: 30px;
+}
+.pdf-ws-slot .pdf-slot-toolbar {
+  border-top-left-radius: 29px;
+  border-top-right-radius: 29px;
+}
+.pdf-ws-slot .pdf-pane,
+.pdf-ws-slot .pdf-pane-viewport {
+  border-bottom-left-radius: 29px;
+  border-bottom-right-radius: 29px;
+}
+.pdf-empty-card { border-radius: 26px; }

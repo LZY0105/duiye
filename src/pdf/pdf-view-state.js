@@ -90,23 +90,31 @@ export function zoomOut(state) {
  * and page size. The mode is remembered so a later resize (or a divider drag,
  * which changes the pane width) re-fits instead of keeping a stale zoom.
  */
-export function applyFit(state, mode, viewport, pageSize) {
+export function applyFit(state, mode, viewport, pageSize, minZoom = ZOOM_MIN) {
   if (!viewport || !pageSize || !pageSize.width || !pageSize.height) return state;
   if (mode === FIT_MODES.NONE) return state;
   const byWidth = viewport.width / pageSize.width;
   const byHeight = viewport.height / pageSize.height;
+  // A floor clamps the RESULT of the fit; it does not cancel the fit.
+  //
+  // The caller used to enforce its floor afterwards by calling setZoom, which
+  // drops fitMode to NONE — so a pane that hit the floor stopped being a
+  // fit-to-width pane at all. It then ignored every later resize, because
+  // refit() is a no-op without a mode, and it stopped animating when the
+  // divider moved. Clamping here keeps the mode and the floor both true.
+  const floor = Math.max(ZOOM_MIN, Number(minZoom) || ZOOM_MIN);
   const zoom = clamp(
     mode === FIT_MODES.PAGE ? Math.min(byWidth, byHeight) : byWidth,
-    ZOOM_MIN,
+    floor,
     ZOOM_MAX,
   );
   return next(state, { zoom, fitMode: mode, scrollX: 0, scrollY: 0 });
 }
 
 /** Re-applies the remembered fit mode; a no-op when the user set zoom manually. */
-export function refit(state, viewport, pageSize) {
+export function refit(state, viewport, pageSize, minZoom = ZOOM_MIN) {
   if (state.fitMode === FIT_MODES.NONE) return state;
-  return applyFit(state, state.fitMode, viewport, pageSize);
+  return applyFit(state, state.fitMode, viewport, pageSize, minZoom);
 }
 
 /**
