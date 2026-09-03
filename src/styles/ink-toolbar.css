@@ -357,6 +357,22 @@
 /* Parked in a corner it is a control, so it says so and it answers a press.
    Same spring as the pill buttons, so every round thing on this surface pushes
    back the same way. */
+
+/* The puck must own its whole gesture. `manipulation` on the bar leaves a
+   press free to become a scroll or a double-tap zoom, and once Android claims
+   it the drag arrives as a cancel and the tap reaches whatever is underneath.
+   `none` on the puck is the same rule the drag handle already carries, for the
+   same reason. */
+.ink-toolbar.is-docked,
+.ink-toolbar.is-docked .ink-token,
+.ink-toolbar.is-dragging,
+.ink-toolbar.is-dragging .ink-token { touch-action: none; }
+
+/* Above the page chrome as well as the page. The bar sits at 36, which is over
+   the panes but under a top bar at a higher layer — and a puck a user cannot
+   reliably hit is a puck that hands the tap to whatever is behind it. */
+.ink-toolbar.is-docked { z-index: 60; }
+
 .ink-toolbar.is-docked .ink-token {
   cursor: pointer;
   transition: transform 200ms var(--spring-rebound, cubic-bezier(0.32, 0.72, 0, 1));

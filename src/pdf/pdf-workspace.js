@@ -1070,7 +1070,10 @@ export class PdfWorkspace {
       const page = pane.state.pageNumber;
       const questions = questionsOnPage(pane.questionIndex, page);
       if (questions.length === 0) {
-        notice(`第 ${page} 页没有识别到编号题目`);
+        // Same advice as the whole-book case. From the reader's side the two
+        // are one situation — "it did not find the questions" — and the first
+        // thing to check is the same either way.
+        notice(`第 ${page} 页没有识别到编号题目`, '请检查答案是否上传正确');
         return;
       }
 

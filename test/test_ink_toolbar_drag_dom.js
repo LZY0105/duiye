@@ -68,13 +68,20 @@ dom.window.Element.prototype.releasePointerCapture = function () {};
 const { InkToolbar } = await import('../src/ink/ink-toolbar.js');
 const { InkSurface } = await import('../src/ink/ink-surface.js');
 
+/** The bar the last mount created, so the next one can retire it. */
+let mounted = null;
+
 function mountToolbar() {
   dom.window.localStorage.clear();
+  // Replacing the body detaches the DOM but leaves every window listener the
+  // previous toolbar installed. They then run for the rest of the file.
+  if (mounted) { try { mounted.destroy(); } catch (_) { /* already gone */ } }
   document.body.innerHTML = '';
   const host = document.createElement('div');
   host.getBoundingClientRect = () => ({ ...HOST_RECT });
   document.body.appendChild(host);
   const bar = new InkToolbar(host, { getSurface: () => null });
+  mounted = bar;
   if (!TOOL_COUNT) TOOL_COUNT = bar.root.querySelectorAll('.ink-tool').length;
   return { host, bar };
 }
@@ -89,6 +96,7 @@ function mountToolbar() {
  */
 function mountWithSurface() {
   dom.window.localStorage.clear();
+  if (mounted) { try { mounted.destroy(); } catch (_) { /* already gone */ } }
   document.body.innerHTML = '';
   const host = document.createElement('div');
   host.getBoundingClientRect = () => ({ ...HOST_RECT });
@@ -103,6 +111,7 @@ function mountWithSurface() {
   const surface = new InkSurface(canvas, {});
 
   const bar = new InkToolbar(host, { getSurface: () => surface });
+  mounted = bar;
   return { bar, surface };
 }
 
@@ -296,7 +305,7 @@ test('the drag listeners are installed once, not once per render', () => {
 // The version of this test that shipped first asserted only that the root was
 // detached and that a later pointerup did not throw. A leaked handler has no
 // reason to throw, so that test passed against an implementation whose
-// effective destroy() removed none of the four window listeners. Both tests
+// effective destroy() removed none of its window listeners. Both tests
 // below are written so that restoring that implementation fails them.
 
 /** Records every window listener registered while `fn` runs, minus the removed ones. */
@@ -328,10 +337,14 @@ test('destroy() gives back every window listener the toolbar took', () => {
     const { bar } = mountToolbar();
 
     const taken = stillRegistered();
+    // `click` joined the list when the puck had to suppress the click the
+    // browser synthesises after a tap on it. It is the one listener here whose
+    // effect is not scoped by a pointer id, so it matters most that destroy()
+    // gives it back.
     assert.deepEqual(
       taken,
-      ['lostpointercapture', 'pointercancel', 'pointermove', 'pointerup'],
-      `the drag controller must own exactly its four window listeners, saw ${taken.join(', ') || 'none'}`,
+      ['click', 'lostpointercapture', 'pointercancel', 'pointermove', 'pointerup'],
+      `the drag controller must own exactly its window listeners, saw ${taken.join(', ') || 'none'}`,
     );
 
     bar.destroy();
@@ -404,6 +417,59 @@ test('the eraser still erases after the lasso has been used', () => {
   assert.equal(surface.erasing, false);
   assert.equal(surface.tool, 'pen', 'and a pen draws again');
 });
+
+test('a tap on the puck cannot reach a control underneath it', () => {
+    // TBR-04 from the tablet run: a puck parked at the top-left could not be
+    // reopened, and the tap opened the Android file picker instead. The click
+    // the browser synthesises after the tap outlives the token — the render
+    // that expands the toolbar destroys it — and a click whose target is gone
+    // gets retargeted to whatever is behind it, which there was 导入练习册.
+    const { bar } = mountToolbar();
+
+    // Something underneath, standing in for the import button.
+    const underneath = document.createElement('button');
+    let opened = 0;
+    underneath.addEventListener('click', function () { opened++; });
+    document.body.insertBefore(underneath, document.body.firstChild);
+
+    drag(bar, { from: [40, 400], to: [12, 12] });
+    assert.equal(bar.state.phase, 'docked', 'precondition: parked in the top-left');
+
+    const puck = bar.root.querySelector('[data-role="handle"]');
+    pointer('pointerdown', { x: 14, y: 14, target: puck });
+    pointer('pointerup', { x: 15, y: 14, target: puck });
+    assert.equal(bar.state.phase, 'expanded', 'the tap must expand the toolbar');
+
+    // The retargeted click, as the browser delivers it once the token is gone.
+    underneath.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    assert.equal(opened, 0, 'the toolbar\'s own tap must not reach the control behind it');
+
+    // And the very next click still works — the guard is for one click, not
+    // for every click after a toolbar gesture.
+    underneath.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    assert.equal(opened, 1, 'only the synthesised one is swallowed');
+    underneath.remove();
+  });
+
+test('a cancelled drag lands where the pointer was, not at the origin', () => {
+    // TBR-06: Android delivers pointercancel with stale or zero coordinates
+    // when it takes a gesture over. Read as a release, (0, 0) is the top-left
+    // corner of the workspace — so a puck dragged from anywhere jumped there
+    // and stayed collapsed.
+    const { bar } = mountToolbar();
+    const handle = bar.root.querySelector('[data-role="handle"]');
+
+    pointer('pointerdown', { x: 40, y: 400, target: handle });
+    pointer('pointermove', { x: 980, y: 770 });
+    assert.equal(bar.state.phase, 'dragging');
+
+    // The system takes the gesture, and says nothing useful about where.
+    pointer('pointercancel', { x: 0, y: 0 });
+
+    assert.equal(bar.state.corner, 'bottom-right',
+      'it must dock where the finger actually was');
+    assert.notEqual(bar.state.corner, 'top-left', 'and never at the coordinate origin');
+  });
 
 test('a slider is not destroyed by its own input event', () => {
   const { bar } = mountToolbar();

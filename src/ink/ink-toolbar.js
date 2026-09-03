@@ -567,6 +567,7 @@ export class InkToolbar {
    */
   _installDragController() {
     this._drag = { pointerId: null, start: null, started: false, fromDocked: false };
+    this._swallowClick = false;
 
     const toHostPoint = (e) => {
       const rect = this.host.getBoundingClientRect();
@@ -578,6 +579,14 @@ export class InkToolbar {
       if (!e.target.closest?.('[data-role="handle"]')) return;
       e.preventDefault();
       e.stopPropagation();
+      // Arm the swallow for the click the browser synthesises afterwards.
+      //
+      // preventDefault on pointerdown does not suppress it, and the element it
+      // was aimed at is destroyed by the render this gesture triggers. A click
+      // whose target has gone is retargeted to whatever is underneath — which,
+      // for a puck parked in the top-left, is the import button, so tapping
+      // the toolbar opened the system file picker.
+      this._swallowClick = true;
       const point = toHostPoint(e);
       this._drag.pointerId = e.pointerId;
       this._drag.start = point;
@@ -635,6 +644,12 @@ export class InkToolbar {
       this._drag.started = false;
       try { this.root.releasePointerCapture(pointerId); } catch (_) { /* already released */ }
 
+      // The synthesised click follows within a frame or two. If none arrives —
+      // a cancelled gesture, a stylus lifted outside — the arming has to
+      // expire, or it would swallow whatever the user pressed minutes later.
+      clearTimeout(this._swallowTimer);
+      this._swallowTimer = setTimeout(() => { this._swallowClick = false; }, 400);
+
       // Never travelled, so it was a tap — and on a docked puck a tap expands.
       if (!started) {
         if (fromDocked) this._undock();
@@ -642,8 +657,19 @@ export class InkToolbar {
       }
 
       const rect = this.host.getBoundingClientRect();
-      const point = toHostPoint(e);
       const viewport = { width: rect.width, height: rect.height };
+
+      // Where the pointer WAS, not where the event says it is.
+      //
+      // pointercancel is delivered when the system takes the gesture away —
+      // and Android hands it over carrying stale or zero coordinates. Read as
+      // a release, (0, 0) is the top-left corner of the workspace, so a bar
+      // dragged from anywhere docked itself into the top-left instead of
+      // where the finger actually let go. The last position the drag itself
+      // recorded is the truthful one.
+      const cancelled = e.type === 'pointercancel' || e.type === 'lostpointercapture';
+      const tracked = this.state.dragPoint;
+      const point = (cancelled && tracked) ? tracked : toHostPoint(e);
       const corner = isCornerPoint(point, viewport);
       // Where the token is right now, before the expanded bar replaces it.
       const from = this.root.getBoundingClientRect();
@@ -661,8 +687,33 @@ export class InkToolbar {
       this._undock();
     };
 
+    /**
+     * Kills only the click that has been retargeted off the toolbar.
+     *
+     * Narrow on purpose. Swallowing the next click unconditionally also eats
+     * the tool button the user presses straight after moving the bar, which
+     * is a far more common gesture than the one being defended against.
+     * A click that still lands inside the toolbar found its target and is
+     * exactly the click that must go through.
+     */
+    this._onClickCapture = (e) => {
+      if (!this._swallowClick) return;
+      this._swallowClick = false;
+      // A toolbar that is no longer in the document has no business
+      // suppressing anything. This listener lives on `window` and outlives a
+      // subtree that was replaced rather than destroyed, and it is the one
+      // listener here whose effect is not scoped by a pointer id.
+      if (!this.root.isConnected) return;
+      if (this.root.contains(e.target) || this.cardLayer.contains(e.target)) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
     this.root.addEventListener('pointerdown', this._onDragStart);
     this.root.addEventListener('keydown', this._onKeyDown);
+    // Capture phase on the window, so it is seen before any control it might
+    // have been retargeted onto.
+    window.addEventListener('click', this._onClickCapture, { capture: true });
     window.addEventListener('pointermove', this._onDragMove, { capture: true });
     window.addEventListener('pointerup', this._onDragEnd, { capture: true });
     window.addEventListener('pointercancel', this._onDragEnd, { capture: true });
@@ -697,6 +748,8 @@ export class InkToolbar {
 
     this.root.removeEventListener('pointerdown', this._onDragStart);
     this.root.removeEventListener('keydown', this._onKeyDown);
+    window.removeEventListener('click', this._onClickCapture, { capture: true });
+    clearTimeout(this._swallowTimer);
     window.removeEventListener('pointermove', this._onDragMove, { capture: true });
     window.removeEventListener('pointerup', this._onDragEnd, { capture: true });
     window.removeEventListener('pointercancel', this._onDragEnd, { capture: true });
@@ -878,6 +931,23 @@ export class InkToolbar {
   }
 
   _bindCard(card) {
+    // A card is a control surface floating over a document.
+    //
+    // Its pointer events used to reach the page underneath, so dragging the
+    // eraser-size slider panned the PDF and, past the swipe threshold, turned
+    // the page — and the pan dismissed the card out from under the finger
+    // still holding the slider. The card takes its own gestures and gives the
+    // page nothing.
+    for (const type of ['pointerdown', 'pointermove', 'pointerup']) {
+      card.addEventListener(type, (e) => e.stopPropagation());
+    }
+    // Range inputs need the browser's own drag handling, so the gesture is
+    // claimed rather than cancelled: `none` stops the WebView deciding
+    // mid-drag that a mostly-horizontal movement was a page swipe.
+    card.querySelectorAll('input[type="range"]').forEach((slider) => {
+      slider.style.touchAction = 'none';
+    });
+
     card.querySelectorAll('[data-swatch]').forEach((button) => {
       button.addEventListener('click', () => this._set(setColor(this.state, button.dataset.swatch)));
     });

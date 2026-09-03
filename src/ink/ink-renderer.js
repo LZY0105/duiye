@@ -77,90 +77,80 @@ const norm = (x, y) => {
 };
 
 /**
- * The two sides of a variable-width stroke, as one closed path.
+ * A variable-width stroke, as the UNION of local pieces in one path.
  *
- * This replaces stroking each segment on its own with its own lineWidth, which
- * is the only way a plain `stroke()` can vary width along a line — and which
- * put a round cap at both ends of every segment. At ordinary size the caps
- * overlap sub-pixel and nobody sees them; magnify the ink and every one of
- * them appears, because each was antialiased separately and the rims stack
- * where they overlap. That is the string of beads down an enlarged stroke.
+ * Two earlier attempts at this are worth recording, because each fixed a real
+ * defect and introduced the next one.
  *
- * An outline has no seams to stack: it is one region, filled once. It is also
- * one draw call per stroke instead of one per sample, which is worth more than
- * the arithmetic it costs on a page carrying a few hundred marks.
+ * Stroking each segment separately was the original. It varies width — a
+ * canvas path carries only one lineWidth — but puts a round cap on both ends
+ * of every segment, each antialiased on its own, and the rims stack wherever
+ * they overlap. Enlarged ink came apart into a string of beads.
  *
- * Both sides are smoothed through sample midpoints, the same quadratic
- * smoothing the centre line used, so the silhouette curves rather than
- * faceting. Nonzero winding fills a stroke that doubles back on itself solid,
- * which is what ink does.
+ * Tracing one long outline down each side fixed the beads and then broke on
+ * hairpins. Where a stroke doubles back, the two sides swap over, and the
+ * quadratic smoothing that joins the offset points has to run from one side of
+ * the stroke to the other. It swings wide doing it, and the swing fills as a
+ * large circular blob hanging off the turn — the artifact the acceptance run
+ * caught at 400%.
+ *
+ * The construction here is local, so no smoothing ever crosses a turn and no
+ * single arc has to serve two directions. Per SEGMENT, the quad joining the
+ * two circles' tangent lines; per SAMPLE, the circle itself. Discs supply
+ * round joins in the middle and round caps at the ends by construction, and a
+ * geometry that is only ever a union of convex pieces cannot bulge: every
+ * piece is inside the stroke by definition.
+ *
+ * All of it goes into ONE path filled once under nonzero winding, so the
+ * overlaps that make the joins work cost nothing — no seam, no double-darkened
+ * translucent ink, and one draw call for the whole mark.
  */
-function traceOutline(ctx, pts) {
+function traceStroke(ctx, pts) {
   const n = pts.length;
-  // Direction at each sample: the average of the segments meeting there, so
-  // the offset follows the corner instead of jumping across it.
-  const dirs = new Array(n);
-  for (let i = 0; i < n; i++) {
-    const back = i > 0 ? norm(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y) : null;
-    const fwd = i < n - 1 ? norm(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y) : null;
-    let d = back && fwd ? norm(back.x + fwd.x, back.y + fwd.y) : (fwd || back);
-    // A hairpin averages to nothing; keep going the way we came.
-    if (!d) d = back || fwd || { x: 1, y: 0 };
-    dirs[i] = d;
+  ctx.beginPath();
+
+  for (let i = 0; i < n - 1; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    const d = norm(b.x - a.x, b.y - a.y);
+    // Two samples on the same spot contribute nothing but a disc, which the
+    // loop below adds anyway.
+    if (!d) continue;
+    const nx = -d.y;
+    const ny = d.x;
+    // Wound to match a default-direction arc — see the discs below.
+    ctx.moveTo(a.x + nx * a.r, a.y + ny * a.r);
+    ctx.lineTo(a.x - nx * a.r, a.y - ny * a.r);
+    ctx.lineTo(b.x - nx * b.r, b.y - ny * b.r);
+    ctx.lineTo(b.x + nx * b.r, b.y + ny * b.r);
+    ctx.closePath();
   }
 
-  const side = (i, sign) => ({
-    x: pts[i].x - dirs[i].y * pts[i].r * sign,
-    y: pts[i].y + dirs[i].x * pts[i].r * sign,
-  });
-  const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
-
-  const run = (sign, order) => {
-    let prev = side(order[0], sign);
-    ctx.lineTo(prev.x, prev.y);
-    for (let k = 1; k < order.length - 1; k++) {
-      const c = side(order[k], sign);
-      const e = mid(c, side(order[k + 1], sign));
-      ctx.quadraticCurveTo(c.x, c.y, e.x, e.y);
-      prev = e;
-    }
-    const last = side(order[order.length - 1], sign);
-    ctx.lineTo(last.x, last.y);
-  };
-
-  const forward = [];
-  for (let i = 0; i < n; i++) forward.push(i);
-  const backward = forward.slice().reverse();
-
-  const head = side(0, 1);
-  ctx.beginPath();
-  ctx.moveTo(head.x, head.y);
-  run(1, forward);
-  // Round caps, each turning onto the other side.
+  // The discs wind the SAME way as the quads, and that is load-bearing.
   //
-  // Both sweep anticlockwise — decreasing angle — and that is not a symmetry
-  // to trust by eye. The far cap has to pass in FRONT of the tip and the near
-  // one BEHIND the start; taking the other arc direction sends each of them
-  // the long way round, back through the stroke, and the fill then eats a bite
-  // out of the end it was supposed to round off.
-  const tip = pts[n - 1];
-  const tipDir = dirs[n - 1];
-  ctx.arc(tip.x, tip.y, tip.r,
-    Math.atan2(tipDir.x, -tipDir.y), Math.atan2(-tipDir.x, tipDir.y), true);
-  run(-1, backward);
-  const tail = pts[0];
-  ctx.arc(tail.x, tail.y, tail.r,
-    Math.atan2(-dirs[0].x, dirs[0].y), Math.atan2(dirs[0].x, -dirs[0].y), true);
-  ctx.closePath();
+  // Nonzero winding adds signed turns: two pieces overlapping with opposite
+  // winding cancel to zero and leave a hole — worst exactly at a join, which
+  // is where the discs exist to help. The quads' orientation is stable in
+  // either direction of travel, because it comes from the segment direction
+  // twice over, once in the normal and once in the vertex order; so it is the
+  // quads that are ordered to match a plain arc rather than the other way
+  // round. Sweeping the arc backwards to match instead would mean writing
+  // `arc(…, 0, 2π, true)`, whose sweep is zero or full depending on how the
+  // engine reads a full turn in reverse — a disc that silently vanishes.
+  for (let i = 0; i < n; i++) {
+    ctx.moveTo(pts[i].x + pts[i].r, pts[i].y);
+    ctx.arc(pts[i].x, pts[i].y, pts[i].r, 0, Math.PI * 2);
+  }
+
   ctx.fill();
 }
 
 /**
  * Paints one stroke.
  *
- * A constant-width tool is one stroked path. A pressure-varying one is an
- * outline, filled once — see traceOutline for why it is not stroked segment by
- * segment any more.
+ * A constant-width tool is one stroked path. A pressure-varying one is a union
+ * of local pieces filled once — see traceStroke for why it is neither stroked
+ * segment by segment nor traced as one long outline.
  */
 export function drawStroke(ctx, stroke, transform) {
   const points = stroke.points;
@@ -228,7 +218,7 @@ export function drawStroke(ctx, stroke, transform) {
     ctx.restore();
     return;
   }
-  traceOutline(ctx, pts);
+  traceStroke(ctx, pts);
   ctx.restore();
 }
 

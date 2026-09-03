@@ -212,6 +212,19 @@ export function renderAnswerMatches(host, matches, {
       <div class="answer-reason">${escapeHtml(match.reason || '')}</div>`;
 
     row.querySelector('[data-role="goto"]')?.addEventListener('click', () => onReveal?.(match));
+
+    // 显示答案 navigates too.
+    //
+    // The pill in the header was the only thing that took the reader to the
+    // page, and it is the smaller of two controls sitting next to a big one
+    // that says "show the answer" — so the obvious control expanded a panel
+    // and did nothing else, which read on the tablet as the workflow simply
+    // not working. Opening the disclosure IS asking to see the answer, and
+    // this book's answer usually cannot be rendered as text at all, so the
+    // page is the answer.
+    row.querySelector('.answer-reveal')?.addEventListener('toggle', (e) => {
+      if (e.target.open) onReveal?.(match);
+    });
     // The stagger is capped: past about eight rows a per-row delay stops
     // reading as choreography and starts reading as the list being slow.
     row.style.setProperty('--row-index', String(Math.min(wrap.children.length, 8)));

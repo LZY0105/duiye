@@ -29,7 +29,7 @@ import {
 } from '../src/ink/stroke.js';
 import { InkLayer } from '../src/ink/ink-layer.js';
 import { InkSurface } from '../src/ink/ink-surface.js';
-import { InkHistory } from '../src/ink/ink-history.js';
+import { INK_OPS, InkHistory } from '../src/ink/ink-history.js';
 import {
   boundsCentre,
   handleIndex,
@@ -623,30 +623,129 @@ check('bounds are rebuilt after a transform, so the ink stays hittable', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+group('One gesture is one undo step');
+
+check('a whole region-erase drag takes exactly one Undo', () => {
+  // ERA-06 on the tablet: the eraser cuts on every pointermove, so one wipe
+  // across a page recorded a separate split per event and needed dozens of
+  // presses to take back.
+  const layer = new InkLayer();
+  // Densely sampled: the area eraser cuts by dropping the samples under its
+  // head, so a two-point line has nothing for it to take.
+  const pts = [];
+  for (let x = 0; x <= 200; x += 2) pts.push([x, 0]);
+  const line = strokeThrough(pts);
+  layer.add(line);
+  const history = new InkHistory(layer);
+
+  history.beginBatch();
+  for (let x = 40; x <= 120; x += 4) {
+    eraseArea(layer, history, { x, y: 0, radius: 6 });
+  }
+  history.endBatch();
+
+  assert.equal(history.undoStack.length, 1, 'one wipe, one step');
+  assert.ok(layer.strokes.length >= 2, 'precondition: the wipe really cut the line');
+
+  history.undo();
+  assert.equal(layer.strokes.length, 1, 'one Undo brings the whole line back');
+  assert.equal(layer.strokes[0].points.length, line.points.length, 'and brings it back whole');
+
+  history.redo();
+  assert.ok(layer.strokes.length >= 2, 'and Redo cuts it again, in one step');
+});
+
+check('a batch of one is recorded as itself, not as a wrapper', () => {
+  const layer = new InkLayer();
+  layer.add(strokeThrough([[0, 0], [5, 5], [10, 10]]));
+  const history = new InkHistory(layer);
+  history.beginBatch();
+  eraseArea(layer, history, { x: 5, y: 5, radius: 40 });
+  history.endBatch();
+  assert.equal(history.undoStack.length, 1);
+  assert.notEqual(history.undoStack[0].type, INK_OPS.BATCH, 'no pointless wrapper');
+});
+
+check('an empty batch records nothing at all', () => {
+  const layer = new InkLayer();
+  layer.add(strokeThrough([[0, 0], [5, 5], [10, 10]]));
+  const history = new InkHistory(layer);
+  history.beginBatch();
+  eraseArea(layer, history, { x: 500, y: 500, radius: 2 });   // misses everything
+  assert.equal(history.endBatch(), false);
+  assert.equal(history.undoStack.length, 0, 'a gesture that changed nothing is not a step');
+});
+
+check('a batch cannot be opened twice, so an inner helper cannot close it', () => {
+  const layer = new InkLayer();
+  const history = new InkHistory(layer);
+  assert.equal(history.beginBatch(), true);
+  assert.equal(history.beginBatch(), false, 're-entry is ignored, not nested');
+  history.cancelBatch();
+  assert.equal(history.undoStack.length, 0);
+});
+
+check('undo puts the lasso outline back with the ink', () => {
+  // LAS-10 on the tablet: the ink reverted and the orange loop stayed in the
+  // transformed position, drawing a selection that no longer existed.
+  const layer = new InkLayer();
+  const st = boxStroke();
+  layer.add(st);
+  const history = new InkHistory(layer);
+
+  const loopBefore = [{ x: -5, y: -5 }, { x: 15, y: -5 }, { x: 15, y: 15 }, { x: -5, y: 15 }];
+  const before = snapshotStrokes(layer, [st.id]);
+  transformSelection(layer, null, [st.id], { dx: 100, dy: 50 });
+  const loopAfter = transformPolygon(loopBefore, { dx: 100, dy: 50 });
+  history.recordTransform(before, snapshotStrokes(layer, [st.id]), { loopBefore, loopAfter });
+
+  const undone = history.undo();
+  assert.equal(undone.type, INK_OPS.TRANSFORM);
+  assert.deepEqual(undone.loopBefore, loopBefore, 'the op carries the outline to restore');
+  assert.equal(boundsCentre(selectionBounds(layer, [st.id])).x, 5, 'the ink came back');
+
+  const redone = history.redo();
+  assert.deepEqual(redone.loopAfter, loopAfter, 'and the other side of the step too');
+});
+
+check('undo and redo hand back the operation, so a caller can follow it', () => {
+  const layer = new InkLayer();
+  layer.add(strokeThrough([[0, 0], [5, 5]]));
+  const history = new InkHistory(layer);
+  history.recordErase(layer.removeByIds([layer.strokes[0].id]));
+  const op = history.undo();
+  assert.ok(op && op.type, 'undo returns what it reverted');
+  assert.equal(history.undo(), null, 'and null when there is nothing left');
+});
+
+// ═══════════════════════════════════════════════════════════════
 group('Enlarged ink — one filled outline, no string of beads');
 
 /**
- * A 2D context that flattens whatever is drawn into a polygon.
+ * A 2D context that flattens every subpath and answers where the ink is.
  *
- * Counting draw calls would only prove the shape of the code. Flattening the
- * path and then asking where the ink actually IS proves the geometry: that the
- * outline sits half a line-width off the centre, that the caps round off the
- * ends rather than biting into them, and that a point beyond the edge is not
- * painted.
+ * It computes the NONZERO WINDING NUMBER, not "inside any subpath". The
+ * distinction is the whole point: the stroke is built as a union of quads and
+ * discs, and canvas fills it under nonzero winding, so two overlapping pieces
+ * that happen to wind opposite ways cancel to a hole. A union test cannot see
+ * that; a winding test is what the browser actually does.
  */
 function pathRecorder() {
   let cur = null;
-  let poly = [];
-  const rec = { fills: 0, strokes: 0, shape: null, arcs: 0 };
-  const push = (x, y) => { poly.push({ x, y }); cur = { x, y }; };
+  let sub = null;
+  const subs = [];
+  const rec = { fills: 0, strokes: 0, shape: null, arcs: 0, subpaths: 0 };
+
+  const open = (x, y) => { sub = [{ x, y }]; subs.push(sub); cur = { x, y }; };
+  const push = (x, y) => { if (!sub) open(x, y); else { sub.push({ x, y }); cur = { x, y }; } };
 
   Object.assign(rec, {
     save() {}, restore() {}, closePath() {}, clearRect() {}, setLineDash() {},
     set strokeStyle(_) {}, set fillStyle(_) {}, set lineWidth(_) {},
     set lineCap(_) {}, set lineJoin(_) {}, set globalAlpha(_) {},
     set globalCompositeOperation(_) {},
-    beginPath() { poly = []; },
-    moveTo(x, y) { push(x, y); },
+    beginPath() { subs.length = 0; sub = null; cur = null; },
+    moveTo(x, y) { open(x, y); },
     lineTo(x, y) { push(x, y); },
     quadraticCurveTo(cx, cy, x, y) {
       const s0 = cur;
@@ -661,18 +760,33 @@ function pathRecorder() {
       let d = a1 - a0;
       if (anticlockwise) { while (d > 0) d -= Math.PI * 2; }
       else { while (d < 0) d += Math.PI * 2; }
-      for (let t = 1; t <= 24; t++) {
-        const a = a0 + (d * t) / 24;
+      const steps = Math.max(8, Math.ceil(Math.abs(d) / (Math.PI / 24)));
+      for (let t = 0; t <= steps; t++) {
+        const a = a0 + (d * t) / steps;
         push(x + Math.cos(a) * r, y + Math.sin(a) * r);
       }
     },
-    fill() { rec.fills++; rec.shape = poly.slice(); },
-    stroke() { rec.strokes++; rec.shape = poly.slice(); },
+    fill() { rec.fills++; rec.shape = subs.map(p => p.slice()); rec.subpaths = subs.length; },
+    stroke() { rec.strokes++; rec.shape = subs.map(p => p.slice()); rec.subpaths = subs.length; },
   });
   return rec;
 }
 
-const inked = (rec, x, y) => pointInPolygon(x, y, rec.shape);
+/** Nonzero winding number of a point against every subpath, as canvas fills. */
+function windingAt(shape, x, y) {
+  let w = 0;
+  for (const poly of shape) {
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const a = poly[j], b = poly[i];
+      if (a.y <= y) {
+        if (b.y > y && (b.x - a.x) * (y - a.y) - (x - a.x) * (b.y - a.y) > 0) w++;
+      } else if (b.y <= y && (b.x - a.x) * (y - a.y) - (x - a.x) * (b.y - a.y) < 0) w--;
+    }
+  }
+  return w;
+}
+
+const inked = (rec, x, y) => windingAt(rec.shape, x, y) !== 0;
 
 /** A horizontal stroke of `n` samples from x=0 to x=100 at y=0. */
 function flatStroke(n, tool = INK_TOOLS.MARKER) {
@@ -705,12 +819,8 @@ check('the outline sits exactly half a line-width off the centre', () => {
 });
 
 check('the caps round the ends off instead of biting into them', () => {
-  // Both arcs sweep anticlockwise. Take the other direction and each goes the
-  // long way round, back through the stroke, and the fill eats the end.
   const rec = pathRecorder();
   drawStroke(rec, flatStroke(30), createTransform(1, 0, 0));
-  assert.equal(rec.arcs, 2, 'one cap at each end');
-
   assert.ok(inked(rec, 100, 0), 'the last sample is ink');
   assert.ok(inked(rec, 102, 0), 'and the cap carries it past the tip');
   assert.ok(!inked(rec, 104, 0), 'but only by the half-width');
@@ -736,6 +846,54 @@ check('enlarging the ink widens the mark, and it stays one region', () => {
   assert.ok(!inked(rec, 200, 13), 'but not past it');
 });
 
+check('every piece winds the same way, so no join can punch a hole', () => {
+  // Nonzero winding ADDS signed turns. The discs that make the joins round
+  // wind one way and the quads the other unless they are made to agree, and
+  // where they overlap the sum is zero — a hole, worst exactly at a join.
+  const rec = pathRecorder();
+  drawStroke(rec, flatStroke(20), createTransform(1, 0, 0));
+  const signs = new Set();
+  for (const poly of rec.shape) {
+    let area = 0;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      area += poly[j].x * poly[i].y - poly[i].x * poly[j].y;
+    }
+    if (Math.abs(area) > 1e-9) signs.add(Math.sign(area));
+  }
+  assert.equal(signs.size, 1, 'quads and discs must wind the same way');
+
+  // And the winding never cancels anywhere along the stroke.
+  for (let x = 0; x <= 100; x += 2.5) {
+    assert.notEqual(windingAt(rec.shape, x, 0), 0, `hole at x=${x}`);
+  }
+});
+
+check('a hairpin stays solid where it doubles back', () => {
+  // The defect the tablet run caught at 400%: tracing one long outline down
+  // each side has to swing the smoothing from one side of the stroke to the
+  // other at a reversal, and the swing fills as a blob hanging off the turn.
+  const st = createStroke({ tool: INK_TOOLS.MARKER, color: '#dc2626' });
+  for (let i = 0; i <= 20; i++) appendPoint(st, i * 3, 0, 0.5, 0);
+  for (let i = 20; i >= 0; i--) appendPoint(st, i * 3, 1.2, 0.5, 0);
+
+  const rec = pathRecorder();
+  drawStroke(rec, st, createTransform(4, 0, 0));   // as seen at 400%
+  assert.equal(rec.fills, 1);
+
+  // Solid the whole way along, on the way out and on the way back.
+  for (let x = 0; x <= 60; x += 3) {
+    assert.ok(inked(rec, x * 4, 0), `gap on the outward leg at ${x}`);
+    assert.ok(inked(rec, x * 4, 1.2 * 4), `gap on the return leg at ${x}`);
+  }
+
+  // And nothing hanging off the turn. The marker is 6 wide, so at 400% the
+  // stroke reaches 12px beyond the last sample and no further.
+  const tipX = 60 * 4;
+  assert.ok(inked(rec, tipX + 10, 0), 'the cap rounds the turn');
+  assert.ok(!inked(rec, tipX + 20, 0), 'a blob would reach far past the tip');
+  assert.ok(!inked(rec, tipX + 40, 2), 'and further still, off to the side');
+});
+
 check('samples landing on one pixel are dropped, and the end never is', () => {
   // Pure economy: at 25% zoom four stored samples share a pixel and three of
   // them contribute nothing but arithmetic. It must not shorten the mark.
@@ -747,8 +905,8 @@ check('samples landing on one pixel are dropped, and the end never is', () => {
 
   const full = pathRecorder();
   drawStroke(full, st, createTransform(1, 0, 0));
-  assert.ok(full.shape.length > zoomed.shape.length,
-    'zoomed out costs fewer points than zoomed in');
+  assert.ok(full.subpaths > zoomed.subpaths,
+    'zoomed out costs fewer pieces than zoomed in');
 });
 
 check('a constant-width tool is still one stroked path, not an outline', () => {
@@ -772,7 +930,7 @@ check('a hairpin does not collapse the outline', () => {
   const rec = pathRecorder();
   drawStroke(rec, st, createTransform(1, 0, 0));
   assert.equal(rec.fills, 1);
-  assert.ok(rec.shape.every(p => Number.isFinite(p.x) && Number.isFinite(p.y)),
+  assert.ok(rec.shape.every(sp => sp.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))),
     'no NaN may reach the path — one would erase the whole stroke');
 });
 

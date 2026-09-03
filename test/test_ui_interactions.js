@@ -245,6 +245,38 @@ check('the notice and the answer header share one close button', () => {
   assert.ok(/closeButtonHtml\('完成，收起答案'\)/.test(code));
 });
 
+check('the per-page notice carries the advice too', () => {
+  // ANS-02 on the tablet: the page that reported "no numbered question" showed
+  // the reason with no guidance under it. From the reader's side that case and
+  // the whole-book one are the same situation, and have the same first check.
+  const code = $read('src/pdf/pdf-workspace.js');
+  assert.ok(
+    code.includes("notice(`第 ${page} 页没有识别到编号题目`, '请检查答案是否上传正确')"),
+    'the per-page notice must say what to do about it',
+  );
+});
+
+check('opening 显示答案 navigates, not only the small pill', () => {
+  // ANS-05 / ANS-06: the pill in the header was the only control that took the
+  // reader to the answer page, sitting beside a much larger control that says
+  // "show the answer" and did nothing but expand a panel.
+  const code = $read('src/pdf/answer-panel.js');
+  assert.ok(/\.answer-reveal'\)\?\.addEventListener\('toggle'/.test(code),
+    'opening the disclosure must reveal for real');
+  assert.ok(/if \(e\.target\.open\) onReveal\?\.\(match\)/.test(code),
+    'and only on opening it, never on closing');
+});
+
+check('a settings card keeps its own gestures off the page', () => {
+  // ERA-03: dragging the eraser-size slider panned the PDF, turned the page,
+  // and dismissed the card out from under the finger still holding the slider.
+  const code = $read('src/ink/ink-toolbar.js');
+  assert.ok(/for \(const type of \['pointerdown', 'pointermove', 'pointerup'\]\)/.test(code),
+    'the card must stop its pointer events reaching the page');
+  assert.ok(/slider\.style\.touchAction = 'none'/.test(code),
+    'and a range input must claim the gesture so the WebView cannot call it a swipe');
+});
+
 check('the hint is styled in the gold, not in an error red', () => {
   const css = $read('src/styles/pdf.css');
   const rule = css.match(/\.answer-notice-hint\s*\{[^}]*\}/);

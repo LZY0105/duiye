@@ -9,7 +9,7 @@
 // at — the same reason zooming in later is lossless.
 
 import { InkLayer } from './ink-layer.js';
-import { InkHistory } from './ink-history.js';
+import { INK_OPS, InkHistory } from './ink-history.js';
 import {
   INK_TOOLS,
   TOOL_DEFAULTS,
@@ -480,6 +480,10 @@ export class InkSurface {
         // REGION used to be a lasso: you drew a closed outline and everything
         // inside it vanished on release. That is a selection gesture, not an
         // eraser, and nothing showed what was about to be removed.
+        // One gesture, one undo step. The eraser cuts on every pointermove,
+        // so a single wipe across a page used to record dozens of separate
+        // splits and needed dozens of presses to take back.
+        this.history?.beginBatch();
         this._eraserDot = pt;
         this._eraserPath = [pt];
         this._eraseAlong();
@@ -566,10 +570,18 @@ export class InkSurface {
         // one drag and make undo useless. The snapshot taken when the gesture
         // began is compared with where it ended, and that pair is the step.
         const before = this._grab.before;
+        const loopBefore = this._grab.loopBefore;
         this._grab = null;
         const after = snapshotStrokes(this.layer, this.selection);
         if (before?.length && moved(before, after)) {
-          this.history?.recordTransform(before, after);
+          // The outline goes on the op with the ink. Undoing the points alone
+          // left the loop sitting where the ink no longer was, drawing a
+          // selection that had stopped existing — which is what the tablet
+          // run saw after undoing a rotate.
+          this.history?.recordTransform(before, after, {
+            loopBefore,
+            loopAfter: this.selectionLoop ? this.selectionLoop.map(p => ({ ...p })) : null,
+          });
           this.handlers.onChange?.(this.layer);
         }
         this.render();
@@ -594,12 +606,14 @@ export class InkSurface {
       if (this._eraserDot) {
         this._eraserDot = null;
         this._eraserPath = null;
+        this.history?.endBatch();
         this.render();
         return;
       }
 
       if (this._eraserPath) {
         this._eraserPath = null;
+        this.history?.endBatch();
         this.render();
         return;
       }
@@ -650,6 +664,7 @@ export class InkSurface {
         this._grab = {
           mode: 'transform',
           before: snapshotStrokes(this.layer, this.selection),
+          loopBefore: this.selectionLoop.map(p => ({ ...p })),
           origin,
           startAngle: Math.atan2(pt.y - origin.y, pt.x - origin.x),
           startDistance: Math.max(1e-3, Math.hypot(pt.x - origin.x, pt.y - origin.y)),
@@ -664,7 +679,12 @@ export class InkSurface {
     // should start a new lasso rather than drag ink the user never enclosed.
     const loop = this.selectionLoop;
     if (this.selection.length && loop && pointInPolygon(pt.x, pt.y, loop)) {
-      this._grab = { mode: 'move', last: pt, before: snapshotStrokes(this.layer, this.selection) };
+      this._grab = {
+        mode: 'move',
+        last: pt,
+        before: snapshotStrokes(this.layer, this.selection),
+        loopBefore: loop.map(p => ({ ...p })),
+      };
       return;
     }
 
@@ -747,17 +767,46 @@ export class InkSurface {
   // ── commands ──────────────────────────────────────────────────────────────
 
   undo() {
-    if (!this.history.undo()) return false;
+    const op = this.history.undo();
+    if (!op) return false;
+    this._syncSelectionTo(op, 'loopBefore');
     this.render();
     this.handlers.onChange?.(this.layer);
     return true;
   }
 
   redo() {
-    if (!this.history.redo()) return false;
+    const op = this.history.redo();
+    if (!op) return false;
+    this._syncSelectionTo(op, 'loopAfter');
     this.render();
     this.handlers.onChange?.(this.layer);
     return true;
+  }
+
+  /**
+   * Keeps the lasso outline honest across an undo or a redo.
+   *
+   * A selection is a claim about where some ink is. Stepping the ink back
+   * without stepping the claim back leaves a loop drawn round empty page, with
+   * a handle that transforms strokes somewhere else entirely.
+   *
+   * A transform carries the outline on the op, so it can be put back exactly.
+   * Anything else — an erase, a clear, a stroke coming or going — may have
+   * removed the very strokes the selection names, so the claim is dropped
+   * rather than guessed at.
+   */
+  _syncSelectionTo(op, which) {
+    if (!this.selection.length) return;
+    if (op?.type === INK_OPS.TRANSFORM && op[which]) {
+      this.selectionLoop = op[which].map(p => ({ ...p }));
+      if (this._anchor >= this.selectionLoop.length) this._anchor = -1;
+      return;
+    }
+    if (op?.type === INK_OPS.TRANSFORM) return;
+    this.selection = [];
+    this.selectionLoop = null;
+    this._anchor = -1;
   }
 
   /** Clears ink only. The PDF canvas is a different element entirely. */
