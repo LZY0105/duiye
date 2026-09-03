@@ -44,6 +44,15 @@ import Logger from '../core/logger.js';
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
+/**
+ * What the slot toolbar sheds, in the order it sheds it, when it cannot fit.
+ *
+ * Captions the icons already carry go before readouts whose controls stay, and
+ * no rung hides anything that can be pressed. Driven by measurement in
+ * PdfWorkspace._syncPaneHeaderFit, styled in material.css.
+ */
+const HEADER_LADDER = ['is-snug', 'is-snugger'];
+
 /** How far the swap control travels before a release commits the swap. */
 const SWAP_THRESHOLD = 34;
 
@@ -98,6 +107,9 @@ export class PdfWorkspace {
     this.restoredViews = {};
     /** Which pane the shared toolbar currently applies to (spec §11.2). */
     this.activeSlot = SLOTS.PRIMARY;
+    // Per slot, the width the slot toolbar wanted at each rung of HEADER_LADDER,
+    // so _syncPaneHeaderFit knows how much room it takes to put a rung back.
+    this._headerWanted = {};
     /** Per-pane "has annotations that are not written yet". */
     this._inkDirty = { [SLOTS.PRIMARY]: false, [SLOTS.SECONDARY]: false };
     /** Per-slot open tokens; a superseded open must not overwrite a newer one. */
@@ -114,6 +126,9 @@ export class PdfWorkspace {
     // panes without belonging to either one's layout.
     this.toolbar = new InkToolbar(this.root, {
       getSurface: () => this.panes[this.activeSlot]?.ink || null,
+      // Moving or docking the bar can carry it over the other column, and the
+      // column it lands on is what it now has to fit inside.
+      onChange: () => this._syncToolbarSize(paneFractions(this.state)),
       onClearInk: () => {
         // Scoped to the active pane's ink only — never the PDF (§6.2).
         this.panes[this.activeSlot]?.ink.clear();
@@ -671,7 +686,64 @@ export class PdfWorkspace {
       el.classList.toggle('is-narrow', px >= 220 && px < 380);
     }
 
+    this._syncPaneHeaderFit();
     this._syncToolbarSize(fractions);
+  }
+
+  /**
+   * Sheds slot-toolbar chrome until the bar fits the pane it belongs to.
+   *
+   * The width bands above are cut at fixed pixel widths and a 50:50 split falls
+   * between them — wide enough to be called neither narrow nor tiny, too narrow
+   * for a bar that wants 774px. What scrolled off the end there was 对答案, the
+   * answer lookup this app exists to do.
+   *
+   * So this does not guess a threshold. It reads what the bar wants against what
+   * it has and steps one rung down the ladder while it overflows, one rung back
+   * up when there is room again — which makes the decision depend on the real
+   * content: a longer page count, a different language or a skin with fatter
+   * buttons all move the point at which chrome starts to go, and none of them
+   * needs a number changed here.
+   *
+   * One measurement and at most one class change per pane per call, because this
+   * also runs on every frame of a divider drag. Overflow settles over a frame or
+   * two rather than thrashing inside one.
+   */
+  _syncPaneHeaderFit() {
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+      const el = this.elSlots[slot];
+      const bar = el?.querySelector('.pdf-slot-toolbar');
+      if (!bar) continue;
+
+      const have = bar.clientWidth;
+      // A hidden or not-yet-laid-out pane measures zero, and zero is not a
+      // reason to strip its toolbar.
+      if (!have) continue;
+
+      // How many rungs are already applied. They go on in order, so the first
+      // missing one is the next to add.
+      let level = HEADER_LADDER.findIndex(cls => !el.classList.contains(cls));
+      if (level === -1) level = HEADER_LADDER.length;
+
+      const wanted = (this._headerWanted[slot] ||= []);
+
+      if (bar.scrollWidth > have + 1) {
+        // Still overflowing. Remember what this rung wanted before leaving it,
+        // so we know how much room it takes to come back.
+        if (level < HEADER_LADDER.length) {
+          wanted[level] = bar.scrollWidth;
+          el.classList.add(HEADER_LADDER[level]);
+        }
+        continue;
+      }
+
+      // It fits. Restore the last thing hidden once there is room for it plus a
+      // margin, so a pane resting exactly on the boundary does not flicker.
+      if (level > 0) {
+        const need = wanted[level - 1];
+        if (need && have > need + 8) el.classList.remove(HEADER_LADDER[level - 1]);
+      }
+    }
   }
 
   /**
@@ -681,10 +753,21 @@ export class PdfWorkspace {
    * of a divider drag as well as on resize: the tools grow and shrink with the
    * column rather than jumping to a new size when the drag ends.
    *
-   * The active pane's width is what it is measured against, because that is
-   * the pane it applies to. The workspace HEIGHT is the other input, and the
-   * one that actually binds on a tablet held in landscape — a full-size
-   * vertical bar is longer than the space it has to live in.
+   * It is measured against the column it FLOATS OVER, which is not always the
+   * active one. The bar is parented to the workspace and parked wherever it was
+   * dragged, so "the pane it applies to" and "the pane it has to fit inside"
+   * are two different panes as soon as someone works in the right-hand book
+   * with the bar still resting on the left. Sizing it against the active pane
+   * let a bar sitting on a 312px column keep the size it was given for an 856px
+   * one, which is the whole point of fitting it.
+   *
+   * The boundary is computed from `fractions` rather than measured, because on
+   * a divider drag the model leads the DOM by a frame and the bar should track
+   * the drag, not trail it.
+   *
+   * The workspace HEIGHT is the other input, and the one that actually binds on
+   * a tablet held in landscape — a full-size vertical bar is longer than the
+   * space it has to live in.
    */
   _syncToolbarSize(fractions) {
     if (!this.toolbar?.fitTo) return;
@@ -692,14 +775,39 @@ export class PdfWorkspace {
     if (!rect.height) return;
 
     const column = this.state.orientation === ORIENTATIONS.COLUMN;
-    const share = fractions?.[this.activeSlot];
     // In column layout the panes are full width, so width is never the
     // constraint and only the height matters.
-    const width = column || !Number.isFinite(share)
-      ? rect.width
-      : rect.width * share;
+    const width = column ? rect.width : this._toolbarColumnWidth(fractions, rect);
 
     this.toolbar.fitTo({ height: rect.height, column: width });
+  }
+
+  /**
+   * Width of the column the floating toolbar is resting on.
+   *
+   * Falls back to the active pane's share when the bar has no box yet, and to
+   * the whole workspace when there is no usable share — a bar that spans the
+   * boundary is not inside either column, and the full width is the only
+   * honest answer for it.
+   */
+  _toolbarColumnWidth(fractions, rect) {
+    const share = fractions?.[this.activeSlot];
+    const fallback = Number.isFinite(share) ? rect.width * share : rect.width;
+
+    const bar = this.toolbar?.root?.getBoundingClientRect?.();
+    if (!bar || !bar.width) return fallback;
+
+    const left = this.state.swapped ? SLOTS.SECONDARY : SLOTS.PRIMARY;
+    const right = this.state.swapped ? SLOTS.PRIMARY : SLOTS.SECONDARY;
+    const leftShare = fractions?.[left];
+    if (!Number.isFinite(leftShare)) return fallback;
+
+    const boundary = rect.left + rect.width * leftShare;
+    const centre = bar.left + bar.width / 2;
+    const slot = centre <= boundary ? left : right;
+    const slotShare = fractions?.[slot];
+    if (!Number.isFinite(slotShare) || slotShare <= 0) return fallback;
+    return rect.width * slotShare;
   }
 
   _markActive(slot) {
@@ -710,6 +818,9 @@ export class PdfWorkspace {
     // The shared toolbar follows the active pane, so its current tool, colour
     // and width apply to the surface the user is about to draw on.
     this.toolbar?.syncToActiveSurface();
+    // Refit too: with no resize to ride on, changing panes used to leave the
+    // bar at whatever size the previous pane had earned it.
+    this._syncToolbarSize(paneFractions(this.state));
   }
 
   // ── per-slot chrome (toolbar + outline) ───────────────────────────────────

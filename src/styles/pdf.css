@@ -522,18 +522,39 @@
   z-index: 8;
   pointer-events: none;
   transform-style: preserve-3d;
-  /* Hidden rather than drawn. The reverse of the leaf would be the mirror of
-     the page just left — legible, backwards and wrong; passing out of the
-     light is what the eye expects at that angle. */
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
+  /* The back is hidden on the strips, not here: this box no longer rotates, it
+     lifts and tips. The reverse of a leaf would be the mirror of the page just
+     left — legible, backwards and wrong; passing out of the light is what the
+     eye expects at that angle. */
   box-shadow: 0 12px 40px -12px rgba(15, 23, 42, 0.45);
   border-radius: 2px;
-  overflow: hidden;
+  /* Not hidden: a bent sheet has strips standing outside the flat box. */
+  overflow: visible;
   will-change: transform, opacity;
 }
 
 .pdf-page-leaf canvas { display: block; }
+
+/* The sheet is cut into hinged strips so it can bend. Each one hangs off the
+   edge of the one before it, and every strip carries its own shading, so the
+   curve is lit rather than merely bent — a strip turned further from the reader
+   goes darker than its neighbour, which is what reads as paper. */
+.pdf-page-strip {
+  position: absolute;
+  top: 0;
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  will-change: transform;
+}
+
+.pdf-page-strip-shade {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  background: rgba(15, 23, 42, 0.92);
+}
 
 /* The gradient runs from the spine the sheet pivots on, so the fold is where
    the light stops. */

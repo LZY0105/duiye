@@ -454,6 +454,28 @@
 .pdf-ws-slot.is-narrow .pdf-slot-toolbar { gap: var(--space-1); padding-inline: var(--space-1); }
 .pdf-ws-slot.is-narrow .pdf-slot-toolbar .pdf-control-label { display: none; }
 
+/* The two bands above are cut at fixed pixel widths, and a 50:50 split on a
+   landscape tablet lands between them: 584px is neither narrow nor tiny, yet the
+   slot toolbar wants 774px there and the last three controls — 对答案, 专注,
+   关闭 — scroll off the end where nobody looks for them. The answer-lookup
+   button is the point of the app, so it may not be the thing that falls off.
+
+   These two rungs are NOT cut at a width. PdfWorkspace._syncPaneHeaderFit
+   measures the bar against the space it has and adds the next rung only while it
+   still overflows, so the toolbar sheds exactly as much as this pane, this
+   language and this skin actually require, and no more.
+
+   Order matters: words the icons already say go first, then the two readouts
+   whose controls stay behind either way. Nothing that can be pressed is ever
+   hidden — losing a tap target is worse than losing a caption. */
+.pdf-ws-slot.is-snug .pdf-slot-toolbar { gap: 0.2rem; padding-inline: 0.3rem; }
+.pdf-ws-slot.is-snug .pdf-slot-btn-text,
+.pdf-ws-slot.is-snug .pdf-slot-title { display: none; }
+
+.pdf-ws-slot.is-snugger .pdf-slot-zoom,
+.pdf-ws-slot.is-snugger .pdf-slot-total,
+.pdf-ws-slot.is-snugger .pdf-slot-sep { display: none; }
+
 .pdf-ws-slot.is-tiny .pdf-slot-toolbar {
   gap: 2px;
   padding-inline: 2px;
@@ -1251,3 +1273,32 @@
   border-bottom-right-radius: 29px;
 }
 .pdf-empty-card { border-radius: 26px; }
+
+/* ── the legal notice in Settings → 关于 ──────────────────────────────────
+   Quiet by design. It is there to be found and read once, not to compete with
+   the controls above it, so it sits a step down in size and contrast — but it
+   is real text at a real size, not four-point grey, because a notice nobody
+   can read is not a notice. */
+.set-legal { margin-top: 0.9rem; }
+
+.set-legal-name {
+  font-size: 0.86rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin-bottom: 0.35rem;
+}
+
+.set-legal-line {
+  margin: 0 0 0.45rem;
+  font-size: 0.76rem;
+  line-height: 1.55;
+  color: var(--text-secondary, #52606d);
+}
+
+.set-legal-muted { opacity: 0.82; }
+
+.set-legal-line a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}

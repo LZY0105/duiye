@@ -6,7 +6,9 @@
 // tells the reader to do next, and whether a row opens on a double-tap.
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
@@ -18,6 +20,9 @@ import {
 } from '../src/ink/toolbar-state.js';
 import { INPUT_MODES, InkSurface } from '../src/ink/ink-surface.js';
 import { InkToolbar } from '../src/ink/ink-toolbar.js';
+import { PdfWorkspace } from '../src/pdf/pdf-workspace.js';
+import { PdfPane } from '../src/pdf/pdf-pane.js';
+import { SLOTS } from '../src/pdf/workspace-state.js';
 import { renderAnswerNotice } from '../src/pdf/answer-panel.js';
 import { onDoubleTap } from '../src/ui/double-tap.js';
 
@@ -486,17 +491,189 @@ check('the pinch runs on pointer events, not a second touch stream', () => {
 
 check('the page turn animates like a leaf going over', () => {
   const code = $read('src/pdf/pdf-pane.js');
-  assert.ok(/_liftPage/.test(code) && /rotateY/.test(code), 'it turns, rather than sliding');
+  assert.ok(/beginLiveTurn/.test(code) && /rotateY/.test(code), 'it turns, rather than sliding');
   assert.ok(/transformOrigin = next \? 'left center' : 'right center'/.test(code),
     'and pivots on the spine it is moving away from');
   assert.ok(/prefers-reduced-motion/.test(code), 'skipped when motion is not wanted');
   // The snapshot has to be taken before the page changes and played after.
-  assert.ok(/const turning = this\._liftPage\(direction\);[\s\S]{0,120}turning\?\.\(\)/.test(code),
+  assert.ok(/beginLiveTurn\(direction\)[\s\S]{0,200}endLiveTurn\(true\)/.test(code),
     'the sheet that turns away must be the page that was there');
   const css = $read('src/styles/pdf.css');
   assert.ok(/\.pdf-pane-viewport \{ perspective:/.test(css),
     'perspective belongs to the page being turned over, not to the leaf');
-  assert.ok(/\.pdf-page-leaf[\s\S]*backface-visibility: hidden/.test(css));
+  assert.ok(/\.pdf-page-strip \{[\s\S]*?backface-visibility: hidden/.test(css));
+});
+
+// ═══════════════════════════════════════════════════════════════
+group('4b. The sheet follows the hand');
+
+/** A pane with just enough of itself to carry a sheet. */
+function turnablePane({ page = 5, pages = 10 } = {}) {
+  const dom = new JSDOM('<!doctype html><div class="vp"><div class="holder"><canvas></canvas></div></div>');
+  const doc = dom.window.document;
+  const vp = doc.querySelector('.vp');
+  const holder = doc.querySelector('.holder');
+  const canvas = doc.querySelector('canvas');
+  canvas.width = 40; canvas.height = 60;
+  canvas.getContext = () => ({ drawImage() {} });
+  for (const el of [vp, holder]) {
+    el.getBoundingClientRect = () => ({ left: 0, top: 0, width: 300, height: 400 });
+    el.animate = () => ({ addEventListener() {}, cancel() {} });
+  }
+  doc.createElement('canvas').getContext = () => ({ drawImage() {} });
+  const origCreate = doc.createElement.bind(doc);
+  doc.createElement = (tag) => {
+    const el = origCreate(tag);
+    if (tag === 'canvas') el.getContext = () => ({ drawImage() {} });
+    return el;
+  };
+
+  const pane = Object.create(PdfPane.prototype);
+  pane.elViewport = vp;
+  pane.elHolder = holder;
+  pane.page = page;
+  pane.canGoNext = () => pane.page < pages;
+  pane.canGoPrevious = () => pane.page > 1;
+  pane.next = () => { pane.page += 1; };
+  pane.previous = () => { pane.page -= 1; };
+  pane._viewport = () => ({ width: 300, height: 400 });
+
+  const prevDoc = global.document; const prevWin = global.window;
+  global.document = doc;
+  global.window = dom.window;
+  dom.window.matchMedia = () => ({ matches: false });
+  return { pane, vp, doc, restore: () => { global.document = prevDoc; global.window = prevWin; } };
+}
+
+check('the page under the sheet changes the moment it lifts, not when it lands', () => {
+  const t = turnablePane({ page: 5 });
+  try {
+    assert.equal(t.pane.beginLiveTurn('next'), true);
+    assert.equal(t.pane.page, 6,
+      'the destination has to be rendering underneath, or the gap at the spine shows the page being left');
+    assert.equal(t.vp.querySelectorAll('.pdf-page-leaf').length, 1, 'and a sheet is over it');
+  } finally { t.restore(); }
+});
+
+check('the sheet sits wherever the finger left it', () => {
+  const t = turnablePane();
+  try {
+    t.pane.beginLiveTurn('next');
+    const leaf = t.vp.querySelector('.pdf-page-leaf');
+    const firstStrip = () => t.vp.querySelector('.pdf-page-strip').style.transform;
+    t.pane.dragLiveTurn(0.25);
+    const quarter = firstStrip();
+    t.pane.dragLiveTurn(0.75);
+    assert.notEqual(firstStrip(), quarter, 'it tracks, rather than playing');
+    assert.ok(/rotateY\(-[\d.]/.test(firstStrip()), 'a forward turn goes over to the left');
+    assert.ok(Number(leaf.querySelector('.pdf-page-leaf-shade').style.opacity) > 0,
+      'and it is shaded along the fold while it is edge-on');
+  } finally { t.restore(); }
+});
+
+check('the sheet bends: no two strips are at the same angle mid-turn', () => {
+  const t = turnablePane();
+  try {
+    t.pane.beginLiveTurn('next');
+    t.pane.dragLiveTurn(0.5);
+    const strips = [...t.vp.querySelectorAll('.pdf-page-strip')];
+    assert.ok(strips.length > 1, 'the sheet is cut into strips so it can curve');
+    const angles = strips.map((el) => parseFloat((el.style.transform.match(/-?[\d.]+/) || [0])[0]));
+    const spread = Math.max(...angles) - Math.min(...angles);
+    assert.ok(spread > 1, `strips must differ to make a curve, got a spread of ${spread}`);
+  } finally { t.restore(); }
+});
+
+check('it is flat when the page is down and flat again when it lands', () => {
+  const t = turnablePane();
+  try {
+    t.pane.beginLiveTurn('next');
+    const strips = () => [...t.vp.querySelectorAll('.pdf-page-strip')]
+      .map((el) => parseFloat((el.style.transform.match(/-?[\d.]+/) || [0])[0]));
+    const spread = (a) => Math.max(...a) - Math.min(...a);
+    t.pane.dragLiveTurn(0.02);
+    const early = spread(strips());
+    t.pane.dragLiveTurn(0.5);
+    const mid = spread(strips());
+    t.pane.dragLiveTurn(0.99);
+    const late = spread(strips());
+    assert.ok(mid > early && mid > late,
+      `the curl belongs in the middle of the turn: ${early} / ${mid} / ${late}`);
+  } finally { t.restore(); }
+});
+
+check('the sheet lifts and leans rather than swinging on a hinge', () => {
+  const t = turnablePane();
+  try {
+    t.pane.beginLiveTurn('next');
+    t.pane.dragLiveTurn(0.5);
+    const tf = t.vp.querySelector('.pdf-page-leaf').style.transform;
+    assert.ok(/translateZ\([\d.]+px\)/.test(tf), 'it comes up out of the gutter');
+    assert.ok(/rotateX\(-?[\d.]+deg\)/.test(tf) && /rotateZ\(-?[\d.]+deg\)/.test(tf),
+      'and tips and twists as it goes');
+  } finally { t.restore(); }
+});
+
+check('the strips are shaded by how far each has turned away', () => {
+  const t = turnablePane();
+  try {
+    t.pane.beginLiveTurn('next');
+    t.pane.dragLiveTurn(0.45);
+    const shades = [...t.vp.querySelectorAll('.pdf-page-strip-shade')]
+      .map((el) => Number(el.style.opacity));
+    assert.ok(shades.some((o) => o > 0), 'a curve has to be lit to read as one');
+    assert.ok(new Set(shades).size > 1, 'and lit unevenly, or it is a flat board again');
+  } finally { t.restore(); }
+});
+
+check('a drag beyond the ends of the book picks nothing up', () => {
+  const first = turnablePane({ page: 1 });
+  try { assert.equal(first.pane.beginLiveTurn('prev'), false); } finally { first.restore(); }
+  const last = turnablePane({ page: 10, pages: 10 });
+  try { assert.equal(last.pane.beginLiveTurn('next'), false); } finally { last.restore(); }
+});
+
+check('letting go short of halfway puts the page back', () => {
+  const t = turnablePane({ page: 5 });
+  try {
+    t.pane.beginLiveTurn('next');
+    t.pane.dragLiveTurn(0.2);
+    t.pane.endLiveTurn(false);
+    assert.equal(t.pane.page, 5, 'an abandoned turn leaves the reader where they were');
+  } finally { t.restore(); }
+});
+
+check('letting go past halfway keeps it', () => {
+  const t = turnablePane({ page: 5 });
+  try {
+    t.pane.beginLiveTurn('next');
+    t.pane.dragLiveTurn(0.8);
+    t.pane.endLiveTurn(true);
+    assert.equal(t.pane.page, 6);
+  } finally { t.restore(); }
+});
+
+check('the reader is never left looking at a photograph of the old page', () => {
+  const t = turnablePane({ page: 5 });
+  try {
+    t.pane.beginLiveTurn('next');
+    t.pane.dragLiveTurn(0.5);
+    t.pane.endLiveTurn(true);
+    assert.equal(t.pane.isTurning, false, 'the turn is over');
+  } finally { t.restore(); }
+});
+
+check('a second finger lays the sheet back down', () => {
+  const src = $code('src/pdf/pdf-pane.js');
+  const begin = src.slice(src.indexOf('const beginPinch'), src.indexOf('vp.addEventListener'));
+  assert.ok(/endLiveTurn\(false\)/.test(begin),
+    'a gesture that becomes a pinch must not leave a page half over');
+});
+
+check('the pen still never turns a page', () => {
+  const src = $code('src/pdf/pdf-pane.js');
+  assert.ok(/pointerType === 'pen'\) return;/.test(src),
+    'ink belongs to the pen; the page must not move under a stroke');
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -553,6 +730,140 @@ check('it never shrinks past what a finger can hit', () => {
   const bar = sizedBar(583);
   bar.fitTo({ height: 120, column: 40 });
   assert.ok(bar.scale() >= 0.72, 'below 32px the honest answer is fewer tools, not smaller ones');
+});
+
+// The acceptance run on the tablet found the bar sized against the wrong pane:
+// it floated over a 312px column while the 856px one was active, and kept the
+// size the wide pane had earned it.
+function workspaceOver(barLeft, barWidth, { swapped = false, active = SLOTS.PRIMARY } = {}) {
+  const ws = Object.create(PdfWorkspace.prototype);
+  ws.activeSlot = active;
+  ws.state = { swapped };
+  ws.toolbar = { root: { getBoundingClientRect: () => ({ left: barLeft, width: barWidth }) } };
+  return ws;
+}
+const ROOT_RECT = { left: 0, width: 1200 };
+
+check('the bar is measured against the column it floats over, not the active one', () => {
+  // Left column a quarter of the workspace, right one three quarters, and the
+  // wide one active — the situation the tablet run reproduced.
+  const fractions = { [SLOTS.PRIMARY]: 0.26, [SLOTS.SECONDARY]: 0.74 };
+  const ws = workspaceOver(10, 50, { active: SLOTS.SECONDARY });
+  assert.equal(
+    Math.round(ws._toolbarColumnWidth(fractions, ROOT_RECT)),
+    Math.round(1200 * 0.26),
+    'a bar resting on the narrow column is sized by the narrow column',
+  );
+});
+
+check('swapping the panes does not swap which column the bar is measured by', () => {
+  const fractions = { [SLOTS.PRIMARY]: 0.26, [SLOTS.SECONDARY]: 0.74 };
+  // Swapped, so the SECONDARY slot is the one drawn on the left.
+  const ws = workspaceOver(10, 50, { swapped: true, active: SLOTS.PRIMARY });
+  assert.equal(
+    Math.round(ws._toolbarColumnWidth(fractions, ROOT_RECT)),
+    Math.round(1200 * 0.74),
+    'the left-hand column is whichever slot is drawn there',
+  );
+});
+
+check('a bar with no box yet falls back to the active pane', () => {
+  const fractions = { [SLOTS.PRIMARY]: 0.3, [SLOTS.SECONDARY]: 0.7 };
+  const ws = workspaceOver(0, 0, { active: SLOTS.SECONDARY });
+  assert.equal(Math.round(ws._toolbarColumnWidth(fractions, ROOT_RECT)), Math.round(1200 * 0.7));
+});
+
+check('changing the active pane refits the bar, with no resize to ride on', () => {
+  const src = $code('src/pdf/pdf-workspace.js');
+  const body = src.slice(src.indexOf('_markActive(slot) {'));
+  assert.ok(/_syncToolbarSize/.test(body.slice(0, 400)),
+    'activation must refit, or the bar keeps the size the other pane earned it');
+});
+
+check('moving the bar refits it, because a move can change its column', () => {
+  const src = $code('src/pdf/pdf-workspace.js');
+  assert.ok(/onChange:\s*\(\)\s*=>\s*this\._syncToolbarSize/.test(src),
+    'the toolbar reports its own moves; the workspace has to listen');
+});
+
+// ═══════════════════════════════════════════════════════════════
+group('6. The slot toolbar sheds chrome until it fits');
+
+/** A slot whose toolbar reports a width that shrinks as rungs are applied. */
+function slotWithHeader(have, needs) {
+  const classes = new Set();
+  const el = {
+    classList: {
+      contains: (c) => classes.has(c),
+      add: (c) => classes.add(c),
+      remove: (c) => classes.delete(c),
+    },
+    querySelector: () => bar,
+  };
+  const bar = {
+    get clientWidth() { return have; },
+    // needs[n] is what the bar wants with n rungs applied.
+    get scrollWidth() {
+      const n = ['is-snug', 'is-snugger'].filter((c) => classes.has(c)).length;
+      return Math.max(needs[n], have);
+    },
+  };
+  return { el, classes };
+}
+
+function fitHeader(slot, passes = 4) {
+  const ws = Object.create(PdfWorkspace.prototype);
+  ws._headerWanted = {};
+  ws.elSlots = { [SLOTS.PRIMARY]: slot.el, [SLOTS.SECONDARY]: null };
+  for (let i = 0; i < passes; i++) ws._syncPaneHeaderFit();
+  return ws;
+}
+
+check('a 50:50 pane sheds enough that the answer button stops scrolling away', () => {
+  // Measured on the tablet: 774 natural, 651 with captions gone and the spacing
+  // tightened, 561 once the two readouts go. A 50:50 column is 584.
+  const slot = slotWithHeader(584, [774, 651, 561]);
+  fitHeader(slot);
+  assert.ok(slot.classes.has('is-snug') && slot.classes.has('is-snugger'),
+    'both rungs are needed at 584 — the first alone still wants 651');
+});
+
+check('it stops at the first rung that fits, rather than stripping everything', () => {
+  const slot = slotWithHeader(700, [774, 651, 561]);
+  fitHeader(slot);
+  assert.ok(slot.classes.has('is-snug'), 'one rung is needed at 700');
+  assert.ok(!slot.classes.has('is-snugger'), 'and one is enough, so the readouts stay');
+});
+
+check('a pane with room keeps all of its chrome', () => {
+  const slot = slotWithHeader(900, [774, 651, 561]);
+  fitHeader(slot);
+  assert.equal(slot.classes.size, 0, 'nothing is hidden from a bar that fits');
+});
+
+check('widening a pane puts back what narrowing it took away', () => {
+  const slot = slotWithHeader(584, [774, 651, 561]);
+  const ws = fitHeader(slot);
+  assert.ok(slot.classes.has('is-snugger'), 'narrow first');
+
+  // Now give it the room back. The margin matters: coming back at exactly the
+  // width it left at would sit on the boundary and flicker.
+  ws.elSlots[SLOTS.PRIMARY] = slot.el;
+  const wide = { ...slot };
+  let have = 900;
+  Object.defineProperty(slot.el.querySelector(), 'clientWidth', { get: () => have, configurable: true });
+  for (let i = 0; i < 6; i++) ws._syncPaneHeaderFit();
+  assert.equal(slot.classes.size, 0, 'everything comes back once there is room for it');
+  void wide;
+});
+
+check('no rung ever hides something you can press', () => {
+  const css = $read('src/styles/material.css');
+  const from = css.indexOf('.pdf-ws-slot.is-snug');
+  const block = css.slice(from, css.indexOf('.pdf-ws-slot', css.indexOf('is-snugger') + 40));
+  assert.ok(!/data-role="(answers|focus|close|outline|prev|next|zoom-in|zoom-out)"/.test(block),
+    'captions and readouts may go; tap targets may not');
+  assert.ok(/is-snug \.pdf-slot-btn-text/.test(block), 'the captions are what goes first');
 });
 
 check('every size on the bar goes through the one multiplier', () => {
@@ -657,6 +968,58 @@ check('the library row is wired to it, and looks pressable', () => {
   const rule = css.match(/\.pdf-library-row\s*\{[^}]*cursor:\s*pointer[^}]*\}/);
   assert.ok(rule, 'a row that opens has to look like it can be pressed');
   assert.ok(/user-select:\s*none/.test(rule[0]), 'or the second tap selects the name instead');
+});
+
+// ═══════════════════════════════════════════════════════════════
+group('7. What the launcher shows, and what the licence obliges');
+
+check('the launcher says what the app is called', () => {
+  const xml = $read('android/app/src/main/res/values/strings.xml');
+  assert.ok(/<string name="app_name">对页<\/string>/.test(xml),
+    'the home screen said LaTeXSnipper while every screen inside said 对页');
+  assert.ok(/<string name="title_activity_main">对页<\/string>/.test(xml));
+});
+
+check('every density has a launcher icon, and none of them is a placeholder', () => {
+  const { statSync } = require('node:fs');
+  for (const d of ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi', 'xxxhdpi']) {
+    for (const f of ['ic_launcher.png', 'ic_launcher_round.png', 'ic_launcher_foreground.png']) {
+      const p = join(ROOT, 'android/app/src/main/res/mipmap-' + d, f);
+      assert.ok(statSync(p).size > 400, `${d}/${f} is too small to be a real icon`);
+    }
+  }
+});
+
+check('the adaptive icon stands on the icon gradient, not a white card', () => {
+  for (const f of ['ic_launcher.xml', 'ic_launcher_round.xml']) {
+    const xml = $read('android/app/src/main/res/mipmap-anydpi-v26/' + f);
+    assert.ok(/@drawable\/ic_launcher_bg/.test(xml), `${f} still points at the old background`);
+  }
+  const bg = $read('android/app/src/main/res/drawable/ic_launcher_bg.xml');
+  assert.ok(/#2F74FF/i.test(bg) && /#0A4FDC/i.test(bg),
+    'the launcher ground is the same gradient as public/icon.svg');
+});
+
+check('the app tells the person holding it what it is licensed under', () => {
+  const html = $read('index.html');
+  assert.ok(/AGPL-3\.0/.test(html), 'AGPL-3.0 obliges the build to say so where it can be read');
+  assert.ok(/LaTeXSnipper_mobile/.test(html), 'and to credit the work it derives from');
+  assert.ok(/Math-answer-to-question-matching-model/.test(html), 'and the engine it vendors');
+});
+
+check('the version in the notice comes from the build, not a literal', () => {
+  const js = $code('src/settings/settings.js');
+  assert.ok(/__APP_VERSION__/.test(js),
+    'a notice that names the wrong version is worse than one that names none');
+  assert.ok(/aboutVersion/.test($read('index.html')));
+});
+
+check('the notices file no longer credits what was deleted', () => {
+  const md = $read('THIRD_PARTY_NOTICES.md');
+  const sections = md.split('\n').filter((l) => l.startsWith('## '));
+  assert.ok(!sections.some((l) => /llama\.cpp|ONNX/i.test(l)),
+    'crediting a dependency the build does not have is its own kind of wrong');
+  assert.ok(/LaTeXSnipper Mobile base/.test(md), 'the base project is still credited');
 });
 
 console.log('\n═══════════════════════════════════════════════════════════════');

@@ -31,6 +31,33 @@ import Logger from '../core/logger.js';
 const SWIPE_DISTANCE = 64;
 const SWIPE_MAX_MS = 600;
 
+/** How far a finger travels before the sheet comes up under it. */
+const TURN_GRAB = 10;
+
+/** How far across the page a slow drag must get before the turn stands. */
+const TURN_COMMIT = 0.5;
+
+/** How far over the sheet goes at the end of a turn. */
+const TURN_ANGLE = 170;
+
+/**
+ * How many hinged strips the sheet is cut into.
+ *
+ * A page does not pivot on a hinge, it bends. One plane rotating about the
+ * spine is a board, and it reads as one. Eight strips, each hinged on the last,
+ * is enough to see a curve and few enough to transform on every frame.
+ */
+const TURN_STRIPS = 8;
+
+/** Degrees of extra spread between spine and free edge at the height of the curl. */
+const TURN_BEND = 30;
+
+/** How far the sheet lifts off the page, in px, at the height of the curl. */
+const TURN_LIFT = 14;
+
+/** Where the sheet starts fading, since its back is never drawn. */
+const TURN_FADE_FROM = 0.72;
+
 export class PdfPane {
   /**
    * @param {HTMLElement} root element this pane renders into
@@ -157,7 +184,11 @@ export class PdfPane {
     const beginPinch = () => {
       const c = centre();
       pinch = { d: c.d || 1, x: c.x, y: c.y, zoom: this.state.zoom };
-      swipe = null;                       // the finger that was swiping is now half a pinch
+      // The finger that was swiping is now half a pinch. If it had already
+      // picked a sheet up, lay it back down — the gesture has become a zoom,
+      // and a page half-turned by a pinch is nobody's intention.
+      if (swipe?.turning) this.endLiveTurn(false);
+      swipe = null;
       vp.classList.remove('is-panning');
     };
 
@@ -193,6 +224,35 @@ export class PdfPane {
       if (e.pointerType === 'touch') {
         if (!touches.has(e.pointerId)) return;
         touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+        // One finger, moving sideways: the page comes up under it and stays
+        // with it. The turn is not a thing that plays after the gesture, it IS
+        // the gesture — let go halfway and the sheet is halfway over.
+        if (touches.size === 1 && swipe && swipe.id === e.pointerId) {
+          const dx = e.clientX - swipe.x;
+          const dy = e.clientY - swipe.y;
+          if (!swipe.turning) {
+            // Wait until the hand has said which way it is going. A finger that
+            // has moved further down than across is not turning a page.
+            if (Math.abs(dx) >= TURN_GRAB && Math.abs(dx) > Math.abs(dy)) {
+              const direction = dx < 0 ? 'next' : 'prev';
+              if (this.beginLiveTurn(direction)) {
+                swipe.turning = direction;
+                // Where the finger was when the sheet came up, so the page does
+                // not jump the first ten pixels into the reader's hand.
+                swipe.from = e.clientX;
+                swipe.span = Math.max(1, this._viewport().width * 0.6);
+              }
+            }
+          }
+          if (swipe.turning) {
+            e.preventDefault();
+            const travelled = (e.clientX - swipe.from) * (swipe.turning === 'next' ? -1 : 1);
+            this.dragLiveTurn(travelled / swipe.span);
+            return;
+          }
+        }
+
         if (touches.size !== 2 || !pinch) return;
 
         e.preventDefault();
@@ -249,6 +309,28 @@ export class PdfPane {
       if (touches.size < 2) pinch = null;
       if (!from) return;
       swipe = null;
+
+      // A sheet already in the air: the finger has been carrying it, so the
+      // only question left is whether it goes over or comes back.
+      if (from.turning) {
+        if (e.type !== 'pointerup') { this.endLiveTurn(false); return; }
+        const dx = e.clientX - from.x;
+        const dt = (e.timeStamp || performance.now()) - from.at;
+        // Either it was carried most of the way, or it was thrown — a flick
+        // should not have to cross half the page to count.
+        const carried = this._live ? this._live.progress >= TURN_COMMIT : false;
+        const flicked = Math.abs(dx) >= SWIPE_DISTANCE && dt <= SWIPE_MAX_MS;
+        try {
+          this.endLiveTurn(carried || flicked);
+        } catch (_) {
+          // A turn that fails must not leave a photograph of the old page lying
+          // over the live one.
+          this._live = null;
+          vp.querySelectorAll('.pdf-page-leaf').forEach((n) => n.remove());
+        }
+        return;
+      }
+
       if (e.type !== 'pointerup') return;
       try { maybeTurnPage(from, e); } catch (_) { /* a failed turn is not fatal */ }
     };
@@ -289,54 +371,25 @@ export class PdfPane {
    * rather than a re-render of it.
    */
   turnPage(direction) {
-    const turning = this._liftPage(direction);
+    // The same sheet the finger carries, released at once. A page turned from
+    // the button has no reason to bend differently from one turned by hand.
+    if (this.beginLiveTurn(direction)) {
+      this.endLiveTurn(true);
+      return;
+    }
+    // No sheet to lift — reduced motion, a page not yet drawn, or the end of
+    // the book. The page still turns; it just does not perform.
     if (direction === 'next') this.next(); else this.previous();
-    turning?.();
   }
 
   /**
-   * Lifts the current sheet so the next one can be revealed under it.
+   * Photographs the sheet on screen and parks it over the viewport.
    *
-   * Returns a function that plays the turn, or null when there is nothing to
-   * animate. The split matters: the snapshot has to be taken BEFORE the page
-   * state changes, and the turn has to start AFTER the new page has begun
-   * rendering underneath, or the reader watches a page turn over to reveal
-   * the page it just left.
-   *
-   * What turns is a photograph of the canvas, not the canvas itself. Rotating
-   * the live one would rotate the ink layer and the PDF layer separately, and
-   * anything rendered mid-turn would land on a sheet that is edge-on.
-   *
-   * The back of the sheet is hidden rather than drawn. A real book shows the
-   * reverse of the leaf, which here would be the mirror image of the page just
-   * left — legible, backwards, and wrong. Hiding it reads as the sheet passing
-   * out of the light, which is what the eye expects at that angle anyway.
+   * Shared by the two ways a page turns: the canned animation a button fires,
+   * and the one a finger drags. Both need the same thing — the page that is on
+   * screen now, frozen, sitting exactly where it was.
    */
-  _liftPage(direction) {
-    const holder = this.elHolder;
-    const vp = this.elViewport;
-    if (!holder || !vp || typeof holder.animate !== 'function') return null;
-    try {
-      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return null;
-    } catch (_) { /* no matchMedia: animate */ }
-
-    const source = holder.querySelector('canvas');
-    if (!source || !source.width || !source.height) return null;
-
-    const rect = holder.getBoundingClientRect();
-    const box = vp.getBoundingClientRect();
-    if (!rect.width || !rect.height) return null;
-
-    let sheet;
-    try {
-      sheet = document.createElement('canvas');
-      sheet.width = source.width;
-      sheet.height = source.height;
-      sheet.getContext('2d').drawImage(source, 0, 0);
-    } catch (_) {
-      return null;                          // a tainted or zero-sized canvas
-    }
-
+  _makeLeaf(direction, vp, source, rect, box) {
     const leaf = document.createElement('div');
     leaf.className = 'pdf-page-leaf';
     leaf.dataset.direction = direction;
@@ -344,51 +397,221 @@ export class PdfPane {
     leaf.style.top = `${rect.top - box.top}px`;
     leaf.style.width = `${rect.width}px`;
     leaf.style.height = `${rect.height}px`;
-    sheet.style.width = '100%';
-    sheet.style.height = '100%';
-    leaf.appendChild(sheet);
 
-    // The shading that sells it: the leaf darkens along the spine as it lifts.
+    const next = direction === 'next';
+    const stripW = rect.width / TURN_STRIPS;
+    const srcW = source.width / TURN_STRIPS;
+    const strips = [];
+
+    // Each strip hangs off the one before it, hinged at the edge they share, so
+    // rotating them in turn bends the sheet instead of tilting it.
+    let parent = leaf;
+    for (let i = 0; i < TURN_STRIPS; i += 1) {
+      const strip = document.createElement('div');
+      strip.className = 'pdf-page-strip';
+      // The first strip sits on the spine; every later one starts at its
+      // parent's far edge. Half a pixel of overlap keeps the seams from
+      // showing as hairlines when the sheet is edge-on.
+      strip.style.width = `${stripW + 0.5}px`;
+      strip.style.height = '100%';
+      strip.style.transformOrigin = next ? 'left center' : 'right center';
+      if (i > 0) strip.style[next ? 'left' : 'right'] = `${stripW}px`;
+
+      let slice;
+      try {
+        slice = document.createElement('canvas');
+        slice.width = Math.max(1, Math.round(srcW));
+        slice.height = source.height;
+        slice.getContext('2d').drawImage(
+          source,
+          Math.round((next ? i : TURN_STRIPS - 1 - i) * srcW), 0,
+          Math.max(1, Math.round(srcW)), source.height,
+          0, 0, slice.width, slice.height,
+        );
+      } catch (_) {
+        leaf.remove();
+        return null;                        // a tainted or zero-sized canvas
+      }
+      slice.style.width = '100%';
+      slice.style.height = '100%';
+      strip.appendChild(slice);
+
+      // Its own shading, so the curve is lit rather than merely drawn: a strip
+      // turned further from the reader takes more shadow than its neighbour.
+      const face = document.createElement('div');
+      face.className = 'pdf-page-strip-shade';
+      strip.appendChild(face);
+
+      parent.appendChild(strip);
+      strips.push({ strip, face });
+      parent = strip;
+    }
+
+    // The shading that sells the fold: the leaf darkens along the spine.
     const shade = document.createElement('div');
     shade.className = 'pdf-page-leaf-shade';
     leaf.appendChild(shade);
 
     vp.appendChild(leaf);
-
-    return () => {
-      // Forward turns about the LEFT edge, back turns about the right, so the
-      // sheet always pivots on the spine the reader is moving away from.
-      const next = direction === 'next';
-      leaf.style.transformOrigin = next ? 'left center' : 'right center';
-      const to = next ? -170 : 170;
-
-      const turn = leaf.animate(
-        [
-          { transform: 'rotateY(0deg)', opacity: 1, offset: 0 },
-          { transform: `rotateY(${to * 0.55}deg)`, opacity: 1, offset: 0.55 },
-          { transform: `rotateY(${to}deg)`, opacity: 0, offset: 1 },
-        ],
-        { duration: 420, easing: 'cubic-bezier(0.4, 0.05, 0.25, 1)', fill: 'forwards' },
-      );
-      shade.animate(
-        [{ opacity: 0 }, { opacity: 0.42, offset: 0.5 }, { opacity: 0 }],
-        { duration: 420, easing: 'ease-in-out' },
-      );
-      // The page arriving underneath comes up to meet it.
-      holder.animate(
-        [{ opacity: 0.55, transform: 'scale(0.985)' }, { opacity: 1, transform: 'none' }],
-        { duration: 300, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' },
-      );
-
-      const done = () => leaf.remove();
-      turn.addEventListener('finish', done);
-      turn.addEventListener('cancel', done);
-      // A belt-and-braces removal: an animation that never fires either event
-      // — a backgrounded tab, a cancelled composite — must not leave a dead
-      // page lying over the live one.
-      setTimeout(done, 900);
-    };
+    return { leaf, shade, strips };
   }
+
+  /**
+   * Puts the sheet where a turn of `p` (0..1) leaves it.
+   *
+   * The whole angle is shared out across the strips, but not evenly: a cosine
+   * term takes degrees from the strips near the spine and gives them to the ones
+   * near the free edge, which is what makes the sheet bow. It sums to zero, so
+   * the sheet still arrives at exactly the angle it was asked for.
+   *
+   * The bow itself rises and falls with sin(pi*p) — flat when the page is down,
+   * deepest as it passes edge-on, flat again as it lands. So does the lift off
+   * the page and the twist, which together stop the turn reading as a hinge.
+   */
+  _paintTurn(live, p) {
+    const { leaf, shade, strips, direction } = live;
+    const next = direction === 'next';
+    const sign = next ? -1 : 1;
+    const swell = Math.sin(Math.PI * p);
+
+    const total = TURN_ANGLE * p;
+    const bend = TURN_BEND * swell;
+    let cumulative = 0;
+
+    for (let i = 0; i < strips.length; i += 1) {
+      // cos over the strips averages to zero, so this redistributes the angle
+      // without changing where the sheet ends up.
+      const share = total / strips.length
+        + bend * Math.cos((Math.PI * (i + 0.5)) / strips.length) / strips.length * 2;
+      cumulative += share;
+      strips[i].strip.style.transform = `rotateY(${sign * share}deg)`;
+      // Light falls off as a strip turns away; near edge-on it is almost gone.
+      const lit = Math.abs(Math.sin((cumulative * Math.PI) / 180));
+      strips[i].face.style.opacity = String(Math.min(0.82, lit * 0.78));
+    }
+
+    // The sheet lifts, tips and twists as a whole — a page comes up out of the
+    // gutter and leans, it does not swing on a door hinge.
+    leaf.style.transform =
+      `translateZ(${TURN_LIFT * swell}px) rotateX(${-2.4 * swell}deg) rotateZ(${sign * -1.5 * swell}deg)`;
+    shade.style.opacity = String(0.42 * swell);
+    // Its back is never drawn, so it goes out before the reverse would show.
+    leaf.style.opacity = p <= TURN_FADE_FROM
+      ? '1'
+      : String(Math.max(0, 1 - (p - TURN_FADE_FROM) / (1 - TURN_FADE_FROM)));
+  }
+
+  /**
+   * Starts a turn that the finger carries.
+   *
+   * The page underneath changes AT ONCE, while the leaf still lies flat over the
+   * viewport at zero degrees. The reader cannot see it happen — they are looking
+   * at the photograph — and it means the sliver opening at the spine shows the
+   * page being turned TO, instead of a second copy of the one being left. A drag
+   * that is abandoned puts the page back the same way, under a leaf on its way
+   * back down.
+   *
+   * @returns {boolean} whether a live turn is now running.
+   */
+  beginLiveTurn(direction) {
+    if (this._live) return true;
+    if (direction === 'next' ? !this.canGoNext() : !this.canGoPrevious()) return false;
+
+    const holder = this.elHolder;
+    const vp = this.elViewport;
+    if (!holder || !vp || typeof holder.animate !== 'function') return false;
+    try {
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return false;
+    } catch (_) { /* no matchMedia: animate */ }
+
+    const source = holder.querySelector('canvas');
+    if (!source || !source.width || !source.height) return false;
+
+    const rect = holder.getBoundingClientRect();
+    const box = vp.getBoundingClientRect();
+    if (!rect.width || !rect.height) return false;
+
+    const made = this._makeLeaf(direction, vp, source, rect, box);
+    if (!made) return false;
+
+    this._live = { ...made, direction, holder, width: rect.width || 1, progress: 0 };
+    this._paintTurn(this._live, 0);
+    if (direction === 'next') this.next(); else this.previous();
+    return true;
+  }
+
+  /** Holds the sheet wherever the finger has carried it, 0..1. */
+  dragLiveTurn(progress) {
+    const live = this._live;
+    if (!live) return;
+    const p = Math.max(0, Math.min(1, progress));
+    live.progress = p;
+    this._paintTurn(live, p);
+  }
+
+  /**
+   * Lets go of the sheet: over the rest of the way, or back down flat and the
+   * page put back as it was.
+   *
+   * Animated frame by frame rather than handed to the compositor, because the
+   * strips have to keep bending on the way out. A single keyframed transform
+   * would stiffen the sheet into a board again for the last part of the turn,
+   * which is the half the reader is actually watching.
+   */
+  endLiveTurn(commit) {
+    const live = this._live;
+    if (!live) return;
+    this._live = null;
+    const { leaf, holder, direction, progress } = live;
+
+    if (!commit) {
+      // Put the page back BEFORE the sheet moves, so the swap happens behind a
+      // leaf that is still covering it.
+      if (direction === 'next') this.previous(); else this.next();
+    }
+
+    const to = commit ? 1 : 0;
+    const from = progress;
+    // What is left of the journey, at the pace the whole of it would have gone.
+    const duration = Math.max(140, Math.round(460 * Math.abs(to - from)));
+    let raf = 0;
+    const drop = () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+      leaf.remove();
+    };
+
+    if (commit) {
+      try {
+        // The page arriving underneath comes up to meet it.
+        holder.animate?.(
+          [{ opacity: 0.72, transform: 'scale(0.99)' }, { opacity: 1, transform: 'none' }],
+          { duration: Math.min(300, duration), easing: 'cubic-bezier(0.32, 0.72, 0, 1)' },
+        );
+      } catch (_) { /* no WAAPI: the page simply appears */ }
+    }
+
+    const started = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const step = () => {
+      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      const t = Math.min(1, (now - started) / duration);
+      // Eased out: a released page falls quickly and settles, it does not coast.
+      const eased = 1 - Math.pow(1 - t, 3);
+      this._paintTurn(live, from + (to - from) * eased);
+      if (t < 1) { raf = requestAnimationFrame(step); return; }
+      drop();
+    };
+
+    if (typeof requestAnimationFrame === 'function') raf = requestAnimationFrame(step);
+    else drop();
+
+    // A leaf left lying over the live page is worse than a turn that does not
+    // animate, so it comes off on a timer no matter what the frames do.
+    setTimeout(drop, duration + 500);
+  }
+
+  /** Is a finger currently carrying a sheet? */
+  get isTurning() { return !!this._live; }
 
   /**
    * Commits a new state.

@@ -21,6 +21,24 @@ export function initSettings() {
   initLanguage();
   initDevTools();
   initUpdates();
+  initAbout();
+}
+
+// ── the legal notice ────────────────────────────────────────────────────────
+
+/**
+ * Stamps the running version into the notice in Settings → 关于.
+ *
+ * The number is written into the bundle by vite from package.json, so the line
+ * a user reads and the build they are holding cannot drift apart — which for a
+ * notice about licence terms is the whole point of having it.
+ */
+function initAbout() {
+  const el = document.getElementById('aboutVersion');
+  if (!el) return;
+  try {
+    if (typeof __APP_VERSION__ === 'string') el.textContent = __APP_VERSION__;
+  } catch (_) { /* not built by vite: leave the markup's fallback */ }
 }
 
 // ── appearance ──────────────────────────────────────────────────────────────
