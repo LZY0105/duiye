@@ -130,7 +130,6 @@ jobs:
 
       - name: Verify APK
         run: |
-          # With ABI splits, APK names contain architecture
           APK_DIR="android/app/build/outputs/apk/release"
           echo "=== APK files ==="
           ls -lh "$APK_DIR"/

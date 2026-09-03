@@ -8,11 +8,14 @@ buildscript {
     }
     dependencies {
         classpath 'com.android.tools.build:gradle:8.13.0'
-        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.3.0'
         classpath 'com.google.gms:google-services:4.4.4'
 
-        // NOTE: Do not place your application dependencies here; they belong
-        // in the individual module build.gradle files
+        // No Kotlin plugin here. It was pinned at 2.3.0 for :llama-runtime,
+        // whose wrapper was the only Kotlin source this project ever had. The
+        // one module still compiling Kotlin is @capacitor/filesystem, which
+        // declares the version it is written against in its own buildscript;
+        // with no root pin to override it, it gets that one. 2.3.0 builds it
+        // too — this is dead configuration being removed, not a fix.
     }
 }
 

@@ -1,47 +1,18 @@
 package com.latexsnipper.app;
 
-import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
-import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
-import com.latexsnipper.app.ocr.NativeOcrBridge;
 
+/**
+ * The app is the Capacitor WebView and nothing else.
+ *
+ * It used to also install a NativeOcr JavaScript interface backed by an
+ * on-device recognition stack. That stack is gone, and with it the only reason
+ * this class was ever more than a declaration: the bridge was injected on a
+ * retry loop because it had to exist before the web app booted.
+ *
+ * The web side still calls window.NativeOcr.addLog when it is there — see
+ * src/core/logger.js — and every one of those calls is guarded, so with no
+ * bridge to find they are no-ops rather than errors.
+ */
 public class MainActivity extends BridgeActivity {
-
-    private NativeOcrBridge ocrBridge;
-    private boolean injected = false;
-
-    @Override
-    public void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        ocrBridge = new NativeOcrBridge(this);
-    }
-
-    @Override
-    public void onResume() {
-        super.onResume();
-        injectBridge();
-    }
-
-    /**
-     * Retry injecting the native bridge into WebView up to 10 times (5 seconds).
-     * The bridge must be injected BEFORE the JS boot() function runs.
-     */
-    private void injectBridge() {
-        if (injected) return;
-        try {
-            WebView wv = bridge.getWebView();
-            if (wv != null) {
-                wv.addJavascriptInterface(ocrBridge, "NativeOcr");
-                injected = true;
-                android.util.Log.d("MainActivity", "NativeOcr bridge injected (sync)");
-                return;
-            }
-        } catch (Exception e) {
-            android.util.Log.e("MainActivity", "Inject failed, will retry", e);
-        }
-        // WebView not ready yet — retry in 100ms
-        new Handler(Looper.getMainLooper()).postDelayed(this::injectBridge, 100);
-    }
 }

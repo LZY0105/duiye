@@ -3,7 +3,6 @@
 # Built application files
 *.apk
 *.aar
-!app/libs/onnxruntime-genai-android-0.6.0.aar
 *.ap_
 *.aab
 

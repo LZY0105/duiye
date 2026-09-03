@@ -94,24 +94,18 @@ npm test
 
 真实教材语料（`corpus/`）属于受版权保护的教材文本，**不随仓库分发**；缺少语料时相关测试会自动跳过，`npm test` 仍然通过。若要跑全量回归，将语料放在 `corpus/data.json`，或用 `FIND_ENGINE_CORPUS` 指向它。
 
-Android 构建需要 JDK 21、Android SDK 36。先检查依赖是否齐备：
+Android 构建需要 JDK 21、Android SDK 36。全新 clone 即可直接构建，无需子模块、
+无需手工放置任何二进制依赖：
 
 ```bash
-bash scripts/bootstrap-android.sh   # 初始化子模块，并列出仍然缺少的二进制依赖
 npm run build:android
 cd android && ./gradlew assembleDebug
 ```
 
-全新 clone **无法直接构建**：Gradle 工程引用了两个不在仓库里的依赖。
-
-| 依赖 | 位置 | 说明 |
-|---|---|---|
-| `llama.cpp` 子模块 | `android/third_party/llama.cpp` | 上面的脚本会自动初始化 |
-| `onnxruntime-genai-android-0.6.0.aar` | `android/app/libs/` | 需自行获取，脚本会给出校验用的 sha256 |
-
-两者都属于已经移除的识别（OCR）功能栈；本版本的 Web 端不含 OCR，把它们从
-Gradle 工程中删除即可同时消除这两项前置条件并大幅缩小 APK。该改动尚未进行，
-因为无法在不实际执行 Android 构建的情况下验证。
+Gradle 工程曾引用两项仓库里没有的依赖（`llama.cpp` 子模块与
+`onnxruntime-genai-android-0.6.0.aar`），因此旧版本的全新 clone 无法构建。二者
+都属于已经移除的识别（OCR）功能栈，Web 端并不使用，现已连同 `app/ocr` 下的
+Java 实现一并删除。
 
 ## 许可证
 

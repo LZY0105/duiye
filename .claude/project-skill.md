@@ -85,22 +85,7 @@ LaTeXSnipper_mobile/
 │       └── mobile.css         # 移动端适配
 ├── android/                   # Capacitor Android 项目
 │   └── app/src/main/java/com/latexsnipper/app/
-│       ├── MainActivity.java  # 入口 + NativeOcrBridge 注入
-│       └── ocr/               # Java ONNX OCR 引擎
-│           ├── NativeOcrBridge.java    # @JavascriptInterface 桥接
-│           ├── OnnxRunner.java         # ONNX Runtime 会话管理
-│           ├── OcrEngine.java          # 主编排器（formula/text/mixed）
-│           ├── DetPreProcess.java      # 公式检测预处理
-│           ├── FormulaDetPostProcess.java  # YOLOv8 后处理
-│           ├── FormulaRecPreProcess.java   # TrOCR 预处理
-│           ├── FormulaRecPostProcess.java  # 束搜索解码
-│           ├── FormulaLineSplitter.java    # 多行公式行分割
-│           ├── TextDetProcessor.java       # DBNet 轮廓追踪
-│           ├── TextRecPreProcess.java      # CRNN 预处理
-│           ├── TextRecPostProcess.java     # CTC 解码
-│           ├── DocOriPreProcess.java       # 方向检测
-│           ├── ModelConfig.java            # config.json 解析 + 模型文件发现
-│           └── ImagePreProcess.java        # 图像增强
+│       └── MainActivity.java  # 仅 BridgeActivity，无原生业务代码
 ├── test/                      # 测试套件（4 套 785+ 项）
 │   ├── test_behavior_consistency.js  # 行为一致性（112 项）
 │   ├── test_integration.js           # 集成测试（221 项）
@@ -134,6 +119,11 @@ LaTeXSnipper_mobile/
 ---
 
 ## 三、识别引擎架构
+
+> **历史章节。** 本节描述的识别（OCR）栈已从仓库移除：`android/app/src/main/java/
+> com/latexsnipper/app/ocr/`、`:llama-runtime` 模块、`llama.cpp` 子模块与
+> `onnxruntime-genai` AAR 均已删除，Web 端也不再调用。保留在此仅供追溯当时的
+> 设计，不描述当前代码。当前 Android 端除 Capacitor 外没有原生业务代码。
 
 Android 端使用纯 Java ONNX Runtime 管线，桌面端 Python `mathcraft-ocr` 实现对标。
 

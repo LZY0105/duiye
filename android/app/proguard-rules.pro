@@ -5,25 +5,10 @@
 # For more details, see
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
-# ── ONNX Runtime ──
--keep class ai.onnxruntime.** { *; }
--keepnames class ai.onnxruntime.**
-
-# ── OCR engine classes (loaded via Capacitor plugin reflection) ──
--keep class com.latexsnipper.app.ocr.** { *; }
--keepnames class com.latexsnipper.app.ocr.**
-
 # ── Capacitor plugin bridge ──
 -keep class com.latexsnipper.app.MainActivity { *; }
--keep class com.latexsnipper.app.ocr.OcrPlugin { *; }
 
 # ── Keep JNI / native methods ──
 -keepclasseswithmembernames class * {
     native <methods>;
 }
-# ORT GenAI is accessed directly by the native question modifier.
--keep class ai.onnxruntime.genai.** { *; }
-
-# llama.cpp Android runtime and Java/Kotlin wrapper.
--keep class com.arm.aichat.** { *; }
--keep class com.latexsnipper.llamaruntime.** { *; }

@@ -1,5 +1,8 @@
 ext {
-    // llama.cpp Android logging and JNI integration require Android 11 (API 30).
+    // API 30 is what the recognition stack needed. It is gone, and nothing left
+    // in the app requires 30 over Capacitor's own floor — but lowering it widens
+    // the device matrix, which is a claim to make after testing, not during a
+    // dependency removal.
     minSdkVersion = 30
     compileSdkVersion = 36
     targetSdkVersion = 36
@@ -14,5 +17,4 @@ ext {
     androidxJunitVersion = '1.3.0'
     androidxEspressoCoreVersion = '3.7.0'
     cordovaAndroidVersion = '14.0.1'
-    onnxRuntimeVersion = '1.21.0'
 }
