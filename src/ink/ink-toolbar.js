@@ -59,6 +59,15 @@ const STORAGE_KEY = 'ls_ink_toolbar';
 const TAP_SLOP = 6;
 
 /**
+ * How far the bar may be scaled down before the buttons stop being targets.
+ *
+ * 0.72 of 44px is 32px — small for a finger, still usable with the stylus the
+ * tablet ships with, and the point below which the honest answer is to show
+ * fewer tools rather than smaller ones.
+ */
+const MIN_SCALE = 0.72;
+
+/**
  * Toolbar icons.
  *
  * These were `✒ ✏ 🖊 🖍 ◻` and a braille `⠿` for the grip. Three of those are
@@ -141,6 +150,8 @@ export class InkToolbar {
     this.host = host;
     this.handlers = handlers;
     this.state = createToolbarState(this._restore());
+    /** Current size multiplier; 1 is the full 44px touch target. */
+    this._scale = 1;
 
     this.root = document.createElement('div');
     this.root.className = 'ink-toolbar';
@@ -232,6 +243,62 @@ export class InkToolbar {
   /** Re-applies tool state when the active pane changes. */
   syncToActiveSurface() {
     this._pushToSurface();
+  }
+
+  /**
+   * Sizes the bar against the column it is serving.
+   *
+   * Two separate demands, and the smaller wins:
+   *
+   *   It must FIT. A vertical bar is about thirteen touch targets long, and at
+   *   44px each that is 583px — longer than the workspace on a tablet held in
+   *   landscape with any chrome above it. A bar whose ends are off screen is a
+   *   bar with tools that cannot be reached, and the grip is at one of those
+   *   ends.
+   *
+   *   It must belong. The bar floats over one column, so it is measured
+   *   against that column: drag the divider and the tools follow, instead of
+   *   staying the size they were for a pane twice as wide.
+   *
+   * The floor is 32px rather than 44 because at that point the alternative is
+   * not a larger button, it is a button off the bottom of the screen. It is
+   * clamped, not free, so a very narrow column cannot shrink the tools to
+   * something no finger can hit.
+   */
+  fitTo({ height, column } = {}) {
+    const natural = this._naturalLength();
+    let scale = 1;
+
+    if (height > 0 && natural > 0) {
+      // 24px of margin, so the bar never sits flush against either end.
+      scale = Math.min(scale, (height - 24) / natural);
+    }
+    if (column > 0) {
+      // A column is comfortable for the full-size bar at about 420px; below
+      // that the tools scale with it.
+      scale = Math.min(scale, column / 420);
+    }
+
+    scale = Math.min(1, Math.max(MIN_SCALE, scale));
+    if (Math.abs(scale - this._scale) < 0.01) return;
+    this._scale = scale;
+    this.root.style.setProperty('--ink-scale', String(scale));
+    this.cardLayer.style.setProperty('--ink-scale', String(scale));
+    this._clampIntoHost();
+  }
+
+  /**
+   * How long the bar wants to be, in CSS pixels, at full size.
+   *
+   * Measured from the DOM rather than counted, so adding a tool or a swatch
+   * cannot leave a stale number here — the arithmetic that produced 583px was
+   * only correct for the toolbar as it stood the day it was written.
+   */
+  _naturalLength() {
+    const vertical = this.state.edge === EDGES.LEFT || this.state.edge === EDGES.RIGHT;
+    const measured = vertical ? this.root.offsetHeight : this.root.offsetWidth;
+    if (!measured) return 0;
+    return measured / (this._scale || 1);
   }
 
   // ── rendering ─────────────────────────────────────────────────────────────

@@ -26,9 +26,14 @@
 /* ── the bar ──────────────────────────────────────────────────────────────── */
 
 .ink-toolbar {
-  --ink-hit: 44px;      /* the touch target a stylus or fingertip needs */
-  --ink-icon: 22px;
-  --ink-gap: 2px;
+  /* Everything on the bar is a multiple of one number, so the whole thing can
+     be scaled by setting that number — see InkToolbar.fitTo(). The bar has to
+     fit inside the column it floats over, and a tablet held in landscape is
+     shorter than a full-size vertical bar. */
+  --ink-scale: 1;
+  --ink-hit: calc(44px * var(--ink-scale));   /* the target a fingertip needs */
+  --ink-icon: calc(22px * var(--ink-scale));
+  --ink-gap: calc(2px * var(--ink-scale));
 
   /* A control surface carries a legibility floor that a decorative one does
      not: it is read while it sits over unknown content. Both are local
@@ -149,9 +154,9 @@
               scale 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
-.ink-handle .ink-icon { --ink-icon: 20px; }
-.ink-overflow .ink-icon { --ink-icon: 20px; }
-.ink-swatch.is-custom .ink-icon { --ink-icon: 18px; }
+.ink-handle .ink-icon { --ink-icon: calc(20px * var(--ink-scale)); }
+.ink-overflow .ink-icon { --ink-icon: calc(20px * var(--ink-scale)); }
+.ink-swatch.is-custom .ink-icon { --ink-icon: calc(18px * var(--ink-scale)); }
 
 .ink-handle:hover { opacity: 0.85; color: var(--fg); background: rgba(15, 23, 42, 0.05); }
 .ink-handle:active { cursor: grabbing; scale: 0.94; }
@@ -246,7 +251,7 @@
      inside it. The swatches were 20px targets on a bar meant for a stylus —
      under half the size a finger can reliably hit, and the smallest controls
      in the app by a wide margin. */
-  width: calc(var(--ink-hit) - 10px);
+  width: calc(var(--ink-hit) - 10px * var(--ink-scale));
   height: var(--ink-hit);
   padding: 0;
   border: 0;
@@ -263,8 +268,8 @@
 
 .ink-swatch-fill {
   display: block;
-  width: 20px;
-  height: 20px;
+  width: calc(20px * var(--ink-scale));
+  height: calc(20px * var(--ink-scale));
   border-radius: 50%;
   background: inherit;
   /* An inner hairline instead of an outer border, so a white swatch keeps an
@@ -292,7 +297,7 @@
 }
 .ink-toolbar[data-orientation='vertical'] .ink-swatch {
   width: var(--ink-hit);
-  height: calc(var(--ink-hit) - 10px);
+  height: calc(var(--ink-hit) - 10px * var(--ink-scale));
 }
 
 .ink-swatch.is-custom {
@@ -618,9 +623,15 @@
 /* Sizing follows the input device, not the viewport. The old query shrank the
    controls to 1.9rem below 560px — the narrow tablet split view, which is
    exactly where the stylus is in use and the targets most need their size. */
+/* A mouse is a precise pointer, so the targets can be smaller — but they still
+   go through the scale, or a bar sized to fit its column springs back to full
+   size the moment it is opened on a desktop. */
 @media (pointer: fine) {
-  .ink-toolbar { --ink-hit: 36px; --ink-icon: 20px; }
-  .ink-swatch-fill { width: 17px; height: 17px; }
+  .ink-toolbar {
+    --ink-hit: calc(36px * var(--ink-scale));
+    --ink-icon: calc(20px * var(--ink-scale));
+  }
+  .ink-swatch-fill { width: calc(17px * var(--ink-scale)); height: calc(17px * var(--ink-scale)); }
 }
 
 @media (max-width: 560px) {

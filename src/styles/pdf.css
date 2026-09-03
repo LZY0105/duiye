@@ -511,6 +511,49 @@
 
 .pdf-pane-viewport.is-panning { cursor: grabbing; }
 
+/* ── the turning page ─────────────────────────────────────────────────────
+   Perspective on the viewport rather than the leaf: the vanishing point has
+   to belong to the page the sheet is turning over, not travel with the sheet,
+   or the leaf appears to rotate in a world of its own. */
+.pdf-pane-viewport { perspective: 1600px; perspective-origin: 50% 50%; }
+
+.pdf-page-leaf {
+  position: absolute;
+  z-index: 8;
+  pointer-events: none;
+  transform-style: preserve-3d;
+  /* Hidden rather than drawn. The reverse of the leaf would be the mirror of
+     the page just left — legible, backwards and wrong; passing out of the
+     light is what the eye expects at that angle. */
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  box-shadow: 0 12px 40px -12px rgba(15, 23, 42, 0.45);
+  border-radius: 2px;
+  overflow: hidden;
+  will-change: transform, opacity;
+}
+
+.pdf-page-leaf canvas { display: block; }
+
+/* The gradient runs from the spine the sheet pivots on, so the fold is where
+   the light stops. */
+.pdf-page-leaf-shade {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  background: linear-gradient(to right,
+    rgba(15, 23, 42, 0.55), rgba(15, 23, 42, 0.06) 42%, transparent 70%);
+}
+.pdf-page-leaf[data-direction="prev"] .pdf-page-leaf-shade {
+  background: linear-gradient(to left,
+    rgba(15, 23, 42, 0.55), rgba(15, 23, 42, 0.06) 42%, transparent 70%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pdf-page-leaf { display: none; }
+}
+
 .pdf-pane-canvas-holder {
   position: absolute;
   inset: 0;

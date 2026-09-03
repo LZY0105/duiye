@@ -109,97 +109,160 @@ export class PdfPane {
     };
   }
 
+  /**
+   * Who does what, on a tablet with a stylus.
+   *
+   * The three input kinds are given three jobs and no overlap, because a
+   * gesture that could mean two things has to guess, and a guess that goes
+   * wrong while someone is writing costs them work:
+   *
+   *   PEN     annotates. It never pans, never zooms, never turns a page.
+   *   FINGER  one finger taps or turns the page; two pinch, zoom and pan.
+   *   MOUSE   pans and wheel-zooms, so the app is still usable at a desk.
+   *
+   * One finger deliberately does NOT pan. With two-finger panning available
+   * there is nothing it would add, and taking it away is what makes the page
+   * turn unambiguous: no "only turn once the page has run out of room to pan"
+   * rule, no threshold that behaves differently depending on zoom. A finger
+   * dragged sideways turns the page, always.
+   *
+   * Everything runs off pointer events. The pinch used to be a separate pair
+   * of touch listeners running alongside them, so a second finger started a
+   * pinch while the first was still panning and both moved the page at once.
+   */
   _bindGestures() {
     const vp = this.elViewport;
 
-    // Drag to pan.
-    let dragging = false;
-    let lastX = 0;
-    let lastY = 0;
-    let pointerId = null;
+    /** Live touch points, by pointer id. A tablet reports a hand as several. */
+    const touches = new Map();
 
-    // Where the gesture began, so a release can tell a pan from a page flick.
-    let startX = 0;
-    let startY = 0;
-    let startAt = 0;
+    // ── mouse drag, for the desk ──
+    let mouse = null;
+
+    // ── one finger: a tap, or a page turn ──
+    let swipe = null;
+
+    // ── two fingers: zoom about the midpoint, and pan with it ──
+    let pinch = null;
+
+    const centre = () => {
+      const pts = [...touches.values()];
+      return {
+        x: (pts[0].x + pts[1].x) / 2,
+        y: (pts[0].y + pts[1].y) / 2,
+        d: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y),
+      };
+    };
+
+    const beginPinch = () => {
+      const c = centre();
+      pinch = { d: c.d || 1, x: c.x, y: c.y, zoom: this.state.zoom };
+      swipe = null;                       // the finger that was swiping is now half a pinch
+      vp.classList.remove('is-panning');
+    };
 
     vp.addEventListener('pointerdown', (e) => {
       if (!this.doc) return;
       this.handlers.onFocus?.();
-      // Stylus is reserved for the Ink layer; panning is finger/mouse only, so
-      // a pen stroke never scrolls the page out from under itself.
+
+      // The pen belongs to the ink layer. Nothing here may move the page out
+      // from under a stroke that is being drawn on it.
       if (e.pointerType === 'pen') return;
-      dragging = true;
-      pointerId = e.pointerId;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      startX = e.clientX;
-      startY = e.clientY;
-      startAt = e.timeStamp || performance.now();
-      vp.setPointerCapture(pointerId);
+
+      if (e.pointerType === 'touch') {
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (touches.size === 2) { beginPinch(); return; }
+        if (touches.size > 2) { pinch = null; swipe = null; return; }
+        swipe = {
+          id: e.pointerId,
+          x: e.clientX,
+          y: e.clientY,
+          at: e.timeStamp || performance.now(),
+        };
+        return;
+      }
+
+      mouse = { id: e.pointerId, x: e.clientX, y: e.clientY };
+      try { vp.setPointerCapture(e.pointerId); } catch (_) { /* unsupported */ }
       vp.classList.add('is-panning');
     });
 
+    vp.addEventListener('pointermove', (e) => {
+      if (!this.doc) return;
+
+      if (e.pointerType === 'touch') {
+        if (!touches.has(e.pointerId)) return;
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (touches.size !== 2 || !pinch) return;
+
+        e.preventDefault();
+        const c = centre();
+        const ratio = c.d / pinch.d;
+        // Zoom first, then pan by how far the two fingers travelled together,
+        // so the page follows the hand rather than only growing under it.
+        this._apply(setZoom(this.state, pinch.zoom * ratio), true);
+        this._apply(
+          panBy(this.state, c.x - pinch.x, c.y - pinch.y, this._viewport(), this._contentSize()),
+          false,
+        );
+        pinch.x = c.x;
+        pinch.y = c.y;
+        return;
+      }
+
+      if (!mouse || e.pointerId !== mouse.id) return;
+      const dx = e.clientX - mouse.x;
+      const dy = e.clientY - mouse.y;
+      mouse.x = e.clientX;
+      mouse.y = e.clientY;
+      this._apply(panBy(this.state, dx, dy, this._viewport(), this._contentSize()), false);
+    }, { passive: false });
+
     /**
-     * Turns the page on a horizontal flick — finger or mouse, never the pen.
+     * A finger dragged sideways turns the page.
      *
-     * A swipe only turns the page when the page has no more room to pan the way
-     * the finger went. On a zoomed-in page that means the swipe pans first and
-     * turns only once you reach the edge, which is how paper behaves and keeps
-     * one gesture from having two meanings at the same moment.
-     *
-     * The pen is excluded before this is ever reached: it belongs to the ink
-     * layer, and a stroke that flicked the page away mid-annotation would be
-     * indefensible.
+     * Direction and speed only — no check for whether the page has room left
+     * to pan, because one finger no longer pans. That rule existed to stop one
+     * gesture meaning two things, and the two meanings are gone.
      */
-    const maybeTurnPage = (e) => {
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
-      const dt = (e.timeStamp || performance.now()) - startAt;
+    const maybeTurnPage = (from, e) => {
+      const dx = e.clientX - from.x;
+      const dy = e.clientY - from.y;
+      const dt = (e.timeStamp || performance.now()) - from.at;
       if (Math.abs(dx) < SWIPE_DISTANCE) return false;
-      if (Math.abs(dx) < Math.abs(dy) * 1.6) return false;   // not horizontal enough
-      if (dt > SWIPE_MAX_MS) return false;                    // a slow drag is a pan
+      if (Math.abs(dx) < Math.abs(dy) * 1.4) return false;   // not sideways enough
+      if (dt > SWIPE_MAX_MS) return false;                   // a slow drag is not a flick
 
-      const content = this._contentSize();
-      const viewport = this._viewport();
-      const maxX = Math.max(0, content.width - viewport.width);
-      const atStart = this.state.scrollX <= 1;
-      const atEnd = this.state.scrollX >= maxX - 1;
-
-      if (dx < 0) {                       // swept left -> next page
-        if (maxX > 0 && !atEnd) return false;
+      if (dx < 0) {
         if (!this.canGoNext()) return false;
-        this._flickPage('next');
-        this.next();
+        this.turnPage('next');
         return true;
       }
-      if (maxX > 0 && !atStart) return false;
       if (!this.canGoPrevious()) return false;
-      this._flickPage('prev');
-      this.previous();
+      this.turnPage('prev');
       return true;
     };
 
-    const endDrag = (e) => {
-      if (!dragging) return;
-      dragging = false;
-      vp.classList.remove('is-panning');
-      try { if (pointerId !== null) vp.releasePointerCapture(pointerId); } catch (_) { /* gone */ }
-      pointerId = null;
-      if (e && e.type === 'pointerup') { try { maybeTurnPage(e); } catch (_) { /* not fatal */ } }
+    const endTouch = (e) => {
+      const from = swipe && swipe.id === e.pointerId ? swipe : null;
+      touches.delete(e.pointerId);
+      if (touches.size < 2) pinch = null;
+      if (!from) return;
+      swipe = null;
+      if (e.type !== 'pointerup') return;
+      try { maybeTurnPage(from, e); } catch (_) { /* a failed turn is not fatal */ }
     };
 
-    vp.addEventListener('pointermove', (e) => {
-      if (!dragging || !this.doc) return;
-      const dx = e.clientX - lastX;
-      const dy = e.clientY - lastY;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      this._apply(panBy(this.state, dx, dy, this._viewport(), this._contentSize()), false);
-    });
+    const endPointer = (e) => {
+      if (e.pointerType === 'touch') { endTouch(e); return; }
+      if (!mouse || e.pointerId !== mouse.id) return;
+      mouse = null;
+      vp.classList.remove('is-panning');
+      try { vp.releasePointerCapture(e.pointerId); } catch (_) { /* already gone */ }
+    };
 
-    vp.addEventListener('pointerup', endDrag);
-    vp.addEventListener('pointercancel', endDrag);
+    vp.addEventListener('pointerup', endPointer);
+    vp.addEventListener('pointercancel', endPointer);
 
     // Ctrl/⌘ + wheel zooms; plain wheel pans vertically.
     vp.addEventListener('wheel', (e) => {
@@ -216,45 +279,115 @@ export class PdfPane {
         this._apply(panBy(this.state, 0, -e.deltaY, viewport, content), false);
       }
     }, { passive: false });
-
-    // Pinch zoom.
-    let pinchStart = null;
-    vp.addEventListener('touchstart', (e) => {
-      if (e.touches.length === 2 && this.doc) {
-        pinchStart = { distance: touchDistance(e.touches), zoom: this.state.zoom };
-      }
-    }, { passive: true });
-
-    vp.addEventListener('touchmove', (e) => {
-      if (!pinchStart || e.touches.length !== 2 || !this.doc) return;
-      e.preventDefault();
-      const ratio = touchDistance(e.touches) / (pinchStart.distance || 1);
-      this._apply(setZoom(this.state, pinchStart.zoom * ratio), true);
-    }, { passive: false });
-
-    const endPinch = () => { pinchStart = null; };
-    vp.addEventListener('touchend', endPinch);
-    vp.addEventListener('touchcancel', endPinch);
   }
 
   /**
-   * The page slides out the way it was flicked and the new one settles in.
+   * Turns the page, with the sheet lifting and going over.
    *
-   * Transform and opacity only, and short — this is a utility surface, so the
-   * motion is there to say "that worked, and in this direction", not to be
-   * watched. Skipped entirely under reduced motion.
+   * The animation runs BEFORE the state changes and the new page renders
+   * underneath it, so what turns away is the page that was actually there
+   * rather than a re-render of it.
    */
-  _flickPage(direction) {
+  turnPage(direction) {
+    const turning = this._liftPage(direction);
+    if (direction === 'next') this.next(); else this.previous();
+    turning?.();
+  }
+
+  /**
+   * Lifts the current sheet so the next one can be revealed under it.
+   *
+   * Returns a function that plays the turn, or null when there is nothing to
+   * animate. The split matters: the snapshot has to be taken BEFORE the page
+   * state changes, and the turn has to start AFTER the new page has begun
+   * rendering underneath, or the reader watches a page turn over to reveal
+   * the page it just left.
+   *
+   * What turns is a photograph of the canvas, not the canvas itself. Rotating
+   * the live one would rotate the ink layer and the PDF layer separately, and
+   * anything rendered mid-turn would land on a sheet that is edge-on.
+   *
+   * The back of the sheet is hidden rather than drawn. A real book shows the
+   * reverse of the leaf, which here would be the mirror image of the page just
+   * left — legible, backwards, and wrong. Hiding it reads as the sheet passing
+   * out of the light, which is what the eye expects at that angle anyway.
+   */
+  _liftPage(direction) {
     const holder = this.elHolder;
-    if (!holder || typeof holder.animate !== 'function') return;
+    const vp = this.elViewport;
+    if (!holder || !vp || typeof holder.animate !== 'function') return null;
     try {
-      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return null;
     } catch (_) { /* no matchMedia: animate */ }
-    const from = direction === 'next' ? 26 : -26;
-    holder.animate(
-      [{ opacity: 0, transform: `translateX(${from}px)` }, { opacity: 1, transform: 'none' }],
-      { duration: 220, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' },
-    );
+
+    const source = holder.querySelector('canvas');
+    if (!source || !source.width || !source.height) return null;
+
+    const rect = holder.getBoundingClientRect();
+    const box = vp.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+
+    let sheet;
+    try {
+      sheet = document.createElement('canvas');
+      sheet.width = source.width;
+      sheet.height = source.height;
+      sheet.getContext('2d').drawImage(source, 0, 0);
+    } catch (_) {
+      return null;                          // a tainted or zero-sized canvas
+    }
+
+    const leaf = document.createElement('div');
+    leaf.className = 'pdf-page-leaf';
+    leaf.dataset.direction = direction;
+    leaf.style.left = `${rect.left - box.left}px`;
+    leaf.style.top = `${rect.top - box.top}px`;
+    leaf.style.width = `${rect.width}px`;
+    leaf.style.height = `${rect.height}px`;
+    sheet.style.width = '100%';
+    sheet.style.height = '100%';
+    leaf.appendChild(sheet);
+
+    // The shading that sells it: the leaf darkens along the spine as it lifts.
+    const shade = document.createElement('div');
+    shade.className = 'pdf-page-leaf-shade';
+    leaf.appendChild(shade);
+
+    vp.appendChild(leaf);
+
+    return () => {
+      // Forward turns about the LEFT edge, back turns about the right, so the
+      // sheet always pivots on the spine the reader is moving away from.
+      const next = direction === 'next';
+      leaf.style.transformOrigin = next ? 'left center' : 'right center';
+      const to = next ? -170 : 170;
+
+      const turn = leaf.animate(
+        [
+          { transform: 'rotateY(0deg)', opacity: 1, offset: 0 },
+          { transform: `rotateY(${to * 0.55}deg)`, opacity: 1, offset: 0.55 },
+          { transform: `rotateY(${to}deg)`, opacity: 0, offset: 1 },
+        ],
+        { duration: 420, easing: 'cubic-bezier(0.4, 0.05, 0.25, 1)', fill: 'forwards' },
+      );
+      shade.animate(
+        [{ opacity: 0 }, { opacity: 0.42, offset: 0.5 }, { opacity: 0 }],
+        { duration: 420, easing: 'ease-in-out' },
+      );
+      // The page arriving underneath comes up to meet it.
+      holder.animate(
+        [{ opacity: 0.55, transform: 'scale(0.985)' }, { opacity: 1, transform: 'none' }],
+        { duration: 300, easing: 'cubic-bezier(0.32, 0.72, 0, 1)' },
+      );
+
+      const done = () => leaf.remove();
+      turn.addEventListener('finish', done);
+      turn.addEventListener('cancel', done);
+      // A belt-and-braces removal: an animation that never fires either event
+      // — a backgrounded tab, a cancelled composite — must not leave a dead
+      // page lying over the live one.
+      setTimeout(done, 900);
+    };
   }
 
   /**
@@ -677,11 +810,6 @@ function inkPixelRatio() {
   return Math.min(2, Math.max(1, dpr));
 }
 
-function touchDistance(touches) {
-  const dx = touches[0].clientX - touches[1].clientX;
-  const dy = touches[0].clientY - touches[1].clientY;
-  return Math.hypot(dx, dy) || 1;
-}
 
 /** Capped: a 3x-DPR tablet at 6x zoom would otherwise allocate enormous canvases. */
 function devicePixelRatioSafe() {

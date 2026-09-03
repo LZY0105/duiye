@@ -16,13 +16,18 @@ import {
   LASSO_MODES, LASSO_SHAPES, LASSO_TOOL,
   createToolbarState, serializeToolbarState, setLassoMode, setLassoShape,
 } from '../src/ink/toolbar-state.js';
-import { InkSurface } from '../src/ink/ink-surface.js';
+import { INPUT_MODES, InkSurface } from '../src/ink/ink-surface.js';
+import { InkToolbar } from '../src/ink/ink-toolbar.js';
 import { renderAnswerNotice } from '../src/pdf/answer-panel.js';
 import { onDoubleTap } from '../src/ui/double-tap.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const $read = (f) => readFileSync(join(ROOT, f), 'utf-8');
+/** Source with comments stripped, so prose about a banned identifier is not a match. */
+const $code = (f) => $read(f)
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/^\s*\/\/.*$/gm, '');
 
 let PASS = 0, FAIL = 0;
 function pass(l) { PASS++; console.log(`  ✅ ${l}`); }
@@ -419,7 +424,150 @@ check('the object-type row from the reference is deliberately absent', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-group('4. A double-tap opens the row');
+group('4. Tablet input — the pen writes, the hand handles the book');
+
+check('a finger never leaves a mark; a pen always may', () => {
+  const surface = Object.create(InkSurface.prototype);
+  surface.enabled = true;
+  surface.inputMode = INPUT_MODES.NO_FINGER;
+  const may = (type, isPrimary = true) => surface._shouldDraw({ pointerType: type, isPrimary });
+
+  assert.equal(may('pen'), true, 'the stylus annotates');
+  assert.equal(may('touch'), false, 'the hand does not — it rests on the glass while writing');
+  assert.equal(may('mouse'), true, 'and a mouse still draws, because a desk has no pen');
+});
+
+check('no-finger is the default, so a tablet behaves without being told', () => {
+  const code = $read('src/ink/ink-surface.js');
+  assert.ok(/this\.inputMode = INPUT_MODES\.NO_FINGER;/.test(code));
+  assert.ok(/NO_FINGER: 'no-finger'/.test($read('src/ink/ink-surface.js')));
+});
+
+check('a resting palm still cannot draw, whatever the mode', () => {
+  const surface = Object.create(InkSurface.prototype);
+  surface.enabled = true;
+  surface.inputMode = INPUT_MODES.ANY;
+  assert.equal(
+    surface._shouldDraw({ pointerType: 'touch', isPrimary: false }), false,
+    'a hand on the tablet raises secondary touch points; none may start a stroke',
+  );
+});
+
+check('one finger turns the page and does not pan', () => {
+  // The rule the tablet asked for: the hand taps, turns pages, and pinches.
+  // Taking single-finger panning away is what makes the page turn
+  // unambiguous — no threshold that means something different at each zoom.
+  const code = $code('src/pdf/pdf-pane.js');
+  assert.ok(/if \(e\.pointerType === 'pen'\) return;/.test(code),
+    'the pen never reaches the page gestures');
+  assert.ok(/touches\.size === 2/.test(code), 'two fingers are a pinch');
+  // The gate that only turned the page once panning had run out of room went
+  // with single-finger panning. It existed so one gesture did not mean two
+  // things; there is only one meaning left.
+  assert.ok(!/atEnd/.test(code) && !/atStart/.test(code),
+    'the "only turn at the edge" rule is gone');
+
+  // A single touch must not reach panBy. The only pan paths left are the
+  // mouse drag, the two-finger pinch and the wheel.
+  const single = code.slice(code.indexOf('if (e.pointerType === \'touch\')'));
+  const beforePinch = single.slice(0, single.indexOf('touches.size !== 2'));
+  assert.ok(!/panBy/.test(beforePinch), 'one finger must not pan');
+});
+
+check('the pinch runs on pointer events, not a second touch stream', () => {
+  // It used to be a pair of touch listeners alongside the pointer ones, so a
+  // second finger started a pinch while the first was still panning and both
+  // moved the page at once.
+  const code = $code('src/pdf/pdf-pane.js');
+  for (const dead of ["'touchstart'", "'touchmove'", "'touchend'", 'touchDistance']) {
+    assert.ok(!code.includes(dead), `${dead} must be gone — one input stream only`);
+  }
+});
+
+check('the page turn animates like a leaf going over', () => {
+  const code = $read('src/pdf/pdf-pane.js');
+  assert.ok(/_liftPage/.test(code) && /rotateY/.test(code), 'it turns, rather than sliding');
+  assert.ok(/transformOrigin = next \? 'left center' : 'right center'/.test(code),
+    'and pivots on the spine it is moving away from');
+  assert.ok(/prefers-reduced-motion/.test(code), 'skipped when motion is not wanted');
+  // The snapshot has to be taken before the page changes and played after.
+  assert.ok(/const turning = this\._liftPage\(direction\);[\s\S]{0,120}turning\?\.\(\)/.test(code),
+    'the sheet that turns away must be the page that was there');
+  const css = $read('src/styles/pdf.css');
+  assert.ok(/\.pdf-pane-viewport \{ perspective:/.test(css),
+    'perspective belongs to the page being turned over, not to the leaf');
+  assert.ok(/\.pdf-page-leaf[\s\S]*backface-visibility: hidden/.test(css));
+});
+
+// ═══════════════════════════════════════════════════════════════
+group('5. The toolbar is sized against its column');
+
+/** A toolbar with just enough of itself to answer fitTo(). */
+function sizedBar(naturalLength) {
+  const bar = Object.create(InkToolbar.prototype);
+  const props = new Map();
+  const stub = {
+    style: { setProperty: (k, v) => props.set(k, v) },
+    offsetHeight: naturalLength,
+    offsetWidth: 60,
+  };
+  bar.root = stub;
+  bar.cardLayer = { style: { setProperty: () => {} } };
+  bar.state = { edge: 'left' };
+  bar._scale = 1;
+  bar._clampIntoHost = () => {};
+  bar.scale = () => Number(props.get('--ink-scale') ?? 1);
+  return bar;
+}
+
+check('a bar longer than the workspace is scaled until it fits', () => {
+  // A vertical bar is about thirteen touch targets long: 583px at 44 each.
+  // A tablet in landscape, minus the page bar above the workspace, leaves
+  // well under that — and the grip is at one end of the bar.
+  const bar = sizedBar(583);
+  bar.fitTo({ height: 560, column: 2000 });
+  assert.ok(bar.scale() < 1, 'it must give ground');
+  assert.ok(583 * bar.scale() <= 560 - 24, 'and end up inside the height, with margin');
+
+  // A workspace tall enough asks for nothing.
+  const roomy = sizedBar(583);
+  roomy.fitTo({ height: 900, column: 2000 });
+  assert.equal(roomy.scale(), 1);
+});
+
+check('a bar that already fits is left alone', () => {
+  const bar = sizedBar(400);
+  bar.fitTo({ height: 900, column: 2000 });
+  assert.equal(bar.scale(), 1, 'nothing is gained by shrinking a bar that fits');
+});
+
+check('it follows the column, so the tools belong to the pane they serve', () => {
+  const wide = sizedBar(400);
+  wide.fitTo({ height: 1200, column: 900 });
+  const half = sizedBar(400);
+  half.fitTo({ height: 1200, column: 300 });
+  assert.ok(half.scale() < wide.scale(), 'a narrower column gets a smaller bar');
+});
+
+check('it never shrinks past what a finger can hit', () => {
+  const bar = sizedBar(583);
+  bar.fitTo({ height: 120, column: 40 });
+  assert.ok(bar.scale() >= 0.72, 'below 32px the honest answer is fewer tools, not smaller ones');
+});
+
+check('every size on the bar goes through the one multiplier', () => {
+  const css = $read('src/styles/ink-toolbar.css');
+  assert.ok(/--ink-hit: calc\(44px \* var\(--ink-scale\)\)/.test(css));
+  // Including the desktop override, which would otherwise spring a fitted bar
+  // back to full size the moment it is opened with a mouse.
+  const fine = css.match(/@media \(pointer: fine\) \{[\s\S]*?\n\}/);
+  assert.ok(fine && /var\(--ink-scale\)/.test(fine[0]),
+    'the pointer:fine override must scale too');
+  assert.ok(!/--ink-hit: \d+px;/.test(css), 'no absolute hit size may survive');
+});
+
+// ═══════════════════════════════════════════════════════════════
+group('6. A double-tap opens the row');
 
 const tap = (el, { x = 50, y = 50, target = el } = {}) => {
   const e = new dom.window.PointerEvent('pointerup', {

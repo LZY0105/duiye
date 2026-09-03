@@ -100,6 +100,15 @@ export const INPUT_MODES = Object.freeze({
   ANY: 'any',
   /** Draw only with a stylus; finger and mouse pan the page instead. */
   STYLUS_ONLY: 'stylus',
+  /**
+   * The tablet default: a stylus draws, a finger never does.
+   *
+   * A mouse still draws, because a desk is where the app is developed and
+   * tested and there is no pen there to test with. A finger is the one input
+   * that must not leave a mark: it is the hand resting on the glass while the
+   * other hand writes, and it is the hand turning the page.
+   */
+  NO_FINGER: 'no-finger',
 });
 
 export class InkSurface {
@@ -125,7 +134,7 @@ export class InkSurface {
     this.opacity = undefined;
     this.eraserMode = ERASER_MODES.STROKE;
     this.eraserRadius = 8;
-    this.inputMode = INPUT_MODES.ANY;
+    this.inputMode = INPUT_MODES.NO_FINGER;
     this.enabled = true;
 
     this._active = null;      // in-progress stroke
@@ -422,6 +431,7 @@ export class InkSurface {
     // pointers, which must not each start their own stroke.
     if (e.pointerType === 'touch' && e.isPrimary === false) return false;
     if (this.inputMode === INPUT_MODES.STYLUS_ONLY) return e.pointerType === 'pen';
+    if (this.inputMode === INPUT_MODES.NO_FINGER) return e.pointerType !== 'touch';
     return true;
   }
 

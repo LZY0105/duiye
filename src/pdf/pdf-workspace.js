@@ -569,6 +569,9 @@ export class PdfWorkspace {
       const changed = next !== this.state.orientation;
       if (changed) this._setState(setOrientation(this.state, next));
       this._resizePanes();
+      // Rotating a tablet changes the height the toolbar has to live in far
+      // more than it changes the width, and it is the height that binds.
+      this._syncToolbarSize(paneFractions(this.state));
     };
     window.addEventListener('resize', this._onResize);
     window.addEventListener('orientationchange', this._onResize);
@@ -667,6 +670,36 @@ export class PdfWorkspace {
       el.classList.toggle('is-tiny', px > 0 && px < 220);
       el.classList.toggle('is-narrow', px >= 220 && px < 380);
     }
+
+    this._syncToolbarSize(fractions);
+  }
+
+  /**
+   * Keeps the floating toolbar sized to the column it is serving.
+   *
+   * Called from the same place as the width bands, so it runs on every frame
+   * of a divider drag as well as on resize: the tools grow and shrink with the
+   * column rather than jumping to a new size when the drag ends.
+   *
+   * The active pane's width is what it is measured against, because that is
+   * the pane it applies to. The workspace HEIGHT is the other input, and the
+   * one that actually binds on a tablet held in landscape — a full-size
+   * vertical bar is longer than the space it has to live in.
+   */
+  _syncToolbarSize(fractions) {
+    if (!this.toolbar?.fitTo) return;
+    const rect = this.root.getBoundingClientRect();
+    if (!rect.height) return;
+
+    const column = this.state.orientation === ORIENTATIONS.COLUMN;
+    const share = fractions?.[this.activeSlot];
+    // In column layout the panes are full width, so width is never the
+    // constraint and only the height matters.
+    const width = column || !Number.isFinite(share)
+      ? rect.width
+      : rect.width * share;
+
+    this.toolbar.fitTo({ height: rect.height, column: width });
   }
 
   _markActive(slot) {
