@@ -246,6 +246,24 @@ export async function initPdfWorkspace() {
 
   workspace = new PdfWorkspace(host);
 
+  // Put the chrome away, and bring it back. The panes are re-measured after,
+  // because the workspace has just been handed 160px it did not have.
+  const chromeToggle = elRoot?.querySelector('[data-role="chrome-toggle"]');
+  chromeToggle?.addEventListener('click', () => {
+    const hidden = document.body.classList.toggle('is-chrome-hidden');
+    chromeToggle.setAttribute('aria-pressed', hidden ? 'true' : 'false');
+    const label = hidden ? '显示工具栏' : '隐藏工具栏';
+    chromeToggle.setAttribute('aria-label', label);
+    chromeToggle.setAttribute('title', label);
+    try { localStorage.setItem('ls_chrome_hidden', hidden ? '1' : '0'); } catch (_) { /* private mode */ }
+    // The workspace re-lays-out on a resize; it has just been given 160px.
+    window.dispatchEvent(new Event('resize'));
+  });
+
+  try {
+    if (localStorage.getItem('ls_chrome_hidden') === '1') chromeToggle?.click();
+  } catch (_) { /* storage unavailable: start with the chrome showing */ }
+
   elRoot.querySelector('[data-role="import-exercise"]')?.addEventListener('click', () => {
     elRoot.querySelector('[data-role="file-exercise"]')?.click();
   });

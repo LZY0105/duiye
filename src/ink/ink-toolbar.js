@@ -152,6 +152,15 @@ export class InkToolbar {
     this.state = createToolbarState(this._restore());
     /** Current size multiplier; 1 is the full 44px touch target. */
     this._scale = 1;
+    /**
+     * Bands at the top and bottom of the host the bar may not enter.
+     *
+     * The host is the whole workspace, and the top of it is the pane's own
+     * toolbar. A bar centred in the host therefore lay across ‹ and ☰ — two
+     * controls it hid and a stylus could not reach past it. The host says how
+     * much room to leave; the bar does not guess.
+     */
+    this._safe = { top: 0, bottom: 0 };
 
     this.root = document.createElement('div');
     this.root.className = 'ink-toolbar';
@@ -269,6 +278,10 @@ export class InkToolbar {
     const natural = this._naturalLength();
     let scale = 1;
 
+    // The height it may use is the height it is allowed to occupy, not the
+    // height of the host: budgeting against the whole workspace sized the bar
+    // for room the pane's toolbar was already standing in.
+    height = Math.max(0, height - this._safe.top - this._safe.bottom);
     if (height > 0 && natural > 0) {
       // 24px of margin, so the bar never sits flush against either end.
       scale = Math.min(scale, (height - 24) / natural);
@@ -284,6 +297,19 @@ export class InkToolbar {
     this._scale = scale;
     this.root.style.setProperty('--ink-scale', String(scale));
     this.cardLayer.style.setProperty('--ink-scale', String(scale));
+    this._clampIntoHost();
+  }
+
+  /**
+   * Declares the bands at the top and bottom of the host the bar must stay out
+   * of, in CSS pixels. Re-clamps and re-fits at once, so a header that changes
+   * height moves the bar rather than waiting for the next drag.
+   */
+  setSafeArea(top = 0, bottom = 0) {
+    const t = Math.max(0, Number(top) || 0);
+    const b = Math.max(0, Number(bottom) || 0);
+    if (t === this._safe.top && b === this._safe.bottom) return;
+    this._safe = { top: t, bottom: b };
     this._clampIntoHost();
   }
 
@@ -500,11 +526,16 @@ export class InkToolbar {
 
     if (vertical) {
       const half = barH / 2;
-      // A bar taller than the host cannot be fully shown; centre it and let it
-      // overflow evenly rather than hiding one end.
-      const centre = barH + M * 2 >= hostH
-        ? hostH / 2
-        : clampNumber(this.state.offset * hostH, half + M, hostH - half - M);
+      // The band the bar is allowed to occupy, once the pane's own chrome has
+      // been left alone.
+      const lo = this._safe.top + M;
+      const hi = hostH - this._safe.bottom - M;
+      const free = hi - lo;
+      // A bar taller than the band cannot be fully shown; centre it in what
+      // there is and let it overflow evenly rather than hiding one end.
+      const centre = barH >= free
+        ? lo + free / 2
+        : clampNumber(this.state.offset * hostH, lo + half, hi - half);
       s.top = `${centre}px`;
       s.transform = 'translateY(-50%)';
     } else {

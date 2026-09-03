@@ -1,24 +1,74 @@
 /* PDF workspace — Apple Liquid Glass dual-document layout, animated resizing, divider, outline, library. */
 
+/* The workspace fills what is left between the top of the screen and the dock.
+   It used to subtract 50px for a title bar and 70px for the spacer under it;
+   both are gone, so it was reserving 120px that nothing occupied and running
+   its own bottom edge underneath the floating dock at the same time.
+
+   What is actually down there is the dock: 66px tall, sitting 12px off the
+   bottom. Twelve again above it leaves the panes clear of it by the same margin
+   they sit in everywhere else. */
 #page-pdf {
+  --dock-reserve: calc(90px + var(--safe-b));
   display: none;
   flex-direction: column;
   flex: 1 1 auto;
-  height: calc(100vh - 50px - 70px);
-  height: calc(100dvh - 50px - 70px);
-  min-height: 480px;
-  padding: 0;
+  height: calc(100vh - var(--dock-reserve));
+  height: calc(100dvh - var(--dock-reserve));
+  min-height: 420px;
+  padding: 8px 0 0;
   position: relative;
   overflow: hidden;
 }
 
 #page-pdf.active {
   display: flex !important;
-  padding: 0 !important;
+  padding: 8px 0 0 !important;
 }
 
 #app:has(#page-pdf.active) {
   max-width: 100% !important;
+}
+
+/* ── putting the chrome away ───────────────────────────────────────────────
+   The import row and the dock are useful and rarely needed at the same moment
+   as the page. Hidden, the workspace takes the whole height, which on this
+   tablet is the difference between seeing a page and seeing most of one.
+
+   The toggle itself never hides — a control that puts away the way back is a
+   control that has taken something from you. It sits in the corner the page
+   does not use, and turns over to point the other way once pressed. */
+.pdf-chrome-toggle {
+  position: absolute;
+  top: 4px;
+  right: 10px;
+  z-index: 30;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  color: var(--text-secondary, #52606d);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.10);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  cursor: pointer;
+  transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1), background 0.2s;
+}
+.pdf-chrome-toggle:hover { background: rgba(255, 255, 255, 0.9); }
+.pdf-chrome-toggle:active { scale: 0.94; }
+.pdf-chrome-toggle svg { transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1); }
+.pdf-chrome-toggle[aria-pressed="true"] svg { transform: rotate(180deg); }
+
+body.is-chrome-hidden .pdf-page-bar,
+body.is-chrome-hidden .bottom-nav { display: none; }
+
+/* With both bars gone the page has the screen, less the status-bar inset. */
+body.is-chrome-hidden #page-pdf {
+  --dock-reserve: var(--safe-b, 0px);
 }
 
 /* ── page toolbar: Floating Liquid Glass Bar ───────────────────────────────── */
@@ -512,52 +562,31 @@
 .pdf-pane-viewport.is-panning { cursor: grabbing; }
 
 /* ── the turning page ─────────────────────────────────────────────────────
-   Perspective on the viewport rather than the leaf: the vanishing point has
-   to belong to the page the sheet is turning over, not travel with the sheet,
-   or the leaf appears to rotate in a world of its own. */
-.pdf-pane-viewport { perspective: 1600px; perspective-origin: 50% 50%; }
+   No perspective here any more. The sheet used to be a box rotated in 3D and
+   needed a vanishing point to rotate within; it is now a fold drawn into a
+   canvas, and a drawn fold has its own geometry. */
 
 .pdf-page-leaf {
   position: absolute;
   z-index: 8;
   pointer-events: none;
-  transform-style: preserve-3d;
-  /* The back is hidden on the strips, not here: this box no longer rotates, it
-     lifts and tips. The reverse of a leaf would be the mirror of the page just
-     left — legible, backwards and wrong; passing out of the light is what the
-     eye expects at that angle. */
-  box-shadow: 0 12px 40px -12px rgba(15, 23, 42, 0.45);
+  /* No 3D here any more. The fold is drawn, not transformed, so the sheet needs
+     no perspective, no preserve-3d and no backface rule — and the shadow it
+     used to cast is drawn into the canvas along the crease, where a real one
+     falls, rather than under the whole box. */
   border-radius: 2px;
-  /* Not hidden: a bent sheet has strips standing outside the flat box. */
-  overflow: visible;
+  overflow: hidden;
   will-change: transform, opacity;
 }
 
 .pdf-page-leaf canvas { display: block; }
 
-/* The sheet is cut into hinged strips so it can bend. Each one hangs off the
-   edge of the one before it, and every strip carries its own shading, so the
-   curve is lit rather than merely bent — a strip turned further from the reader
-   goes darker than its neighbour, which is what reads as paper. */
-.pdf-page-strip {
-  position: absolute;
-  top: 0;
-  transform-style: preserve-3d;
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
-  will-change: transform;
-}
+/* The turning sheet is drawn into one canvas: the flat part, the part folded
+   back on itself, the crease and its shadow. It has to be a canvas rather than
+   transformed boxes, because the fold is a reflection about a line that is
+   rarely vertical and a box cannot be reflected about a diagonal. */
+.pdf-page-leaf canvas.turn { display: block; }
 
-.pdf-page-strip-shade {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  pointer-events: none;
-  background: rgba(15, 23, 42, 0.92);
-}
-
-/* The gradient runs from the spine the sheet pivots on, so the fold is where
-   the light stops. */
 .pdf-page-leaf-shade {
   position: absolute;
   inset: 0;

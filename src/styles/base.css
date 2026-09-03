@@ -734,8 +734,20 @@ button, .snippet-btn, .compute-btn, .ocr-btn, .hw-tool-btn, .cam-trigger-btn {
 a { color: var(--accent); text-decoration: none; transition: color var(--transition-fast); }
 a:hover { color: var(--accent-hover); }
 
-/* ── Top nav: Floating Glass Bar ── */
-.spacer-top { height: calc(52px + var(--safe-t)); }
+/* ── Top nav: removed ──────────────────────────────────────────────────────
+   The bar held a logo and the app's own name and nothing else — no control, no
+   status, nothing to press. On a tablet in landscape it cost 52px off the top
+   of a workspace whose scarcest dimension is height: the ink toolbar is sized
+   against that height and had been giving up tools to fit inside it. The name
+   is on the launcher and in Settings → 关于, which is where a name belongs.
+
+   The spacer is now nothing. It carried env(safe-area-inset-top), which this
+   tablet reports as 70px — but the WebView is already positioned below the
+   status bar by the system, so honouring the inset again left 70px of empty
+   grid above the import row, paid for twice. Kept as a zero-height hook rather
+   than deleted, so a device that really does put content under a notch has
+   somewhere to say so. */
+.spacer-top { height: 0; }
 .top-nav {
   position: fixed; top: 0; left: 0; right: 0; z-index: 100;
   background: var(--hdr-bg);
@@ -868,7 +880,8 @@ a:hover { color: var(--accent-hover); }
   padding: 0 1.1rem;
 }
 [data-skin="liquid-math"] .spacer-top {
-  height: 70px;
+  /* Was 70px, to clear a title bar that no longer exists. */
+  height: 0;
 }[data-skin="liquid-math"] .skin-quick-toggle,
 [data-skin="liquid-math"] .theme-toggle {
   background: rgba(255, 255, 255, 0.65);
@@ -878,7 +891,12 @@ a:hover { color: var(--accent-hover); }
 }
 /* ── Page layout ── */
 #app { max-width: var(--max-w); margin: 0 auto; }
-.page { display: none; padding: 1.5rem 1.25rem calc(6.5rem + var(--safe-b)); }
+/* Top and bottom are set against what is actually there, rather than a round
+   number: 12px of air above the import row, and below, just enough to clear the
+   floating dock — it is 66px tall and sits 12px off the bottom — plus the same
+   12px again. The old 6.5rem left the workspace stopping well short of the
+   dock with nothing in between, and the 1.5rem on top compounded the spacer. */
+.page { display: none; padding: 0.75rem 1.25rem calc(5.6rem + var(--safe-b)); }
 .page.active { display: block; animation: pageFadeIn 0.22s var(--spring-ease); }
 
 @keyframes pageFadeIn {

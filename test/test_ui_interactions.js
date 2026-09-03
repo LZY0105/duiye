@@ -489,44 +489,68 @@ check('the pinch runs on pointer events, not a second touch stream', () => {
   }
 });
 
-check('the page turn animates like a leaf going over', () => {
+check('the page turn folds over on a crease, like a leaf going over', () => {
   const code = $read('src/pdf/pdf-pane.js');
-  assert.ok(/beginLiveTurn/.test(code) && /rotateY/.test(code), 'it turns, rather than sliding');
-  assert.ok(/transformOrigin = next \? 'left center' : 'right center'/.test(code),
-    'and pivots on the spine it is moving away from');
+  assert.ok(/beginLiveTurn/.test(code) && /reflection/i.test(code),
+    'it folds over on a crease, rather than sliding');
+  assert.ok(/direction === 'next' \? w : 0/.test(code),
+    'and is picked up at the edge it is being pulled from');
   assert.ok(/prefers-reduced-motion/.test(code), 'skipped when motion is not wanted');
   // The snapshot has to be taken before the page changes and played after.
   assert.ok(/beginLiveTurn\(direction\)[\s\S]{0,200}endLiveTurn\(true\)/.test(code),
     'the sheet that turns away must be the page that was there');
   const css = $read('src/styles/pdf.css');
-  assert.ok(/\.pdf-pane-viewport \{ perspective:/.test(css),
-    'perspective belongs to the page being turned over, not to the leaf');
-  assert.ok(/\.pdf-page-strip \{[\s\S]*?backface-visibility: hidden/.test(css));
+  assert.ok(!/perspective:/.test(css.slice(css.indexOf('.pdf-pane-viewport'), css.indexOf('.pdf-page-leaf'))),
+    'the fold is drawn, so nothing here needs a vanishing point any more');
 });
 
 // ═══════════════════════════════════════════════════════════════
-group('4b. The sheet follows the hand');
+group('4b. The sheet follows the hand, and folds where it is held');
 
-/** A pane with just enough of itself to carry a sheet. */
-function turnablePane({ page = 5, pages = 10 } = {}) {
+/** Records what the turn draws, so the geometry can be read back. */
+function recordingContext() {
+  const calls = [];
+  const ctx = {
+    calls,
+    canvas: { width: 0, height: 0 },
+    globalAlpha: 1,
+    fillStyle: '',
+    setTransform: (...a) => calls.push(['setTransform', ...a]),
+    transform: (...a) => calls.push(['transform', ...a]),
+    clearRect: () => calls.push(['clearRect']),
+    drawImage: (...a) => calls.push(['drawImage', a.length]),
+    fillRect: () => calls.push(['fillRect']),
+    save: () => calls.push(['save']),
+    restore: () => calls.push(['restore']),
+    scale: (...a) => calls.push(['scale', ...a]),
+    clip: () => calls.push(['clip']),
+    beginPath: () => {}, moveTo: () => {}, lineTo: () => {}, closePath: () => {}, rect: () => {},
+    createLinearGradient: () => ({ addColorStop() {} }),
+  };
+  return ctx;
+}
+
+/** A pane with just enough of itself to turn a page. */
+function turnablePane({ page = 5, pages = 10, w = 300, h = 400 } = {}) {
   const dom = new JSDOM('<!doctype html><div class="vp"><div class="holder"><canvas></canvas></div></div>');
   const doc = dom.window.document;
   const vp = doc.querySelector('.vp');
   const holder = doc.querySelector('.holder');
-  const canvas = doc.querySelector('canvas');
-  canvas.width = 40; canvas.height = 60;
-  canvas.getContext = () => ({ drawImage() {} });
+  const src = doc.querySelector('canvas');
+  src.width = 40; src.height = 60;
+  const ctx = recordingContext();
+  const rect = { left: 0, top: 0, right: w, bottom: h, width: w, height: h };
   for (const el of [vp, holder]) {
-    el.getBoundingClientRect = () => ({ left: 0, top: 0, width: 300, height: 400 });
+    el.getBoundingClientRect = () => rect;
     el.animate = () => ({ addEventListener() {}, cancel() {} });
   }
-  doc.createElement('canvas').getContext = () => ({ drawImage() {} });
   const origCreate = doc.createElement.bind(doc);
   doc.createElement = (tag) => {
     const el = origCreate(tag);
-    if (tag === 'canvas') el.getContext = () => ({ drawImage() {} });
+    if (tag === 'canvas') el.getContext = () => ctx;
     return el;
   };
+  src.getContext = () => ctx;
 
   const pane = Object.create(PdfPane.prototype);
   pane.elViewport = vp;
@@ -536,128 +560,165 @@ function turnablePane({ page = 5, pages = 10 } = {}) {
   pane.canGoPrevious = () => pane.page > 1;
   pane.next = () => { pane.page += 1; };
   pane.previous = () => { pane.page -= 1; };
-  pane._viewport = () => ({ width: 300, height: 400 });
+  pane._viewport = () => ({ width: w, height: h });
 
   const prevDoc = global.document; const prevWin = global.window;
-  global.document = doc;
-  global.window = dom.window;
+  global.document = doc; global.window = dom.window;
   dom.window.matchMedia = () => ({ matches: false });
-  return { pane, vp, doc, restore: () => { global.document = prevDoc; global.window = prevWin; } };
+  dom.window.devicePixelRatio = 1;
+  return { pane, vp, doc, ctx, w, h, restore: () => { global.document = prevDoc; global.window = prevWin; } };
 }
 
 check('the page under the sheet changes the moment it lifts, not when it lands', () => {
   const t = turnablePane({ page: 5 });
   try {
-    assert.equal(t.pane.beginLiveTurn('next'), true);
+    assert.equal(t.pane.beginLiveTurn('next', { x: 290, y: 200 }), true);
     assert.equal(t.pane.page, 6,
-      'the destination has to be rendering underneath, or the gap at the spine shows the page being left');
+      'the destination has to be under the sheet, or the crease opens on the page being left');
     assert.equal(t.vp.querySelectorAll('.pdf-page-leaf').length, 1, 'and a sheet is over it');
   } finally { t.restore(); }
 });
 
-check('the sheet sits wherever the finger left it', () => {
-  const t = turnablePane();
+check('held at the top, the page peels from the top corner', () => {
+  const t = turnablePane({ h: 400 });
   try {
-    t.pane.beginLiveTurn('next');
-    const leaf = t.vp.querySelector('.pdf-page-leaf');
-    const firstStrip = () => t.vp.querySelector('.pdf-page-strip').style.transform;
-    t.pane.dragLiveTurn(0.25);
-    const quarter = firstStrip();
-    t.pane.dragLiveTurn(0.75);
-    assert.notEqual(firstStrip(), quarter, 'it tracks, rather than playing');
-    assert.ok(/rotateY\(-[\d.]/.test(firstStrip()), 'a forward turn goes over to the left');
-    assert.ok(Number(leaf.querySelector('.pdf-page-leaf-shade').style.opacity) > 0,
-      'and it is shaded along the fold while it is edge-on');
+    t.pane.beginLiveTurn('next', { x: 290, y: 20 });
+    assert.equal(t.pane._live.anchor.corner, 'top');
+    assert.equal(t.pane._live.anchor.y, 0, 'the corner it turns about is the top one');
+    assert.equal(t.pane._live.anchor.x, 300, 'on the edge it is being pulled from');
   } finally { t.restore(); }
 });
 
-check('the sheet bends: no two strips are at the same angle mid-turn', () => {
-  const t = turnablePane();
+check('held at the bottom, it peels from the bottom corner', () => {
+  const t = turnablePane({ h: 400 });
   try {
-    t.pane.beginLiveTurn('next');
-    t.pane.dragLiveTurn(0.5);
-    const strips = [...t.vp.querySelectorAll('.pdf-page-strip')];
-    assert.ok(strips.length > 1, 'the sheet is cut into strips so it can curve');
-    const angles = strips.map((el) => parseFloat((el.style.transform.match(/-?[\d.]+/) || [0])[0]));
-    const spread = Math.max(...angles) - Math.min(...angles);
-    assert.ok(spread > 1, `strips must differ to make a curve, got a spread of ${spread}`);
+    t.pane.beginLiveTurn('next', { x: 290, y: 380 });
+    assert.equal(t.pane._live.anchor.corner, 'bottom');
+    assert.equal(t.pane._live.anchor.y, 400);
   } finally { t.restore(); }
 });
 
-check('it is flat when the page is down and flat again when it lands', () => {
-  const t = turnablePane();
+check('held in the middle, the whole edge lifts instead of a corner', () => {
+  const t = turnablePane({ h: 400 });
   try {
-    t.pane.beginLiveTurn('next');
-    const strips = () => [...t.vp.querySelectorAll('.pdf-page-strip')]
-      .map((el) => parseFloat((el.style.transform.match(/-?[\d.]+/) || [0])[0]));
-    const spread = (a) => Math.max(...a) - Math.min(...a);
-    t.pane.dragLiveTurn(0.02);
-    const early = spread(strips());
-    t.pane.dragLiveTurn(0.5);
-    const mid = spread(strips());
-    t.pane.dragLiveTurn(0.99);
-    const late = spread(strips());
-    assert.ok(mid > early && mid > late,
-      `the curl belongs in the middle of the turn: ${early} / ${mid} / ${late}`);
+    t.pane.beginLiveTurn('next', { x: 290, y: 200 });
+    assert.equal(t.pane._live.anchor.corner, 'edge');
+    assert.equal(t.pane._live.anchor.y, 200, 'it lifts where it was held');
   } finally { t.restore(); }
 });
 
-check('the sheet lifts and leans rather than swinging on a hinge', () => {
-  const t = turnablePane();
+check('a backward turn is picked up at the other edge', () => {
+  const t = turnablePane({ page: 5 });
   try {
-    t.pane.beginLiveTurn('next');
-    t.pane.dragLiveTurn(0.5);
-    const tf = t.vp.querySelector('.pdf-page-leaf').style.transform;
-    assert.ok(/translateZ\([\d.]+px\)/.test(tf), 'it comes up out of the gutter');
-    assert.ok(/rotateX\(-?[\d.]+deg\)/.test(tf) && /rotateZ\(-?[\d.]+deg\)/.test(tf),
-      'and tips and twists as it goes');
+    t.pane.beginLiveTurn('prev', { x: 10, y: 30 });
+    assert.equal(t.pane._live.anchor.x, 0);
+    assert.equal(t.pane.page, 4);
   } finally { t.restore(); }
 });
 
-check('the strips are shaded by how far each has turned away', () => {
-  const t = turnablePane();
+// The book is bound on one side, so the same edge is the hinge whichever way
+// the reader is going. Going forward the sheet that folds is the one being
+// left, and its printing shows faintly through the back of the paper. Going
+// back the sheet that folds is the one arriving — there is no bitmap of it,
+// and a reader would not see printing through the back of a page they have not
+// reached yet. Drawing the OLD page there put the page just left onto the back
+// of the page coming in, which is the wrong sheet entirely.
+check('a forward turn shows the leaving page through the back of the fold', () => {
+  const t = turnablePane({ page: 5 });
   try {
-    t.pane.beginLiveTurn('next');
-    t.pane.dragLiveTurn(0.45);
-    const shades = [...t.vp.querySelectorAll('.pdf-page-strip-shade')]
-      .map((el) => Number(el.style.opacity));
-    assert.ok(shades.some((o) => o > 0), 'a curve has to be lit to read as one');
-    assert.ok(new Set(shades).size > 1, 'and lit unevenly, or it is a flat board again');
+    t.pane.beginLiveTurn('next', { x: 290, y: 200 });
+    t.ctx.calls.length = 0;
+    t.pane.dragLiveTurn({ x: 140, y: 200 });
+    assert.ok(t.ctx.calls.some((c) => c[0] === 'drawImage'),
+      'the old page is what folded away, so it shows through its own back');
+  } finally { t.restore(); }
+});
+
+check('a backward turn folds in a blank back, not the page being left', () => {
+  const t = turnablePane({ page: 5 });
+  try {
+    t.pane.beginLiveTurn('prev', { x: 10, y: 200 });
+    t.ctx.calls.length = 0;
+    t.pane.dragLiveTurn({ x: 160, y: 200 });
+    const draws = t.ctx.calls.filter((c) => c[0] === 'drawImage').length;
+    const fills = t.ctx.calls.filter((c) => c[0] === 'fillRect').length;
+    assert.ok(fills > 0, 'the arriving sheet still has a paper-coloured back');
+    assert.equal(draws, 1,
+      'only the page still lying flat is drawn; the fold carries no borrowed printing');
+  } finally { t.restore(); }
+});
+
+check('the flap is the page reflected in the crease, not a copy slid sideways', () => {
+  const t = turnablePane({ w: 300, h: 400 });
+  try {
+    t.pane.beginLiveTurn('next', { x: 290, y: 200 });
+    t.ctx.calls.length = 0;
+    // A level pull from a mid-height anchor: the crease is vertical, so the
+    // reflection is a plain horizontal mirror — a = -1, d = 1.
+    t.pane.dragLiveTurn({ x: 100, y: 200 });
+    const m = t.ctx.calls.find((c) => c[0] === 'transform');
+    assert.ok(m, 'the flap has to be transformed, or it is not folded at all');
+    assert.ok(Math.abs(m[1] + 1) < 1e-6, `expected a horizontal mirror, got a=${m[1]}`);
+    assert.ok(Math.abs(m[4] - 1) < 1e-6, `expected d=1, got ${m[4]}`);
+    assert.ok(Math.abs(m[2]) < 1e-6 && Math.abs(m[3]) < 1e-6, 'and no shear');
+  } finally { t.restore(); }
+});
+
+check('a diagonal pull from a corner gives a diagonal crease', () => {
+  const t = turnablePane({ w: 300, h: 400 });
+  try {
+    t.pane.beginLiveTurn('next', { x: 290, y: 380 });
+    t.ctx.calls.length = 0;
+    t.pane.dragLiveTurn({ x: 120, y: 150 });
+    const m = t.ctx.calls.find((c) => c[0] === 'transform');
+    assert.ok(m, 'the flap is transformed');
+    assert.ok(Math.abs(m[2]) > 1e-3,
+      'a crease that is not vertical must shear the reflection');
   } finally { t.restore(); }
 });
 
 check('a drag beyond the ends of the book picks nothing up', () => {
   const first = turnablePane({ page: 1 });
-  try { assert.equal(first.pane.beginLiveTurn('prev'), false); } finally { first.restore(); }
+  try { assert.equal(first.pane.beginLiveTurn('prev', { x: 10, y: 10 }), false); } finally { first.restore(); }
   const last = turnablePane({ page: 10, pages: 10 });
-  try { assert.equal(last.pane.beginLiveTurn('next'), false); } finally { last.restore(); }
+  try { assert.equal(last.pane.beginLiveTurn('next', { x: 290, y: 10 }), false); } finally { last.restore(); }
 });
 
-check('letting go short of halfway puts the page back', () => {
+check('letting go short of the commit point puts the page back', () => {
   const t = turnablePane({ page: 5 });
   try {
-    t.pane.beginLiveTurn('next');
-    t.pane.dragLiveTurn(0.2);
+    t.pane.beginLiveTurn('next', { x: 290, y: 200 });
+    t.pane.dragLiveTurn({ x: 250, y: 200 });
     t.pane.endLiveTurn(false);
     assert.equal(t.pane.page, 5, 'an abandoned turn leaves the reader where they were');
   } finally { t.restore(); }
 });
 
-check('letting go past halfway keeps it', () => {
+check('letting go past it keeps the turn', () => {
   const t = turnablePane({ page: 5 });
   try {
-    t.pane.beginLiveTurn('next');
-    t.pane.dragLiveTurn(0.8);
+    t.pane.beginLiveTurn('next', { x: 290, y: 200 });
+    t.pane.dragLiveTurn({ x: 40, y: 200 });
     t.pane.endLiveTurn(true);
     assert.equal(t.pane.page, 6);
+  } finally { t.restore(); }
+});
+
+check('progress is measured by the crease, which moves at half the hand', () => {
+  const t = turnablePane({ w: 300, h: 400 });
+  try {
+    t.pane.beginLiveTurn('next', { x: 290, y: 200 });
+    t.pane.dragLiveTurn({ x: 0, y: 200 });   // hand all the way across
+    assert.ok(Math.abs(t.pane._live.progress - 0.5) < 0.02,
+      `the crease is at the middle when the hand reaches the far edge, got ${t.pane._live.progress}`);
   } finally { t.restore(); }
 });
 
 check('the reader is never left looking at a photograph of the old page', () => {
   const t = turnablePane({ page: 5 });
   try {
-    t.pane.beginLiveTurn('next');
-    t.pane.dragLiveTurn(0.5);
+    t.pane.beginLiveTurn('next', { x: 290, y: 200 });
+    t.pane.dragLiveTurn({ x: 100, y: 200 });
     t.pane.endLiveTurn(true);
     assert.equal(t.pane.isTurning, false, 'the turn is over');
   } finally { t.restore(); }
@@ -670,10 +731,90 @@ check('a second finger lays the sheet back down', () => {
     'a gesture that becomes a pinch must not leave a page half over');
 });
 
+check('where the page was first touched is what decides the fold', () => {
+  const src = $code('src/pdf/pdf-pane.js');
+  assert.ok(/beginLiveTurn\(direction, \{ x: swipe\.x, y: swipe\.y \}\)/.test(src),
+    'the grab point, not the current point, picks the corner');
+});
+
 check('the pen still never turns a page', () => {
   const src = $code('src/pdf/pdf-pane.js');
   assert.ok(/pointerType === 'pen'\) return;/.test(src),
     'ink belongs to the pen; the page must not move under a stroke');
+});
+
+// ═══════════════════════════════════════════════════════════════
+group('4c. A pinch zooms where the fingers are');
+
+/** A pane with just enough of itself to answer a zoom anchoring question. */
+function zoomablePane({ zoom = 1, scrollX = 0, scrollY = 0, page = { width: 600, height: 800 } } = {}) {
+  const pane = Object.create(PdfPane.prototype);
+  pane.pageSize = page;
+  pane.state = { zoom, scrollX, scrollY, fitMode: 'none' };
+  pane._viewport = () => ({ width: 400, height: 500 });
+  return pane;
+}
+
+/** Where a document point lands on screen, given a view state. */
+const onScreen = (st, doc) => ({
+  x: doc.x * st.zoom - st.scrollX,
+  y: doc.y * st.zoom - st.scrollY,
+});
+
+check('the point between the fingers does not move when the zoom changes', () => {
+  const pane = zoomablePane({ zoom: 1, scrollX: 120, scrollY: 90 });
+  const before = pane.state;
+  const finger = { x: 90, y: 380 };           // nowhere near the middle
+  // What the reader has under their fingers right now.
+  const doc = { x: (before.scrollX + finger.x) / before.zoom,
+                y: (before.scrollY + finger.y) / before.zoom };
+
+  const after = pane._anchorZoomToPoint(before, { ...before, zoom: 2.4 }, finger);
+  const landed = onScreen(after, doc);
+  assert.ok(Math.abs(landed.x - finger.x) < 0.5,
+    `x moved ${Math.abs(landed.x - finger.x)}px out from under the fingers`);
+  assert.ok(Math.abs(landed.y - finger.y) < 0.5,
+    `y moved ${Math.abs(landed.y - finger.y)}px out from under the fingers`);
+});
+
+check('zooming out holds the same point too', () => {
+  const pane = zoomablePane({ zoom: 3, scrollX: 900, scrollY: 1200 });
+  const before = pane.state;
+  const finger = { x: 310, y: 120 };
+  const doc = { x: (before.scrollX + finger.x) / before.zoom,
+                y: (before.scrollY + finger.y) / before.zoom };
+  const after = pane._anchorZoomToPoint(before, { ...before, zoom: 1.6 }, finger);
+  const landed = onScreen(after, doc);
+  assert.ok(Math.abs(landed.x - finger.x) < 0.5 && Math.abs(landed.y - finger.y) < 0.5,
+    'a pinch closed on a point keeps that point');
+});
+
+check('a zoom with no point of its own still holds the middle', () => {
+  const pane = zoomablePane({ zoom: 1, scrollX: 200, scrollY: 300 });
+  const before = pane.state;
+  const mid = { x: 200, y: 250 };
+  const doc = { x: (before.scrollX + mid.x) / before.zoom,
+                y: (before.scrollY + mid.y) / before.zoom };
+  const after = pane._anchorZoomToCentre(before, { ...before, zoom: 2 });
+  const landed = onScreen(after, doc);
+  assert.ok(Math.abs(landed.x - mid.x) < 0.5 && Math.abs(landed.y - mid.y) < 0.5,
+    'the button zoom is unchanged: it holds the centre of the frame');
+});
+
+check('the pinch passes the midpoint, and does not re-rasterise per frame', () => {
+  const src = $code('src/pdf/pdf-pane.js');
+  const pinch = src.slice(src.indexOf('const ratio = c.d / pinch.d'), src.indexOf('pinch.x = c.x'));
+  assert.ok(/anchor = \{ x: c\.x - box\.left, y: c\.y - box\.top \}/.test(pinch),
+    'the zoom has to be told where the fingers are');
+  assert.ok(/setZoom\(this\.state, pinch\.zoom \* ratio\), false, anchor\)/.test(pinch),
+    'and must not ask for a repaint on every frame of the gesture');
+  assert.ok(/_previewZoom\(\)/.test(pinch), 'the bitmap on screen stands in until the fingers lift');
+});
+
+check('the page is drawn for real once the fingers lift', () => {
+  const src = $code('src/pdf/pdf-pane.js');
+  assert.ok(/_commitPreviewZoom\(\)/.test(src.slice(src.indexOf('const endTouch'))),
+    'a previewed zoom that is never committed leaves a stretched bitmap on screen');
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -692,6 +833,7 @@ function sizedBar(naturalLength) {
   bar.cardLayer = { style: { setProperty: () => {} } };
   bar.state = { edge: 'left' };
   bar._scale = 1;
+  bar._safe = { top: 0, bottom: 0 };
   bar._clampIntoHost = () => {};
   bar.scale = () => Number(props.get('--ink-scale') ?? 1);
   return bar;

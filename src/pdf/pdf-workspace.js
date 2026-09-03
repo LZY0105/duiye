@@ -53,6 +53,13 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
  */
 const HEADER_LADDER = ['is-snug', 'is-snugger'];
 
+/**
+ * How far a press on the divider may wander and still count as a tap.
+ *
+ * A finger never lands perfectly still, and a stylus even less so.
+ */
+const TAP_SLOP = 6;
+
 /** How far the swap control travels before a release commits the swap. */
 const SWAP_THRESHOLD = 34;
 
@@ -249,6 +256,10 @@ export class PdfWorkspace {
     this.elDivider.addEventListener('pointerdown', (e) => {
       dragging = true;
       this._dividerDragging = true;
+      // A press that goes nowhere is a tap; one that travels is a drag. The
+      // click handler above needs to tell them apart.
+      this._dividerTravelled = 0;
+      this._dividerFrom = { x: e.clientX, y: e.clientY };
       pointerId = e.pointerId;
       this.elDivider.setPointerCapture(pointerId);
       this.elDivider.classList.add('is-dragging');
@@ -276,6 +287,13 @@ export class PdfWorkspace {
       this.elSlots[left].classList.toggle('is-closing', ratio <= CLOSE_THRESHOLD);
       this.elSlots[right].classList.toggle('is-closing', ratio >= 1 - CLOSE_THRESHOLD);
 
+      if (this._dividerFrom) {
+        this._dividerTravelled = Math.max(
+          this._dividerTravelled || 0,
+          Math.hypot(e.clientX - this._dividerFrom.x, e.clientY - this._dividerFrom.y),
+        );
+      }
+
       // Preview the refit. A fit-to-width page should track the divider, and
       // rasterising it once per frame is not affordable, so the rendered page
       // is scaled by how much its pane has grown or shrunk. The real refit
@@ -289,10 +307,27 @@ export class PdfWorkspace {
       }
     });
 
-    const end = () => {
+    const end = (e) => {
       if (!dragging) return;
       dragging = false;
       this._dividerDragging = false;
+
+      // Tap the bar to come back to 50:50.
+      //
+      // Double-click did this and still does, but a double-tap is not reliably
+      // reported through a WebView on a tablet — two taps a couple of hundred
+      // milliseconds apart arrive as two separate taps and nothing happens,
+      // which leaves centring the panes with no gesture at all on the device
+      // the app is for. A single tap is unambiguous here: the bar is a 14px
+      // strip nothing else uses, so a finger that lands on it and does not
+      // travel meant to press it.
+      //
+      // Decided on release rather than on `click`, because a drag produces a
+      // click too and the two are indistinguishable by the time it arrives.
+      const tapped = e && e.type === 'pointerup'
+        && (this._dividerTravelled || 0) <= TAP_SLOP
+        && !e.target?.closest?.('[data-role="swap"]');
+      this._dividerFrom = null;
       this.elDivider.classList.remove('is-dragging');
       // Drop the preview transform before the real refit replaces it.
       for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) this.panes[slot]?.previewScale?.(1);
@@ -301,6 +336,11 @@ export class PdfWorkspace {
       this.elSlots[SLOTS.PRIMARY].classList.remove('is-closing');
       this.elSlots[SLOTS.SECONDARY].classList.remove('is-closing');
       this._hideRatioBadge();
+
+      if (tapped) {
+        this.animateToRatio(0.5);
+        return;
+      }
 
       // Released at an end: that side is being closed, not resized to nothing.
       const r = this.state.dividerRatio;
@@ -325,7 +365,6 @@ export class PdfWorkspace {
     this.elDivider.addEventListener('pointerup', end);
     this.elDivider.addEventListener('pointercancel', end);
 
-    // Double-click / double-tap to reset to 50:50 with animation
     this.elDivider.addEventListener('dblclick', (e) => {
       e.preventDefault();
       this.animateToRatio(0.5);
@@ -773,6 +812,12 @@ export class PdfWorkspace {
     if (!this.toolbar?.fitTo) return;
     const rect = this.root.getBoundingClientRect();
     if (!rect.height) return;
+
+    // The pane toolbar runs across the top of the workspace and holds controls.
+    // Measured rather than assumed, because it is exactly the thing that grows
+    // a row when a pane gets narrow.
+    const header = this.elSlots[this.activeSlot]?.querySelector('.pdf-slot-toolbar');
+    this.toolbar.setSafeArea?.(header ? header.offsetHeight : 0, 0);
 
     const column = this.state.orientation === ORIENTATIONS.COLUMN;
     // In column layout the panes are full width, so width is never the
