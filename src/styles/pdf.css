@@ -67,13 +67,50 @@
 .pdf-chrome-toggle svg { transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1); }
 .pdf-chrome-toggle[aria-pressed="true"] svg { transform: rotate(180deg); }
 
-body.is-chrome-hidden .pdf-page-bar,
-body.is-chrome-hidden .bottom-nav { display: none; }
+/* Sliding them away, each independently of the other.
 
-/* With both bars gone the page has the screen, less the status-bar inset. */
-body.is-chrome-hidden #page-pdf {
-  --dock-reserve: var(--safe-b, 0px);
+   Swipe up on the import row and it goes up; swipe down on the dock and it goes
+   down. They are separate states because they are separate bars — putting the
+   dock away to read does not mean giving up the import row as well.
+
+   The import row is in the page's flow, so hiding it has to give the height
+   back or the page keeps a 44px hole where it used to be. The margin animates
+   with the slide, against a height the script measures rather than a number
+   written here that the next label change would falsify. The dock is fixed and
+   floats, so it only has to move. */
+:root { --pdf-bar-h: 44px; }
+
+.pdf-page-bar {
+  transition:
+    transform 0.3s cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 0.22s ease,
+    margin-top 0.3s cubic-bezier(0.32, 0.72, 0, 1);
 }
+
+body.is-top-hidden .pdf-page-bar {
+  transform: translateY(-100%);
+  margin-top: calc(-1 * var(--pdf-bar-h));
+  opacity: 0;
+  pointer-events: none;
+}
+
+.bottom-nav {
+  transition:
+    transform 0.3s cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 0.22s ease;
+}
+
+body.is-bottom-hidden .bottom-nav {
+  transform: translateY(calc(100% + 24px));
+  opacity: 0;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pdf-page-bar, .bottom-nav { transition: none; }
+}
+
+
 
 /* ── page toolbar: Floating Liquid Glass Bar ───────────────────────────────── */
 
@@ -689,17 +726,31 @@ body.is-chrome-hidden #page-pdf {
 
 /* ── Library Drawer: iPadOS Glass Sheet ──────────────────────────────────── */
 
+/* The library is a place, not a pane of glass over one.
+
+   It was --glass-bg over a 40px blur at z-index 30, which left the page legible
+   through it AND put it UNDER the floating ink toolbar at z-index 36 — so the
+   pen, pencil and marker were drawn on top of the file list, and the list was
+   drawn on top of the page, three layers of text competing for the same pixels.
+   That is the dizziness: nothing was on top.
+
+   Now it is opaque enough to read against, and above everything. The toolbar is
+   put away entirely while it is open — there is nothing to draw on in here. */
 .pdf-library {
   position: absolute;
   inset: 0;
-  background: var(--glass-bg);
-  backdrop-filter: blur(40px) saturate(200%);
-  -webkit-backdrop-filter: blur(40px) saturate(200%);
-  z-index: 30;
+  background: var(--surface, #f7f8fa);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  z-index: 60;
   display: flex;
   flex-direction: column;
   animation: libraryIn 0.28s var(--spring-ease);
 }
+
+body.is-library-open .ink-toolbar,
+body.is-library-open .ink-card-layer,
+body.is-library-open .pdf-chrome-toggle { display: none; }
 
 @keyframes libraryIn {
   from { opacity: 0; transform: scale(0.97); }

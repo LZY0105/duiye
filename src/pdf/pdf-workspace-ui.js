@@ -152,11 +152,15 @@ function escapeHtml(s) {
 
 function openLibrary() {
   elRoot?.querySelector('[data-role="library"]')?.removeAttribute('hidden');
+  // Nothing to draw on while the library is open, and the floating toolbar was
+  // being painted over the file list.
+  document.body.classList.add('is-library-open');
   refreshLibrary();
 }
 
 function closeLibrary() {
   elRoot?.querySelector('[data-role="library"]')?.setAttribute('hidden', '');
+  document.body.classList.remove('is-library-open');
 }
 
 /**
@@ -246,23 +250,7 @@ export async function initPdfWorkspace() {
 
   workspace = new PdfWorkspace(host);
 
-  // Put the chrome away, and bring it back. The panes are re-measured after,
-  // because the workspace has just been handed 160px it did not have.
-  const chromeToggle = elRoot?.querySelector('[data-role="chrome-toggle"]');
-  chromeToggle?.addEventListener('click', () => {
-    const hidden = document.body.classList.toggle('is-chrome-hidden');
-    chromeToggle.setAttribute('aria-pressed', hidden ? 'true' : 'false');
-    const label = hidden ? '显示工具栏' : '隐藏工具栏';
-    chromeToggle.setAttribute('aria-label', label);
-    chromeToggle.setAttribute('title', label);
-    try { localStorage.setItem('ls_chrome_hidden', hidden ? '1' : '0'); } catch (_) { /* private mode */ }
-    // The workspace re-lays-out on a resize; it has just been given 160px.
-    window.dispatchEvent(new Event('resize'));
-  });
-
-  try {
-    if (localStorage.getItem('ls_chrome_hidden') === '1') chromeToggle?.click();
-  } catch (_) { /* storage unavailable: start with the chrome showing */ }
+  initChromeHiding(elRoot);
 
   elRoot.querySelector('[data-role="import-exercise"]')?.addEventListener('click', () => {
     elRoot.querySelector('[data-role="file-exercise"]')?.click();
@@ -293,4 +281,91 @@ export async function initPdfWorkspace() {
 export function destroyPdfWorkspace() {
   workspace?.destroy();
   workspace = null;
+}
+
+// ── hiding the two bars ─────────────────────────────────────────────────────
+
+/**
+ * Slide the import row up to put it away, and the dock down.
+ *
+ * Two bars, two states, no relationship between them: putting the dock away to
+ * read a page is not a reason to lose the import row, and the reverse. The
+ * button in the corner is the way back — it restores whatever is hidden, and
+ * puts both away when nothing is.
+ *
+ * The gesture is read from pointer events, so a finger, a stylus and a mouse
+ * all work the same way, and it only fires on a deliberate travel: a bar you
+ * brush past on the way to a button must not disappear.
+ */
+function initChromeHiding(elRoot) {
+  const toggle = elRoot?.querySelector('[data-role="chrome-toggle"]');
+  const topBar = elRoot?.querySelector('.pdf-page-bar');
+  const dock = document.querySelector('.bottom-nav');
+  const body = document.body;
+
+  /** How far a swipe must travel before it counts as one. */
+  const TRAVEL = 26;
+
+  const isHidden = (which) => body.classList.contains(`is-${which}-hidden`);
+
+  const setHidden = (which, hidden) => {
+    if (isHidden(which) === hidden) return;
+    body.classList.toggle(`is-${which}-hidden`, hidden);
+    try { localStorage.setItem(`ls_chrome_${which}`, hidden ? '1' : '0'); } catch (_) { /* private mode */ }
+    syncToggle();
+    // The import row is in the flow, so the panes have just changed height.
+    if (which === 'top') window.dispatchEvent(new Event('resize'));
+  };
+
+  function syncToggle() {
+    if (!toggle) return;
+    const anyHidden = isHidden('top') || isHidden('bottom');
+    toggle.setAttribute('aria-pressed', anyHidden ? 'true' : 'false');
+    const label = anyHidden ? '显示工具栏' : '隐藏工具栏';
+    toggle.setAttribute('aria-label', label);
+    toggle.setAttribute('title', label);
+  }
+
+  // The row's own height, so hiding it can give exactly that much back.
+  const measure = () => {
+    if (!topBar || isHidden('top')) return;
+    const h = Math.round(topBar.getBoundingClientRect().height);
+    if (h > 0) document.documentElement.style.setProperty('--pdf-bar-h', `${h}px`);
+  };
+  measure();
+  window.addEventListener('resize', measure);
+
+  /** A swipe on `el` in `direction` puts that bar away. */
+  const swipeToHide = (el, which, direction) => {
+    if (!el) return;
+    let from = null;
+    el.addEventListener('pointerdown', (e) => {
+      from = { x: e.clientX, y: e.clientY };
+    });
+    el.addEventListener('pointerup', (e) => {
+      if (!from) return;
+      const dy = e.clientY - from.y;
+      const dx = e.clientX - from.x;
+      from = null;
+      if (Math.abs(dy) < TRAVEL || Math.abs(dy) < Math.abs(dx)) return;
+      if (direction === 'up' ? dy < 0 : dy > 0) setHidden(which, true);
+    });
+    el.addEventListener('pointercancel', () => { from = null; });
+  };
+
+  swipeToHide(topBar, 'top', 'up');
+  swipeToHide(dock, 'bottom', 'down');
+
+  toggle?.addEventListener('click', () => {
+    // Anything hidden: bring it all back. Nothing hidden: put it all away.
+    const restore = isHidden('top') || isHidden('bottom');
+    setHidden('top', !restore);
+    setHidden('bottom', !restore);
+  });
+
+  try {
+    if (localStorage.getItem('ls_chrome_top') === '1') setHidden('top', true);
+    if (localStorage.getItem('ls_chrome_bottom') === '1') setHidden('bottom', true);
+  } catch (_) { /* storage unavailable: start with both showing */ }
+  syncToggle();
 }

@@ -656,14 +656,25 @@ export class PdfPane {
     const source = holder.querySelector('canvas');
     if (!source || !source.width || !source.height) return false;
 
-    const rect = holder.getBoundingClientRect();
+    // The PAGE's box, not the holder's.
+    //
+    // The holder is position:absolute inset:0 — it fills the pane, and the page
+    // canvas sits inside it at whatever size the zoom makes it. Building the
+    // sheet from the holder therefore stretched the page across the whole pane:
+    // invisible while a page was bigger than the pane, and a 35% enlargement the
+    // moment a whole page fitted inside one. What turns has to be the size the
+    // page actually is.
+    const rect = source.getBoundingClientRect();
     const box = vp.getBoundingClientRect();
     if (!rect.width || !rect.height) return false;
 
     const made = this._makeLeaf(direction, vp, source, rect, box);
     if (!made) return false;
 
-    this._live = { ...made, direction, holder, progress: 0 };
+    // Held rather than re-measured: the element this came from is replaced when
+    // the page under the sheet changes.
+    const basis = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+    this._live = { ...made, direction, holder, basis, progress: 0 };
     const grabY = grab ? grab.y - rect.top : rect.height / 2;
     this._live.anchor = this._grabAnchor(direction, grabY, rect.width, rect.height);
     made.leaf.dataset.corner = this._live.anchor.corner;
@@ -681,9 +692,9 @@ export class PdfPane {
     const live = this._live;
     if (!live) return;
     // The fold is worked out in the page's own pixels, so the hand has to be
-    // put into them too.
-    const holder = live.holder.getBoundingClientRect();
-    this._paintTurn(live, { x: point.x - holder.left, y: point.y - holder.top });
+    // put into them too — against the same box the sheet was cut from.
+    const b = live.basis;
+    this._paintTurn(live, { x: point.x - b.left, y: point.y - b.top });
   }
 
   /**

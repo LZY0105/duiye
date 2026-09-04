@@ -533,7 +533,7 @@ function recordingContext() {
 }
 
 /** A pane with just enough of itself to turn a page. */
-function turnablePane({ page = 5, pages = 10, w = 300, h = 400 } = {}) {
+function turnablePane({ page = 5, pages = 10, w = 300, h = 400, pageW = null } = {}) {
   const dom = new JSDOM('<!doctype html><div class="vp"><div class="holder"><canvas></canvas></div></div>');
   const doc = dom.window.document;
   const vp = doc.querySelector('.vp');
@@ -546,6 +546,11 @@ function turnablePane({ page = 5, pages = 10, w = 300, h = 400 } = {}) {
     el.getBoundingClientRect = () => rect;
     el.animate = () => ({ addEventListener() {}, cancel() {} });
   }
+  // The holder fills the pane; the page canvas inside it is only as wide as the
+  // page. They are the same box only when the page happens to fill the pane.
+  const pw = pageW ?? w;
+  const pageRect = { left: (w - pw) / 2, top: 0, right: (w + pw) / 2, bottom: h, width: pw, height: h };
+  src.getBoundingClientRect = () => pageRect;
   const origCreate = doc.createElement.bind(doc);
   doc.createElement = (tag) => {
     const el = origCreate(tag);
@@ -683,6 +688,22 @@ check('a diagonal pull from a corner gives a diagonal crease', () => {
     assert.ok(m, 'the flap is transformed');
     assert.ok(Math.abs(m[2]) > 1e-3,
       'a crease that is not vertical must shear the reflection');
+  } finally { t.restore(); }
+});
+
+check('the sheet is the size of the page, not the size of the pane', () => {
+  // The holder is position:absolute inset:0, so it is as wide as the pane. The
+  // page inside it is only as wide as the page. Cutting the sheet from the
+  // holder stretched the page across the pane — invisible while a page was
+  // bigger than its pane, and a visible enlargement the moment a whole page
+  // fitted inside one.
+  const t = turnablePane({ w: 600, h: 400, pageW: 300 });
+  try {
+    assert.equal(t.pane.beginLiveTurn('next', { x: 440, y: 200 }), true);
+    const leaf = t.vp.querySelector('.pdf-page-leaf');
+    assert.equal(leaf.style.width, '300px', 'the sheet is the page, not the pane');
+    assert.equal(leaf.style.left, '150px', 'and it sits where the page sits');
+    assert.equal(t.pane._live.anchor.x, 300, 'the trailing edge is the page edge');
   } finally { t.restore(); }
 });
 
