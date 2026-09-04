@@ -525,6 +525,8 @@ function recordingContext() {
     scale: (...a) => calls.push(['scale', ...a]),
     clip: () => calls.push(['clip']),
     beginPath: () => {}, moveTo: () => {}, lineTo: () => {}, closePath: () => {}, rect: () => {},
+    stroke: () => calls.push(['stroke']),
+    strokeStyle: '', lineWidth: 1,
     createLinearGradient: () => ({ addColorStop() {} }),
   };
   return ctx;
@@ -623,15 +625,22 @@ check('a backward turn is picked up at the other edge', () => {
 // and a reader would not see printing through the back of a page they have not
 // reached yet. Drawing the OLD page there put the page just left onto the back
 // of the page coming in, which is the wrong sheet entirely.
-check('a forward turn shows the leaving page through the back of the fold', () => {
-  const t = turnablePane({ page: 5 });
-  try {
-    t.pane.beginLiveTurn('next', { x: 290, y: 200 });
-    t.ctx.calls.length = 0;
-    t.pane.dragLiveTurn({ x: 140, y: 200 });
-    assert.ok(t.ctx.calls.some((c) => c[0] === 'drawImage'),
-      'the old page is what folded away, so it shows through its own back');
-  } finally { t.restore(); }
+check('the back of the fold is blank paper, whichever way it goes', () => {
+  // Printing showing faintly through from the other side is true of paper and
+  // looked like a fault on a screen: mirrored characters across half the pane
+  // read as broken rendering, not as a sheet seen from behind.
+  for (const dir of ['next', 'prev']) {
+    const t = turnablePane({ page: 5 });
+    try {
+      t.pane.beginLiveTurn(dir, { x: dir === 'next' ? 290 : 10, y: 200 });
+      t.ctx.calls.length = 0;
+      t.pane.dragLiveTurn({ x: dir === 'next' ? 140 : 160, y: 200 });
+      const draws = t.ctx.calls.filter((c) => c[0] === 'drawImage').length;
+      assert.equal(draws, 1, `${dir}: only the page still lying flat is drawn`);
+      assert.ok(t.ctx.calls.some((c) => c[0] === 'stroke'),
+        `${dir}: the crease is a hairline, so the fold has an edge`);
+    } finally { t.restore(); }
+  }
 });
 
 check('a backward turn folds in a blank back, not the page being left', () => {

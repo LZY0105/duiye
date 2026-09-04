@@ -70,8 +70,6 @@ const TURN_CORNER_BAND = 1 / 3;
 /** Paper colour behind the reverse of the sheet. */
 const TURN_BACK = '#f6f4f0';
 
-/** How much of the page's own printing shows through from behind. */
-const TURN_BACK_INK = 0.16;
 
 export class PdfPane {
   /**
@@ -141,6 +139,34 @@ export class PdfPane {
   _viewport() {
     const rect = this.elViewport.getBoundingClientRect();
     return { width: Math.max(1, rect.width), height: Math.max(1, rect.height) };
+  }
+
+  /**
+   * The scale at which the whole page fits the pane — what 100% means here.
+   *
+   * A PDF's own 1:1 is a number about paper: it is 72dpi against whatever
+   * density the screen happens to have, and on a tablet holding two documents
+   * side by side it puts a page taller than the pane, so "100%" showed roughly
+   * two thirds of a page and the rest had to be panned to. Reading is done a
+   * page at a time, so the page IS the unit: 100% is the whole of it, and
+   * anything above that is the reader leaning in.
+   *
+   * Returns null before a page has been measured, and callers fall back to the
+   * document's own scale until then.
+   */
+  fitScale() {
+    if (!this.pageSize?.width || !this.pageSize?.height) return null;
+    const viewport = this._viewport();
+    if (!viewport.width || !viewport.height) return null;
+    return Math.min(viewport.width / this.pageSize.width,
+                    viewport.height / this.pageSize.height);
+  }
+
+  /** The zoom as the reader sees it: 1 is the whole page, 2 is twice that. */
+  displayZoom() {
+    const base = this.fitScale();
+    if (!base || !this.state) return this.state?.zoom ?? 1;
+    return this.state.zoom / base;
   }
 
   _contentSize() {
@@ -565,11 +591,22 @@ export class PdfPane {
     ctx.clip();
     ctx.fillStyle = TURN_BACK;
     ctx.fillRect(0, 0, w, h);
-    if (live.direction === 'next') {
-      ctx.globalAlpha = TURN_BACK_INK;
-      ctx.drawImage(sheet, 0, 0, w, h);
-      ctx.globalAlpha = 1;
-    }
+    // Nothing is printed on it.
+    //
+    // A little of the page used to show through from the other side, which is
+    // true of real paper and looked like a mistake on a screen: mirrored
+    // characters over half the pane read as a rendering fault, not as a sheet
+    // seen from behind. The back is blank.
+
+    // One hairline where the sheet doubles back. Not a shadow across the back —
+    // just the edge, so the fold has somewhere to be rather than fading into
+    // the page it is lying on.
+    ctx.strokeStyle = 'rgba(15, 23, 42, 0.13)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(k * nx - ny * far, k * ny + nx * far);
+    ctx.lineTo(k * nx + ny * far, k * ny - nx * far);
+    ctx.stroke();
 
     // No shading on the back of the sheet.
     //
@@ -726,8 +763,15 @@ export class PdfPane {
    * so a single open document gets a 100% floor.
    */
   setMinZoom(minZoom) {
-    const floor = Number(minZoom);
-    this.minZoom = Number.isFinite(floor) && floor > 0 ? floor : ZOOM_MIN;
+    // The floor is the whole page. Below it there is nothing left to see, and
+    // above it is where reading happens — so the caller's number is treated as
+    // a request for the document's own 1:1, and the page's own fit wins when it
+    // is smaller, which on a split tablet it always is.
+    const asked = Number(minZoom);
+    const requested = Number.isFinite(asked) && asked > 0 ? asked : ZOOM_MIN;
+    const whole = this.fitScale();
+    this.minZoom = whole ? Math.min(requested, whole) : requested;
+    if (this.state?.fitMode && this.state.fitMode !== FIT_MODES.NONE) return;
     if (!this.state) return;
     if (this.state.zoom < this.minZoom - 1e-6) {
       // Re-fit under the new floor rather than setting a bare zoom, so a
@@ -934,9 +978,12 @@ export class PdfPane {
       // moment `hidden` started meaning hidden, every freshly opened document
       // fitted against a zero-width viewport and opened at a nonsense zoom.
       //
-      // A restored session keeps its exact zoom; a fresh open fits to width.
+      // A restored session keeps its exact zoom; a fresh open shows the whole
+      // page. Fitting to WIDTH put a page taller than the pane on screen from
+      // the first moment, so the first thing a reader saw of a new book was the
+      // top two thirds of page one.
       if (!restoredView) {
-        this.state = applyFit(this.state, FIT_MODES.WIDTH, this._viewport(), this.pageSize, this.minZoom);
+        this.state = applyFit(this.state, FIT_MODES.PAGE, this._viewport(), this.pageSize);
       }
 
       await this._render();
@@ -1142,7 +1189,9 @@ export class PdfPane {
   resize() {
     if (!this.doc || !this.state) return;
     const before = this.state;
-    this.state = refit(this.state, this._viewport(), this.pageSize, this.minZoom);
+    // No floor on a refit: the pane has changed size and the fit it is holding
+    // has to stay a fit, at whatever zoom that now means.
+    this.state = refit(this.state, this._viewport(), this.pageSize);
     if (this.state !== before) {
       this._render();
       this.handlers.onStateChange?.(this.state);

@@ -674,12 +674,15 @@ export class PdfWorkspace {
     this.elDivider.style.order = '2';
     this.root.classList.toggle('is-swapped', swapped);
 
-    // 100% is the floor, with one document or two.
+    // 100% is the floor for a MANUAL zoom, and only for that.
     //
-    // Fitting a page to half a tablet computes well under 100%, and the result
-    // is a page too small to read — which is not a fit, it is a thumbnail. The
-    // pane clamps there and lets the page overflow instead; panning a readable
-    // page beats squinting at a whole one.
+    // Pinching or stepping below 100% in a half-width pane gives a page too
+    // small to read, so the floor stays there for anything the user dials in by
+    // hand. It used to apply to fits as well, on the same reasoning — but a fit
+    // is not a zoom level, it is a request to see the whole page, and clamping
+    // it meant the app could not honour that request at all: 整页 computed the
+    // right zoom and the floor immediately pushed it back up, so a page was
+    // never once shown whole. A fit now lands where it lands.
     for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
       this.panes[slot]?.setMinZoom?.(1);
     }
@@ -952,7 +955,9 @@ export class PdfWorkspace {
     });
     set('page-total', n => { n.textContent = loaded ? `/ ${pane.state.pageCount}` : ''; });
     set('zoom-label', n => {
-      n.textContent = loaded ? `${Math.round(pane.state.zoom * 100)}%` : '';
+      // Counted from the whole page, not from the PDF's own 1:1 — so 100%
+      // means the page is all there, which is what a reader means by it.
+      n.textContent = loaded ? `${Math.round((pane.displayZoom?.() ?? pane.state.zoom) * 100)}%` : '';
     });
     set('focus', n => {
       n.classList.toggle('is-active', this.state.focusedSlot === slot);
