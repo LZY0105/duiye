@@ -301,7 +301,19 @@ function initChromeHiding(elRoot) {
   const toggle = elRoot?.querySelector('[data-role="chrome-toggle"]');
   const topBar = elRoot?.querySelector('.pdf-page-bar');
   const dock = document.querySelector('.bottom-nav');
+  const peek = document.querySelector('[data-role="dock-peek"]');
   const body = document.body;
+
+  /** How far each bar has to travel to be gone — its own height. */
+  const topBarHeight = () => {
+    const v = parseFloat(getComputedStyle(document.documentElement)
+      .getPropertyValue('--pdf-bar-h'));
+    return Number.isFinite(v) && v > 0 ? v : 44;
+  };
+  const dockHeight = () => {
+    const r = dock?.getBoundingClientRect();
+    return r && r.height > 0 ? r.height : 66;
+  };
 
   /** How far a swipe must travel before it counts as one. */
   const TRAVEL = 26;
@@ -336,101 +348,117 @@ function initChromeHiding(elRoot) {
   window.addEventListener('resize', measure);
 
   /**
-   * A swipe over a bar puts it away: up for the top one, down for the dock.
+   * Dragging a bar away, and dragging it back.
    *
-   * Watched from the document and decided by where the press STARTED, rather
-   * than by listening on the bars themselves. A bar is 44px tall, so swiping it
-   * away means leaving it, and a pointerup is delivered to whatever is under the
-   * finger by then — the page, not the bar. Capturing the pointer fixes that in
-   * a browser and did not survive the trip through the WebView, so the bar's
-   * box is simply tested at the start instead. Nothing is captured, nothing is
-   * prevented, and a tap still reaches the buttons: only a real vertical travel
-   * counts as a swipe.
+   * The bar is placed by a number — 0 out, 1 away — and while a finger is down
+   * that number is simply where the finger is. So the bar leaves under the hand
+   * rather than after it, and a drag that changes its mind halfway brings the
+   * bar back with it. On release it finishes the journey itself, to whichever
+   * end it is nearer, or to wherever a flick was headed.
+   *
+   * Watched from the document and decided by where the press STARTED, because a
+   * bar is 44px tall: dragging it away means leaving it, and a pointerup lands
+   * on whatever is under the finger by then, which is not the bar.
    */
-  const within = (el, x, y) => {
-    if (!el) return false;
+
+  /** How close to the top edge a press has to be to catch the import row. */
+  const EDGE_TOP = 40;
+  /** Past this fraction of the way, letting go finishes the journey. */
+  const SETTLE = 0.4;
+  /** A flick this fast commits regardless of how far it got. */
+  const FLICK = 0.5;   // px per ms
+  /** How far above the dock a press still counts as taking hold of it. */
+  const DOCK_REACH = 44;
+
+  const boxOf = (el, padTop = 0) => {
+    if (!el) return null;
     const r = el.getBoundingClientRect();
-    return r.width > 0 && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+    if (!r.width) return null;
+    return { left: r.left, right: r.right, top: r.top - padTop, bottom: r.bottom };
+  };
+  const inBox = (b, x, y) => !!b && x >= b.left && x <= b.right && y >= b.top && y <= b.bottom;
+
+  let drag = null;
+
+  const setProgress = (which, p) => {
+    document.body.style.setProperty(`--${which}-drag`, String(p));
   };
 
-  let grab = null;
+  const clearProgress = (which) => {
+    document.body.style.removeProperty(`--${which}-drag`);
+  };
+
   document.addEventListener('pointerdown', (e) => {
-    grab = null;
+    drag = null;
     if (document.body.classList.contains('is-library-open')) return;
-    if (!isHidden('top') && within(topBar, e.clientX, e.clientY)) {
-      grab = { which: 'top', want: 'up', x: e.clientX, y: e.clientY };
-    } else if (!isHidden('bottom') && within(dock, e.clientX, e.clientY)) {
-      grab = { which: 'bottom', want: 'down', x: e.clientX, y: e.clientY };
-    }
-  }, { passive: true });
-
-  // Acted on as soon as the travel is there, rather than waiting for the finger
-  // to lift. A gesture over a bar can be taken away mid-flight — the WebView
-  // decides it was a scroll and sends pointercancel, and no pointerup ever
-  // arrives — so a swipe that waits for the lift is a swipe that sometimes does
-  // nothing at all. It also simply feels better: the bar leaves under the
-  // finger instead of after it.
-  document.addEventListener('pointermove', (e) => {
-    if (!grab) return;
-    const { which, want, x, y } = grab;
-    const dy = e.clientY - y;
-    if (Math.abs(dy) < TRAVEL || Math.abs(dy) < Math.abs(e.clientX - x)) return;
-    grab = null;
-    if (want === 'up' ? dy < 0 : dy > 0) setHidden(which, true);
-  }, { passive: true });
-
-  document.addEventListener('pointerup', () => { grab = null; }, { passive: true });
-  document.addEventListener('pointercancel', () => { grab = null; }, { passive: true });
-
-  /**
-   * Swipe in from the edge a bar went out at, and it comes back.
-   *
-   * Listened for on the document rather than through a strip of its own, so
-   * there is nothing lying over the top of the page waiting to swallow a tap
-   * meant for the pane's own controls. A gesture that does not qualify is left
-   * entirely alone — nothing is captured and nothing is prevented.
-   */
-  /**
-   * Where a bar can be called back from.
-   *
-   * The top one comes back from the very top: there is nothing else up there.
-   *
-   * The bottom one does NOT. The last stripe of a tablet screen belongs to the
-   * system's own back-and-home gesture, and a band sitting in it is a band that
-   * loses every second attempt to Android. So the bottom band stops short of the
-   * edge and is made deep enough to be found without aiming — it is a long way
-   * up the screen before it stops being "the bottom".
-   */
-  const EDGE_TOP = 34;
-  const EDGE_BOTTOM_SKIP = 26;    // left to the system gesture
-  const EDGE_BOTTOM_DEPTH = 120;  // and this much above that is ours
-
-  let edge = null;
-  document.addEventListener('pointerdown', (e) => {
-    edge = null;
-    if (document.body.classList.contains('is-library-open')) return;
+    const x = e.clientX;
     const y = e.clientY;
-    const h = window.innerHeight;
-    if (isHidden('top') && y <= EDGE_TOP) {
-      edge = { which: 'top', want: 'down', y };
-    } else if (isHidden('bottom')
-        && y <= h - EDGE_BOTTOM_SKIP
-        && y >= h - EDGE_BOTTOM_SKIP - EDGE_BOTTOM_DEPTH) {
-      edge = { which: 'bottom', want: 'up', y };
+
+    // Taking hold of a bar that is out, to push it away.
+    if (!isHidden('top') && inBox(boxOf(topBar), x, y)) {
+      drag = { which: 'top', from: 0, span: Math.max(24, topBar.getBoundingClientRect().height), sign: -1 };
+    } else if (!isHidden('bottom') && inBox(boxOf(dock, DOCK_REACH), x, y)) {
+      drag = { which: 'bottom', from: 0, span: Math.max(24, dock.getBoundingClientRect().height), sign: 1 };
+    // Taking hold of one that is away, to pull it back.
+    } else if (isHidden('top') && y <= EDGE_TOP) {
+      drag = { which: 'top', from: 1, span: topBarHeight(), sign: -1 };
+    } else if (isHidden('bottom') && inBox(boxOf(peek), x, y)) {
+      drag = { which: 'bottom', from: 1, span: dockHeight(), sign: 1 };
     }
+    if (!drag) return;
+    drag.y = y;
+    drag.at = e.timeStamp || performance.now();
+    drag.moved = false;
   }, { passive: true });
 
   document.addEventListener('pointermove', (e) => {
-    if (!edge) return;
-    const { which, want, y } = edge;
-    const dy = e.clientY - y;
-    if (Math.abs(dy) < TRAVEL) return;
-    edge = null;
-    if (want === 'down' ? dy > 0 : dy < 0) setHidden(which, false);
+    if (!drag) return;
+    const dy = e.clientY - drag.y;
+    if (!drag.moved) {
+      if (Math.abs(dy) < 4) return;
+      drag.moved = true;
+      document.body.classList.add('is-chrome-dragging');
+    }
+    // Toward 1 is away; `sign` says which direction that is for this bar.
+    const p = Math.max(0, Math.min(1, drag.from + (dy * drag.sign) / drag.span));
+    drag.p = p;
+    // Kept for the flick test: the speed of the LAST stretch of the gesture,
+    // not its average. A slow drag that changes its mind at the end has a
+    // healthy average speed in the wrong direction, and averaging would send
+    // the bar away from under a hand that was bringing it back.
+    drag.prevY = drag.lastY ?? drag.y;
+    drag.prevAt = drag.lastAt ?? drag.at;
+    drag.lastY = e.clientY;
+    drag.lastAt = e.timeStamp || performance.now();
+    setProgress(drag.which, p);
   }, { passive: true });
 
-  document.addEventListener('pointerup', () => { edge = null; }, { passive: true });
-  document.addEventListener('pointercancel', () => { edge = null; }, { passive: true });
+  const endDrag = (e) => {
+    if (!drag) return;
+    const { which } = drag;
+    const p = drag.p;
+    const moved = drag.moved;
+    const dt = Math.max(1, (drag.lastAt ?? drag.at) - (drag.prevAt ?? drag.at));
+    const v = moved ? ((drag.lastY ?? drag.y) - (drag.prevY ?? drag.y)) * drag.sign / dt : 0;
+    drag = null;
+    document.body.classList.remove('is-chrome-dragging');
+    if (!moved || p === undefined) { clearProgress(which); return; }
+
+    // Thrown hard enough, it goes where it was thrown; otherwise it finishes
+    // whichever journey it is nearer to completing.
+    const away = v > FLICK ? true : v < -FLICK ? false : p >= SETTLE;
+    clearProgress(which);           // the class takes over, and it transitions
+    setHidden(which, away);
+  };
+
+  document.addEventListener('pointerup', endDrag, { passive: true });
+  document.addEventListener('pointercancel', () => {
+    if (!drag) return;
+    const which = drag.which;
+    drag = null;
+    document.body.classList.remove('is-chrome-dragging');
+    clearProgress(which);
+  }, { passive: true });
 
   toggle?.addEventListener('click', () => {
     // Anything hidden: bring it all back. Nothing hidden: put it all away.

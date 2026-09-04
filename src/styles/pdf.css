@@ -69,59 +69,74 @@
 
 /* Sliding them away, each independently of the other.
 
-   Swipe up on the import row and it goes up; swipe down on the dock and it goes
-   down. They are separate states because they are separate bars — putting the
-   dock away to read does not mean giving up the import row as well.
+   Both bars are placed by a progress number rather than by a class: 0 is out,
+   1 is away, and anything between is where a finger has dragged it to. The
+   class only sets the number to 1, so a gesture and a button end up driving the
+   same one thing — which is what lets the bar follow a hand on the way out and
+   still settle by itself when the hand lets go.
 
-   The import row is in the page's flow, so hiding it has to give the height
-   back or the page keeps a 44px hole where it used to be. The margin animates
-   with the slide, against a height the script measures rather than a number
-   written here that the next label change would falsify. The dock is fixed and
-   floats, so it only has to move. */
+   The import row is in the page's flow, so its margin is driven by the same
+   number: the page closes the gap as the bar leaves rather than jumping when
+   it has gone. */
 :root { --pdf-bar-h: 44px; }
 
 .pdf-page-bar {
-  /* The swipe has to be ours. Without this the WebView reads a vertical drag
-     over the bar as a scroll, takes the pointer away mid-gesture and sends
-     pointercancel — so the bar could not be swiped away at all, by a finger or
-     by anything else. */
+  --drag: var(--top-drag, 0);
   touch-action: none;
+  transform: translateY(calc(-100% * var(--drag)));
+  margin-top: calc(-1 * var(--pdf-bar-h) * var(--drag));
+  opacity: calc(1 - var(--drag));
   transition:
-    transform 0.3s cubic-bezier(0.32, 0.72, 0, 1),
-    opacity 0.22s ease,
-    margin-top 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+    transform 0.32s cubic-bezier(0.32, 0.72, 0, 1),
+    margin-top 0.32s cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 0.26s ease;
 }
 
-body.is-top-hidden .pdf-page-bar {
-  transform: translateY(-100%);
-  margin-top: calc(-1 * var(--pdf-bar-h));
-  opacity: 0;
-  pointer-events: none;
-}
+body.is-top-hidden { --top-drag: 1; }
+body.is-top-hidden .pdf-page-bar { pointer-events: none; }
 
 /* Both the dock and the buttons on it: the press that starts a swipe lands on a
    button, and a button carries touch-action:manipulation from the base sheet,
    which is enough for the WebView to claim the drag and cancel the gesture. */
 [data-skin="liquid-math"] .bottom-nav,
 .bottom-nav,
-.bottom-nav button { touch-action: none; }
+.bottom-nav button,
+.dock-peek { touch-action: none; }
 
 .bottom-nav {
+  --drag: var(--bottom-drag, 0);
+  transform: translateY(calc((100% + 40px) * var(--drag)));
+  opacity: calc(1 - var(--drag));
   transition:
-    transform 0.3s cubic-bezier(0.32, 0.72, 0, 1),
-    opacity 0.22s ease;
+    transform 0.32s cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 0.26s ease;
 }
 
-body.is-bottom-hidden .bottom-nav {
-  /* Far enough to clear its own shadow on the way out. */
-  transform: translateY(calc(100% + 40px));
-  opacity: 0;
+body.is-bottom-hidden { --bottom-drag: 1; }
+body.is-bottom-hidden .bottom-nav { pointer-events: none; }
+
+/* While a finger is on it, the bar goes exactly where the finger goes — no
+   easing between the two, or it lags behind the hand carrying it. */
+body.is-chrome-dragging .pdf-page-bar,
+body.is-chrome-dragging .bottom-nav { transition: none; }
+
+/* Where the dock can be taken hold of once it has gone.
+   It sits exactly where the dock itself lives, so it takes nothing away that
+   was reachable before, and it exists only while the dock is away. */
+.dock-peek {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(6px + var(--safe-b, 0px));
+  margin-inline: auto;
+  width: calc(100% - 32px);
+  max-width: 520px;
+  height: 84px;
+  z-index: 999;
   pointer-events: none;
 }
 
-/* Coming back is the same move run backwards, and has to be as deliberate as
-   going away: the transitions above are on the base rules, not on the hidden
-   ones, so both directions are carried by the same curve and the same time. */
+body.is-bottom-hidden .dock-peek { pointer-events: auto; }
 
 @media (prefers-reduced-motion: reduce) {
   .pdf-page-bar, .bottom-nav { transition: none; }
