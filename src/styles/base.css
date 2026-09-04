@@ -1010,12 +1010,27 @@ a:hover { color: var(--accent-hover); }
   transition: transform var(--transition-fast);
 }
 .set-select-btn.open::after { transform: rotate(-135deg); }
+/* An open list has to be opaque, and it has to be on top.
+
+   It was neither, and the two faults compounded into one symptom: the options
+   were drawn in --card-bg, which is glass, so the card behind showed through
+   the words; and every .set-group carries a backdrop-filter, which makes each
+   card its own stacking context, so a z-index of 50 could not lift the list out
+   of the card it belongs to — the NEXT card painted straight over it. Two
+   layers of Chinese text in the same place is what "stacked" looks like.
+
+   The lift is on the group (see below), because that is the box the list cannot
+   escape. This just stops it being see-through. */
 .set-select-dropdown {
   position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 50;
-  background: var(--card-bg); border: var(--glass-border);
-  backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
+  background: linear-gradient(180deg,
+    rgba(255, 255, 255, 0.98) 0%,
+    rgba(248, 250, 253, 0.97) 100%);
+  border: var(--glass-border);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
   border-radius: 12px; overflow: hidden; display: none;
-  box-shadow: var(--glass-shadow);
+  box-shadow: 0 12px 32px -8px rgba(15, 23, 42, 0.22), var(--glass-shadow);
   animation: dropdownIn 0.18s var(--spring-ease);
 }
 @keyframes dropdownIn {
@@ -1033,7 +1048,13 @@ a:hover { color: var(--accent-hover); }
 .set-hint { font-size: 0.74rem; color: var(--muted); margin-top: 0.5rem; line-height: 1.6; }
 
 /* ── Settings page groups: Apple Inset Grouped ── */
+
+/* A card holding an open list is lifted above its neighbours. Each card is its
+   own stacking context, so this is the only place the lift can be applied. */
+.set-group:has(.set-select-dropdown.show) { z-index: 60; }
+
 .set-group {
+  position: relative; z-index: 1;
   margin-bottom: 1.25rem; padding: 1.1rem 1.25rem;
   background: var(--card-bg); border-radius: var(--card-radius);
   border: var(--glass-border); backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);

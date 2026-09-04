@@ -361,8 +361,15 @@ function initChromeHiding(elRoot) {
    * on whatever is under the finger by then, which is not the bar.
    */
 
-  /** How close to the top edge a press has to be to catch the import row. */
-  const EDGE_TOP = 40;
+  /**
+   * How far down the screen a press still counts as reaching for the import row.
+   *
+   * Generous on purpose: it is a gesture with nothing to aim at, and the only
+   * other thing a vertical drag does up here is nothing — the pane's own bar
+   * scrolls sideways. A tap is unaffected either way, because a drag is not a
+   * drag until it has travelled.
+   */
+  const EDGE_TOP = 96;
   /** Past this fraction of the way, letting go finishes the journey. */
   const SETTLE = 0.4;
   /** A flick this fast commits regardless of how far it got. */
@@ -443,6 +450,7 @@ function initChromeHiding(elRoot) {
     drag = null;
     document.body.classList.remove('is-chrome-dragging');
     if (!moved || p === undefined) { clearProgress(which); return; }
+    swallowClick = true;
 
     // Thrown hard enough, it goes where it was thrown; otherwise it finishes
     // whichever journey it is nearer to completing.
@@ -450,6 +458,23 @@ function initChromeHiding(elRoot) {
     clearProgress(which);           // the class takes over, and it transitions
     setHidden(which, away);
   };
+
+  /**
+   * A drag must not also press the thing it started on.
+   *
+   * The gesture begins on the dock, and the dock is two buttons — so pulling it
+   * away ended on 课本 or 设置 and changed the page as it went. The click the
+   * browser synthesises afterwards is swallowed once, in the capture phase,
+   * before it can reach them. Only after a real drag: a tap is left alone, or
+   * the bars would stop working as buttons.
+   */
+  let swallowClick = false;
+  document.addEventListener('click', (e) => {
+    if (!swallowClick) return;
+    swallowClick = false;
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
 
   document.addEventListener('pointerup', endDrag, { passive: true });
   document.addEventListener('pointercancel', () => {
