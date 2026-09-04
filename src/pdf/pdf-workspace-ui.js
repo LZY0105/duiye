@@ -297,11 +297,12 @@ export function destroyPdfWorkspace() {
  * all work the same way, and it only fires on a deliberate travel: a bar you
  * brush past on the way to a button must not disappear.
  */
-function initChromeHiding(elRoot) {
+export function initChromeHiding(elRoot) {
   const toggle = elRoot?.querySelector('[data-role="chrome-toggle"]');
   const topBar = elRoot?.querySelector('.pdf-page-bar');
   const dock = document.querySelector('.bottom-nav');
   const peek = document.querySelector('[data-role="dock-peek"]');
+  const barPeek = document.querySelector('[data-role="bar-peek"]');
   const body = document.body;
 
   /** How far each bar has to travel to be gone — its own height. */
@@ -409,7 +410,7 @@ function initChromeHiding(elRoot) {
     } else if (!isHidden('bottom') && inBox(boxOf(dock, DOCK_REACH), x, y)) {
       drag = { which: 'bottom', from: 0, span: Math.max(24, dock.getBoundingClientRect().height), sign: 1 };
     // Taking hold of one that is away, to pull it back.
-    } else if (isHidden('top') && y <= EDGE_TOP) {
+    } else if (isHidden('top') && (inBox(boxOf(barPeek), x, y) || y <= EDGE_TOP)) {
       drag = { which: 'top', from: 1, span: topBarHeight(), sign: -1 };
     } else if (isHidden('bottom') && inBox(boxOf(peek), x, y)) {
       drag = { which: 'bottom', from: 1, span: dockHeight(), sign: 1 };

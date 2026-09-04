@@ -25,6 +25,7 @@ import { PdfPane } from '../src/pdf/pdf-pane.js';
 import { SLOTS } from '../src/pdf/workspace-state.js';
 import { renderAnswerNotice } from '../src/pdf/answer-panel.js';
 import { onDoubleTap } from '../src/ui/double-tap.js';
+import { initChromeHiding } from '../src/pdf/pdf-workspace-ui.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -46,7 +47,7 @@ function check(label, fn) {
 // ── environment ─────────────────────────────────────────────────────────────
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/' });
-for (const key of ['window', 'document', 'PointerEvent', 'Event']) {
+for (const key of ['window', 'document', 'PointerEvent', 'Event', 'getComputedStyle', 'localStorage']) {
   if (dom.window[key] === undefined) continue;
   Object.defineProperty(globalThis, key, {
     value: dom.window[key], configurable: true, writable: true,
@@ -1192,6 +1193,164 @@ check('the notices file no longer credits what was deleted', () => {
   assert.ok(!sections.some((l) => /llama\.cpp|ONNX/i.test(l)),
     'crediting a dependency the build does not have is its own kind of wrong');
   assert.ok(/LaTeXSnipper Mobile base/.test(md), 'the base project is still credited');
+});
+
+// ── the two bars, put away and brought back ─────────────────────────────────
+
+group('12. Hiding the bars, and getting them back');
+
+/**
+ * The page as initChromeHiding finds it, with both bars where they really sit.
+ *
+ * JSDOM has no layout, so every box is 0x0 and every hit test would miss. The
+ * rectangles are stated instead — taken from the tablet, at the sizes the
+ * gesture actually has to cope with.
+ */
+function chromePage({ topHidden = false, bottomHidden = false } = {}) {
+  document.body.className = '';
+  document.body.innerHTML = [
+    '<div class="bar-peek" data-role="bar-peek"></div>',
+    '<div class="dock-peek" data-role="dock-peek"></div>',
+    '<div class="page" id="page-pdf">',
+    '  <button type="button" data-role="chrome-toggle"></button>',
+    '  <div class="pdf-page-bar"></div>',
+    '</div>',
+    '<nav class="bottom-nav">',
+    '  <button class="nav-btn" data-nav="textbook">课本</button>',
+    '  <button class="nav-btn" data-nav="settings">设置</button>',
+    '</nav>',
+  ].join('\n');
+
+  const root = document.getElementById('page-pdf');
+  const q = (sel) => document.querySelector(sel);
+  const box = (el, r) => { el.getBoundingClientRect = () => ({
+    left: r[0], top: r[1], right: r[2], bottom: r[3],
+    width: r[2] - r[0], height: r[3] - r[1], x: r[0], y: r[1],
+  }); };
+
+  box(q('.pdf-page-bar'), topHidden ? [0, -44, 1200, 0] : [0, 8, 1200, 52]);
+  box(q('.bar-peek'), topHidden ? [0, 0, 1148, 64] : [0, 0, 0, 0]);
+  box(q('.bottom-nav'), bottomHidden ? [0, 700, 1200, 766] : [0, 634, 1200, 700]);
+  box(q('[data-role="dock-peek"]'), bottomHidden ? [200, 620, 1000, 700] : [0, 0, 0, 0]);
+
+  if (topHidden) document.body.classList.add('is-top-hidden');
+  if (bottomHidden) document.body.classList.add('is-bottom-hidden');
+  initChromeHiding(root);
+  return root;
+}
+
+/** A finger going down at (x,y), travelling `dy`, and lifting. */
+function swipe(x, y, dy, { steps = 8 } = {}) {
+  const fire = (type, cy) => document.dispatchEvent(new window.PointerEvent(type, {
+    clientX: x, clientY: cy, pointerId: 1, pointerType: 'touch', isPrimary: true,
+    bubbles: true, cancelable: true,
+  }));
+  fire('pointerdown', y);
+  for (let i = 1; i <= steps; i++) fire('pointermove', y + (dy * i) / steps);
+  fire('pointerup', y + dy);
+}
+
+const hidden = (which) => document.body.classList.contains('is-' + which + '-hidden');
+
+check('dragging the import row up puts it away', () => {
+  chromePage();
+  swipe(600, 30, -60);
+  assert.ok(hidden('top'), 'a deliberate upward drag on the row is how it goes');
+  assert.ok(!hidden('bottom'), 'and it does not take the dock with it');
+});
+
+check('dragging down from the top brings the import row back', () => {
+  chromePage({ topHidden: true });
+  swipe(600, 30, 80);
+  assert.ok(!hidden('top'), 'the strip above the pane toolbar is what catches this');
+});
+
+check('the row comes back from a press anywhere along the strip', () => {
+  for (const x of [40, 600, 1100]) {
+    chromePage({ topHidden: true });
+    swipe(x, 30, 80);
+    assert.ok(!hidden('top'), 'a press at x=' + x + ' should reach it too');
+  }
+});
+
+check('dragging the dock down puts it away, and a swipe up brings it back', () => {
+  chromePage();
+  swipe(600, 660, 70);
+  assert.ok(hidden('bottom'), 'the dock goes down');
+  assert.ok(!hidden('top'), 'and the row above stays');
+
+  chromePage({ bottomHidden: true });
+  swipe(600, 670, -70);
+  assert.ok(!hidden('bottom'), 'and comes back up');
+});
+
+check('a wandering tap on the dock is not a drag', () => {
+  chromePage();
+  swipe(600, 660, 9, { steps: 3 });
+  assert.ok(!hidden('bottom'),
+    'a finger resting on 课本 moves a few pixels before it lifts — that is a press');
+});
+
+check('a sideways swipe along the dock is not a drag either', () => {
+  chromePage();
+  const fire = (type, x, y) => document.dispatchEvent(new window.PointerEvent(type, {
+    clientX: x, clientY: y, pointerId: 1, pointerType: 'touch', isPrimary: true,
+    bubbles: true, cancelable: true,
+  }));
+  fire('pointerdown', 400, 660);
+  for (let i = 1; i <= 8; i++) fire('pointermove', 400 + i * 25, 660 + i * 2);
+  fire('pointerup', 600, 676);
+  assert.ok(!hidden('bottom'), 'a thumb sliding across the dock is not reaching for it');
+});
+
+check('a drag that changes its mind leaves the bar where it was', () => {
+  chromePage();
+  const fire = (type, y) => document.dispatchEvent(new window.PointerEvent(type, {
+    clientX: 600, clientY: y, pointerId: 1, pointerType: 'touch', isPrimary: true,
+    bubbles: true, cancelable: true,
+  }));
+  fire('pointerdown', 30);
+  for (const y of [22, 14, 8, 16, 24, 30]) fire('pointermove', y);
+  fire('pointerup', 30);
+  assert.ok(!hidden('top'), 'pulled a little way and put back is not putting it away');
+});
+
+check('the drag that moved a bar does not also press the button under it', () => {
+  chromePage();
+  let pressed = 0;
+  document.querySelector('[data-nav="textbook"]')
+    .addEventListener('click', () => { pressed++; });
+  swipe(600, 660, 70);
+  assert.ok(hidden('bottom'), 'the dock went away');
+  document.querySelector('[data-nav="textbook"]')
+    .dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
+  assert.equal(pressed, 0, 'the click the drag ends on is swallowed, once');
+});
+
+check('the corner button restores whatever is hidden', () => {
+  const root = chromePage({ topHidden: true, bottomHidden: true });
+  root.querySelector('[data-role="chrome-toggle"]').click();
+  assert.ok(!hidden('top') && !hidden('bottom'), 'one press brings back both');
+  root.querySelector('[data-role="chrome-toggle"]').click();
+  assert.ok(hidden('top') && hidden('bottom'), 'and the next puts both away');
+});
+
+check('the strip is inert while the row is showing', () => {
+  const css = $read('src/styles/pdf.css');
+  const block = css.slice(css.indexOf('.bar-peek {'), css.indexOf('body.is-top-hidden .bar-peek'));
+  assert.ok(/pointer-events:\s*none/.test(block),
+    'it must not sit over the page when there is nothing to bring back');
+  assert.ok(/body\.is-top-hidden \.bar-peek \{ pointer-events: auto/.test(css));
+  assert.ok(/touch-action:\s*none/.test(block),
+    'and it has to refuse the gesture to the WebView, which is the whole point');
+});
+
+check('the strip leaves the corner button reachable', () => {
+  const css = $read('src/styles/pdf.css');
+  const block = css.slice(css.indexOf('.bar-peek {'), css.indexOf('body.is-top-hidden .bar-peek'));
+  const right = /right:\s*(\d+)px/.exec(block);
+  assert.ok(right && Number(right[1]) >= 44,
+    'the toggle is 30px wide at right:10px — the strip has to stop clear of it');
 });
 
 console.log('\n═══════════════════════════════════════════════════════════════');

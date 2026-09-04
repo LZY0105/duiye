@@ -120,6 +120,33 @@ body.is-bottom-hidden .bottom-nav { pointer-events: none; }
 body.is-chrome-dragging .pdf-page-bar,
 body.is-chrome-dragging .bottom-nav { transition: none; }
 
+/* Where the import row is taken hold of once it has gone.
+
+   A band watched on the document was not enough: with nothing to declare
+   touch-action on, the WebView claimed the vertical drag before it had
+   travelled far enough to count, and the row could be put away and not brought
+   back. This is a real element, so it can refuse to give the gesture up — the
+   same thing that made the dock's strip work.
+
+   It sits in the space above the pane's own toolbar, which is empty once the
+   import row has gone, so it covers no control. And it exists only while the
+   row is away. */
+.bar-peek {
+  position: fixed;
+  top: 0;
+  left: 0;
+  /* Stopping clear of the collapse button, which sits in this same band at the
+     top right. The strip would otherwise cover it, and the one control for
+     bringing the bars back would be the one thing that could not be pressed. */
+  right: 52px;
+  height: 64px;
+  z-index: 999;
+  pointer-events: none;
+  touch-action: none;
+}
+
+body.is-top-hidden .bar-peek { pointer-events: auto; }
+
 /* Where the dock can be taken hold of once it has gone.
    It sits exactly where the dock itself lives, so it takes nothing away that
    was reachable before, and it exists only while the dock is away. */
