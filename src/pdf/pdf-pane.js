@@ -541,17 +541,30 @@ export class PdfPane {
     // Everything on the anchor's side of the crease has folded over.
     const anchorSide = Math.sign(a.x * nx + a.y * ny - k) || -1;
     const far = Math.hypot(w, h) * 2;
-    // The half-plane still lying flat, as a polygon big enough to cover it.
+    /**
+     * One side of the crease, as a polygon big enough to cover the page.
+     *
+     * It starts ON the crease and runs `far` in the direction asked for. It used
+     * to start `far` out on that side and run `2 * far` back, which begins
+     * beyond the page on one side and ends beyond it on the other — a polygon
+     * covering the WHOLE plane, whichever side was asked for. Nothing was ever
+     * clipped: the flap's paper was painted over the entire sheet, including the
+     * part that had not moved and the part that should have been left clear for
+     * the page arriving underneath. That is why a paused turn showed a blank
+     * page, and why the fold read as a wash lying over everything.
+     */
     const halfPlane = (side) => {
-      const cx = k * nx + side * far * nx;
-      const cy = k * ny + side * far * ny;
-      const ex = -ny * far;
+      const cx = k * nx;                  // the foot of the crease
+      const cy = k * ny;
+      const ex = -ny * far;               // along the crease
       const ey = nx * far;
+      const ox = side * far * nx;         // and away from it, on one side only
+      const oy = side * far * ny;
       ctx.beginPath();
       ctx.moveTo(cx + ex, cy + ey);
       ctx.lineTo(cx - ex, cy - ey);
-      ctx.lineTo(cx - ex - side * far * nx * 2, cy - ey - side * far * ny * 2);
-      ctx.lineTo(cx + ex - side * far * nx * 2, cy + ey - side * far * ny * 2);
+      ctx.lineTo(cx - ex + ox, cy - ey + oy);
+      ctx.lineTo(cx + ex + ox, cy + ey + oy);
       ctx.closePath();
     };
 

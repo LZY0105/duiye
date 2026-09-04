@@ -376,6 +376,8 @@ function initChromeHiding(elRoot) {
   const FLICK = 0.5;   // px per ms
   /** How far above the dock a press still counts as taking hold of it. */
   const DOCK_REACH = 44;
+  /** Travel before a press becomes a drag rather than a wandering tap. */
+  const DRAG_START = 12;
 
   const boxOf = (el, padTop = 0) => {
     if (!el) return null;
@@ -413,6 +415,7 @@ function initChromeHiding(elRoot) {
       drag = { which: 'bottom', from: 1, span: dockHeight(), sign: 1 };
     }
     if (!drag) return;
+    drag.x = x;
     drag.y = y;
     drag.at = e.timeStamp || performance.now();
     drag.moved = false;
@@ -422,7 +425,14 @@ function initChromeHiding(elRoot) {
     if (!drag) return;
     const dy = e.clientY - drag.y;
     if (!drag.moved) {
-      if (Math.abs(dy) < 4) return;
+      // A finger resting on a button wanders several pixels before it lifts, and
+      // at four the dock started sliding under every press — so the tap became a
+      // drag, the click was swallowed as one, and 课本 and 设置 simply stopped
+      // working every so often. Past twelve it was meant.
+      if (Math.abs(dy) < DRAG_START) return;
+      // And it has to be going mostly up or down. A thumb sliding along the dock
+      // is not reaching for it.
+      if (Math.abs(dy) < Math.abs(e.clientX - drag.x)) return;
       drag.moved = true;
       document.body.classList.add('is-chrome-dragging');
     }
@@ -450,7 +460,7 @@ function initChromeHiding(elRoot) {
     drag = null;
     document.body.classList.remove('is-chrome-dragging');
     if (!moved || p === undefined) { clearProgress(which); return; }
-    swallowClick = true;
+    armSwallow();
 
     // Thrown hard enough, it goes where it was thrown; otherwise it finishes
     // whichever journey it is nearer to completing.
@@ -469,9 +479,26 @@ function initChromeHiding(elRoot) {
    * the bars would stop working as buttons.
    */
   let swallowClick = false;
+  let swallowTimer = 0;
+
+  /**
+   * Swallow the click this drag is about to produce — and only that one.
+   *
+   * A drag that ends somewhere with nothing to click produces no click at all,
+   * and the flag would then sit armed until the user's NEXT press, eating a tap
+   * they meant. It is dropped again on the turn of the event loop, which is
+   * later than the synthesised click and sooner than any human.
+   */
+  const armSwallow = () => {
+    swallowClick = true;
+    clearTimeout(swallowTimer);
+    swallowTimer = setTimeout(() => { swallowClick = false; }, 350);
+  };
+
   document.addEventListener('click', (e) => {
     if (!swallowClick) return;
     swallowClick = false;
+    clearTimeout(swallowTimer);
     e.stopPropagation();
     e.preventDefault();
   }, true);
