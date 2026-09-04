@@ -81,6 +81,11 @@
 :root { --pdf-bar-h: 44px; }
 
 .pdf-page-bar {
+  /* The swipe has to be ours. Without this the WebView reads a vertical drag
+     over the bar as a scroll, takes the pointer away mid-gesture and sends
+     pointercancel — so the bar could not be swiped away at all, by a finger or
+     by anything else. */
+  touch-action: none;
   transition:
     transform 0.3s cubic-bezier(0.32, 0.72, 0, 1),
     opacity 0.22s ease,
@@ -94,6 +99,13 @@ body.is-top-hidden .pdf-page-bar {
   pointer-events: none;
 }
 
+/* Both the dock and the buttons on it: the press that starts a swipe lands on a
+   button, and a button carries touch-action:manipulation from the base sheet,
+   which is enough for the WebView to claim the drag and cancel the gesture. */
+[data-skin="liquid-math"] .bottom-nav,
+.bottom-nav,
+.bottom-nav button { touch-action: none; }
+
 .bottom-nav {
   transition:
     transform 0.3s cubic-bezier(0.32, 0.72, 0, 1),
@@ -101,10 +113,15 @@ body.is-top-hidden .pdf-page-bar {
 }
 
 body.is-bottom-hidden .bottom-nav {
-  transform: translateY(calc(100% + 24px));
+  /* Far enough to clear its own shadow on the way out. */
+  transform: translateY(calc(100% + 40px));
   opacity: 0;
   pointer-events: none;
 }
+
+/* Coming back is the same move run backwards, and has to be as deliberate as
+   going away: the transitions above are on the base rules, not on the hidden
+   ones, so both directions are carried by the same curve and the same time. */
 
 @media (prefers-reduced-motion: reduce) {
   .pdf-page-bar, .bottom-nav { transition: none; }
@@ -739,9 +756,17 @@ body.is-bottom-hidden .bottom-nav {
 .pdf-library {
   position: absolute;
   inset: 0;
-  background: var(--surface, #f7f8fa);
-  backdrop-filter: blur(24px) saturate(160%);
-  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  /* Still glass — but glass you cannot read a page through. The blur was doing
+     its job and the tint was not: at --glass-bg the document stayed legible
+     underneath, and two pages of text at the same time is what made it swim.
+     Thicker frosting, same material. */
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.93) 0%,
+    rgba(247, 249, 252, 0.90) 100%);
+  backdrop-filter: blur(44px) saturate(190%);
+  -webkit-backdrop-filter: blur(44px) saturate(190%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
   z-index: 60;
   display: flex;
   flex-direction: column;

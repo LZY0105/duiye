@@ -240,19 +240,18 @@
   --spacing-unit: 1.1rem;
 }
 
+/* The ground behind the pages.
+
+   It was graph paper — a 20px grid with a 100px rule over it. Behind two pages
+   of a maths book it is a third grid competing with the two on screen, and with
+   the bars away there is more of it showing than before. A quiet wash instead:
+   the glass still has something to refract, and nothing to read. */
 [data-skin="liquid-math"] body {
   background-color: var(--bg);
   background-image:
-    linear-gradient(to right, rgba(15, 23, 42, 0.045) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(15, 23, 42, 0.045) 1px, transparent 1px),
-    linear-gradient(to right, rgba(15, 23, 42, 0.09) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(15, 23, 42, 0.09) 1px, transparent 1px);
-  background-size:
-    20px 20px, 20px 20px,
-    100px 100px, 100px 100px;
-  background-position:
-    -1px -1px, -1px -1px,
-    -1px -1px, -1px -1px;
+    radial-gradient(120% 90% at 15% 0%, rgba(47, 116, 255, 0.055) 0%, transparent 60%),
+    radial-gradient(110% 80% at 85% 100%, rgba(15, 23, 42, 0.05) 0%, transparent 62%);
+  background-attachment: fixed;
 }
 
 [data-skin="liquid-math"] .ocr-btn {
@@ -399,10 +398,12 @@
   padding: 6px 10px;
   padding-bottom: max(6px, var(--safe-b));
   user-select: none;
-  /* pan-y, not none: the dock spans the width of the screen, and `none` meant
-     a swipe that happened to start on it could not scroll the page behind it.
-     The lens drag is horizontal, so it keeps the axis it actually uses. */
-  touch-action: pan-y;
+  /* The dock owns its own vertical gestures — see pdf.css, where this is set to
+     none for both the dock and its buttons. It was pan-y so that a swipe
+     starting on the dock could still scroll the page behind it; nothing behind
+     it scrolls that way any more, and a downward swipe here now means "put this
+     away", which the browser cannot be allowed to take for a scroll. */
+  touch-action: none;
   z-index: 1000;
   isolation: isolate;
 }

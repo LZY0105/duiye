@@ -335,26 +335,102 @@ function initChromeHiding(elRoot) {
   measure();
   window.addEventListener('resize', measure);
 
-  /** A swipe on `el` in `direction` puts that bar away. */
-  const swipeToHide = (el, which, direction) => {
-    if (!el) return;
-    let from = null;
-    el.addEventListener('pointerdown', (e) => {
-      from = { x: e.clientX, y: e.clientY };
-    });
-    el.addEventListener('pointerup', (e) => {
-      if (!from) return;
-      const dy = e.clientY - from.y;
-      const dx = e.clientX - from.x;
-      from = null;
-      if (Math.abs(dy) < TRAVEL || Math.abs(dy) < Math.abs(dx)) return;
-      if (direction === 'up' ? dy < 0 : dy > 0) setHidden(which, true);
-    });
-    el.addEventListener('pointercancel', () => { from = null; });
+  /**
+   * A swipe over a bar puts it away: up for the top one, down for the dock.
+   *
+   * Watched from the document and decided by where the press STARTED, rather
+   * than by listening on the bars themselves. A bar is 44px tall, so swiping it
+   * away means leaving it, and a pointerup is delivered to whatever is under the
+   * finger by then — the page, not the bar. Capturing the pointer fixes that in
+   * a browser and did not survive the trip through the WebView, so the bar's
+   * box is simply tested at the start instead. Nothing is captured, nothing is
+   * prevented, and a tap still reaches the buttons: only a real vertical travel
+   * counts as a swipe.
+   */
+  const within = (el, x, y) => {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
   };
 
-  swipeToHide(topBar, 'top', 'up');
-  swipeToHide(dock, 'bottom', 'down');
+  let grab = null;
+  document.addEventListener('pointerdown', (e) => {
+    grab = null;
+    if (document.body.classList.contains('is-library-open')) return;
+    if (!isHidden('top') && within(topBar, e.clientX, e.clientY)) {
+      grab = { which: 'top', want: 'up', x: e.clientX, y: e.clientY };
+    } else if (!isHidden('bottom') && within(dock, e.clientX, e.clientY)) {
+      grab = { which: 'bottom', want: 'down', x: e.clientX, y: e.clientY };
+    }
+  }, { passive: true });
+
+  // Acted on as soon as the travel is there, rather than waiting for the finger
+  // to lift. A gesture over a bar can be taken away mid-flight — the WebView
+  // decides it was a scroll and sends pointercancel, and no pointerup ever
+  // arrives — so a swipe that waits for the lift is a swipe that sometimes does
+  // nothing at all. It also simply feels better: the bar leaves under the
+  // finger instead of after it.
+  document.addEventListener('pointermove', (e) => {
+    if (!grab) return;
+    const { which, want, x, y } = grab;
+    const dy = e.clientY - y;
+    if (Math.abs(dy) < TRAVEL || Math.abs(dy) < Math.abs(e.clientX - x)) return;
+    grab = null;
+    if (want === 'up' ? dy < 0 : dy > 0) setHidden(which, true);
+  }, { passive: true });
+
+  document.addEventListener('pointerup', () => { grab = null; }, { passive: true });
+  document.addEventListener('pointercancel', () => { grab = null; }, { passive: true });
+
+  /**
+   * Swipe in from the edge a bar went out at, and it comes back.
+   *
+   * Listened for on the document rather than through a strip of its own, so
+   * there is nothing lying over the top of the page waiting to swallow a tap
+   * meant for the pane's own controls. A gesture that does not qualify is left
+   * entirely alone — nothing is captured and nothing is prevented.
+   */
+  /**
+   * Where a bar can be called back from.
+   *
+   * The top one comes back from the very top: there is nothing else up there.
+   *
+   * The bottom one does NOT. The last stripe of a tablet screen belongs to the
+   * system's own back-and-home gesture, and a band sitting in it is a band that
+   * loses every second attempt to Android. So the bottom band stops short of the
+   * edge and is made deep enough to be found without aiming — it is a long way
+   * up the screen before it stops being "the bottom".
+   */
+  const EDGE_TOP = 34;
+  const EDGE_BOTTOM_SKIP = 26;    // left to the system gesture
+  const EDGE_BOTTOM_DEPTH = 120;  // and this much above that is ours
+
+  let edge = null;
+  document.addEventListener('pointerdown', (e) => {
+    edge = null;
+    if (document.body.classList.contains('is-library-open')) return;
+    const y = e.clientY;
+    const h = window.innerHeight;
+    if (isHidden('top') && y <= EDGE_TOP) {
+      edge = { which: 'top', want: 'down', y };
+    } else if (isHidden('bottom')
+        && y <= h - EDGE_BOTTOM_SKIP
+        && y >= h - EDGE_BOTTOM_SKIP - EDGE_BOTTOM_DEPTH) {
+      edge = { which: 'bottom', want: 'up', y };
+    }
+  }, { passive: true });
+
+  document.addEventListener('pointermove', (e) => {
+    if (!edge) return;
+    const { which, want, y } = edge;
+    const dy = e.clientY - y;
+    if (Math.abs(dy) < TRAVEL) return;
+    edge = null;
+    if (want === 'down' ? dy > 0 : dy < 0) setHidden(which, false);
+  }, { passive: true });
+
+  document.addEventListener('pointerup', () => { edge = null; }, { passive: true });
+  document.addEventListener('pointercancel', () => { edge = null; }, { passive: true });
 
   toggle?.addEventListener('click', () => {
     // Anything hidden: bring it all back. Nothing hidden: put it all away.

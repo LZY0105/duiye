@@ -67,8 +67,15 @@ const TURN_ANGLE = 170;
  */
 const TURN_CORNER_BAND = 1 / 3;
 
-/** Paper colour behind the reverse of the sheet. */
-const TURN_BACK = '#f6f4f0';
+/**
+ * Paper colour behind the reverse of the sheet.
+ *
+ * The same white as the page. It was a shade warmer and darker, on the
+ * reasoning that the back of a sheet catches less light — and over a white page
+ * a slightly darker panel does not read as the back of anything, it reads as a
+ * shadow lying across the page underneath. The fold is told by its crease.
+ */
+const TURN_BACK = '#ffffff';
 
 
 export class PdfPane {
@@ -728,14 +735,11 @@ export class PdfPane {
       leaf.remove();
     };
 
-    if (commit) {
-      try {
-        holder.animate?.(
-          [{ opacity: 0.8 }, { opacity: 1 }],
-          { duration: Math.min(260, duration), easing: 'cubic-bezier(0.32, 0.72, 0, 1)' },
-        );
-      } catch (_) { /* no WAAPI: the page simply appears */ }
-    }
+    // Nothing is done to the page arriving underneath.
+    //
+    // It used to be faded up from 0.8, which dimmed the very thing the turn is
+    // uncovering — the next page arrived shaded, as though the sheet leaving
+    // cast something onto it. A page being turned to is just there.
 
     const started = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     const step = () => {
