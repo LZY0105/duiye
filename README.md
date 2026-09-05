@@ -53,6 +53,8 @@
 | `feature/with-ocr-preserved` | 精简前的完整版本（含 OCR、编辑器、模型与 AI 服务商） |
 | `feature/ocr-and-editor-preserved` | 更早的完整版本 |
 
+围绕识别栈的周边设施也一并清掉了：模型打包脚本 `scripts/package-models.js` 与调用它的 `package-models.yml`、ONNX 量化脚本 `scripts/quantize.py`、七个 Python 模型测试与它们共用的 `test_utils.py`，以及运行这些测试的 `test/run_tests.sh`。它们全部来自上游，而识别功能删掉之后，它们指向的东西一个都不在了：打包脚本读的 `public/models/` 目录不存在，量化脚本里写死的是另一台机器上的绝对路径，`run_tests.sh` 点名 22 个测试文件、其中 8 个在这次清理之前就已经不在仓库里。测试的唯一入口是 `npm test`。
+
 **移除 OCR 不影响对题。** 匹配引擎从 PDF 书签树解析题号，只有在题号对不上时才退回文本相似度。在四本真实考研教材上，全程没有任何识别器参与，仍然做到 **508/508 全部解析、零错误、HIGH 置信度 100% 精确率**。
 
 唯一受影响的情形是**既没有书签、文字层也不可读的纯扫描件**——这种文档会明确报告“需要 OCR 后才能匹配”，而不会猜测。

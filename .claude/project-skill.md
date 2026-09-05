@@ -91,17 +91,15 @@ LaTeXSnipper_mobile/
 │   ├── test_integration.js           # 集成测试（221 项）
 │   ├── test_user_workflows.js        # 用户工作流（154 项）
 │   ├── test_e2e.js                   # E2E 全量（303 项）
-│   └── test_*.py                     # OCR 模型测试（Python）
 ├── scripts/
-│   ├── package-models.js      # 模型打包脚本（生成 per-category + 完整 ZIP）
-│   └── quantize.py            # 模型量化
+│   ├── build-android-windows.ps1  # Windows 非 ASCII 路径下的 Android 构建
+│   └── build-ios.sh               # 本地 iOS 构建
 ├── vite.config.js             # Vite 8 配置（wasm + top-level-await 原生支持）
 ├── SECURITY.md                # 安全政策
 ├── capacitor.config.json      # Capacitor 配置
 └── .github/workflows/
     ├── build-apk.yml                  # Android APK 构建（workflow_dispatch）
     ├── build-ios.yml                  # iOS 模拟器构建
-    ├── package-models.yml             # 模型打包 + 上传 GitHub Releases
     └── security-scan.yml              # 安全扫描
 ```
 
@@ -236,14 +234,6 @@ localStorage          — ls_download_progress 持久化下载进度，支持应
 - 断点续传：HTTP `Range: bytes=N-` header，服务器不支持时自动重新下载
 - SHA256：Web Crypto API `crypto.subtle.digest('SHA-256')`，不匹配则拒绝导入
 
-### 打包脚本
-
-```bash
-node scripts/package-models.js --output dist-models
-# 生成: dist-models/latexsnipper-{category}.zip + model-manifest.json
-# ONNX 源文件在 model-sources/（不被 Vite 清理）
-# 每个 ZIP 包含 config.json（自动从 CATEGORY_MAP 生成）
-```
 
 ### 模型目录结构
 
@@ -395,9 +385,8 @@ node test/test_katex.js           # KaTeX 渲染
 node test/test_integration.js     # 项目结构检查
 node test/test_e2e.js             # 全量 E2E
 
-# 全部测试（含 OCR 模型）
-conda activate ppocr_finetune
-bash test/run_tests.sh
+# 全部测试
+npm test
 ```
 
 ### 注意事项
