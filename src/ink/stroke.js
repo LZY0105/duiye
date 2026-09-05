@@ -16,21 +16,10 @@ export const INK_TOOLS = Object.freeze({
   HIGHLIGHTER: 'highlighter',
 });
 
-/**
- * Per-tool rendering behaviour. Width is a document-space base width.
- *
- * `grain` is what makes a pencil a pencil rather than a thin pale pen. Nothing
- * else here distinguishes them: before it, the two tools differed by 0.4 of a
- * unit of width and 0.15 of alpha, and on a stylus that reports no pressure
- * they drew the same line. See drawPencil in ink-renderer.js.
- */
+/** Per-tool rendering behaviour. Width is a document-space base width. */
 export const TOOL_DEFAULTS = Object.freeze({
   [INK_TOOLS.PEN]: { width: 2, opacity: 1, pressureRange: 0.6, composite: 'source-over' },
-  // Broader and paler than the pen, which is most of what tells the two apart
-  // at a glance before the grain is close enough to see.
-  [INK_TOOLS.PENCIL]: {
-    width: 3, opacity: 0.82, pressureRange: 0.8, composite: 'source-over', grain: true,
-  },
+  [INK_TOOLS.PENCIL]: { width: 1.6, opacity: 0.85, pressureRange: 0.8, composite: 'source-over' },
   [INK_TOOLS.MARKER]: { width: 6, opacity: 1, pressureRange: 0.2, composite: 'source-over' },
   // A highlighter must not darken where a single stroke overlaps itself, which
   // is why it is drawn as one flattened path rather than per-segment.
@@ -59,14 +48,7 @@ export function createStroke({ tool = INK_TOOLS.PEN, color = '#111827', width, o
 
 /** Half the maximum painted width, used to inflate bounds and hit tests. */
 export function strokeRadius(stroke) {
-  const defaults = TOOL_DEFAULTS[stroke.tool] || TOOL_DEFAULTS[INK_TOOLS.PEN];
-  // Graphite scatters either side of the line it was drawn along, and the
-  // widest pass sits about half a radius off centre. Bounds that did not know
-  // that would leave the outermost grain outside the repaint region, so it
-  // would survive an erase and reappear where a neighbouring stroke was
-  // redrawn over it.
-  const spread = defaults.grain ? 2 : 1;
-  return Math.max(0.5, (stroke.width * spread) / 2);
+  return Math.max(0.5, stroke.width / 2);
 }
 
 function growBounds(bounds, x, y, pad) {
