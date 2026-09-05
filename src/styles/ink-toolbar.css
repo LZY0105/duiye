@@ -413,7 +413,9 @@
   max-width: 20rem;
   padding: 0.85rem 1rem;
   border-radius: var(--card-radius, 18px);
-  background: var(--card-bg, rgba(255, 255, 255, 0.82));
+  /* Opaque enough to read over a document even if the blur below never lands
+     — see the skin's note on the same surface. */
+  background: var(--ink-card-bg, rgba(255, 255, 255, 0.94));
   backdrop-filter: var(--glass-blur, blur(20px) saturate(200%));
   -webkit-backdrop-filter: var(--glass-blur, blur(20px) saturate(200%));
   border: var(--glass-border, 0.5px solid rgba(255, 255, 255, 0.75));
@@ -450,8 +452,10 @@
   /* Paper, not glass. This is the one well in the card whose job is to show a
      stroke of ink truthfully, and it cannot do that over a moving backdrop —
      on the transparent fill it briefly had, a dark stroke over dark content
-     simply vanished. */
-  background: rgba(255, 255, 255, 0.82);
+     simply vanished. Opaque, for the same reason the card above it is nearly
+     so: at 0.82 the document's own text showed through the sample of the very
+     ink it is a sample of. */
+  background: #fff;
   box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.10);
   border-radius: 10px;
   margin-bottom: 0.65rem;
@@ -724,11 +728,26 @@
 
 [data-skin="liquid-math"] .ink-toolbar { --glass-rim-width: 1px; }
 /* The card is read, not just seen: it carries labels, numeric readouts and a
-   colour well. It takes the same legibility floor as the bar, and a glint kept
-   well under the toolbar's — a catchlight travelling across a settings panel
-   is a distraction where the same light on a control bar is depth. */
+   colour well. It takes a legibility floor of its own, and a glint kept well
+   under the toolbar's — a catchlight travelling across a settings panel is a
+   distraction where the same light on a control bar is depth.
+
+   That floor is 0.94, not the 0.42 it had, and the reason is that the blur
+   underneath it is not guaranteed to land. `backdrop-filter` is a compositing
+   effect: it samples a backdrop image, and on the tablet this app is for it
+   comes back empty over the document — the page's canvas holder is promoted to
+   its own layer and the card gets nothing to blur. Everything read as designed
+   on a desktop and, on the device, a settings panel opened over a maths page
+   had the page's own ruled lines and formulae running straight through it,
+   sharp, at full contrast, behind the words you were trying to read.
+
+   Where the blur does land, 0.94 still transmits: enough for the surface to
+   move with what is behind it, not enough for the text behind to compete. A
+   panel over a document is the one surface that cannot spend its legibility on
+   transmittance, because what is behind it is, by definition, dense black type
+   — the thing the reader opened the app to look at. */
 [data-skin="liquid-math"] .ink-card {
-  --glass-bg: rgba(255, 255, 255, 0.42);
+  --glass-bg: rgba(255, 255, 255, 0.94);
   --glass-glint-size: 110px;
   --glass-glint-core: rgba(255, 255, 255, 0.24);
 }

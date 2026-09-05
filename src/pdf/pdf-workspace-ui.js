@@ -311,7 +311,6 @@ export function initChromeHiding(elRoot) {
   const life = new AbortController();
   const alive = { signal: life.signal };
 
-  const toggle = elRoot?.querySelector('[data-role="chrome-toggle"]');
   const topBar = elRoot?.querySelector('.pdf-page-bar');
   const dock = document.querySelector('.bottom-nav');
   const peek = document.querySelector('[data-role="dock-peek"]');
@@ -339,19 +338,9 @@ export function initChromeHiding(elRoot) {
     markMoving(which);
     body.classList.toggle(`is-${which}-hidden`, hidden);
     try { localStorage.setItem(`ls_chrome_${which}`, hidden ? '1' : '0'); } catch (_) { /* private mode */ }
-    syncToggle();
     // The import row is in the flow, so the panes have just changed height.
     if (which === 'top') window.dispatchEvent(new Event('resize'));
   };
-
-  function syncToggle() {
-    if (!toggle) return;
-    const anyHidden = isHidden('top') || isHidden('bottom');
-    toggle.setAttribute('aria-pressed', anyHidden ? 'true' : 'false');
-    const label = anyHidden ? '显示工具栏' : '隐藏工具栏';
-    toggle.setAttribute('aria-label', label);
-    toggle.setAttribute('title', label);
-  }
 
   // The row's own height, so hiding it can give exactly that much back.
   const measure = () => {
@@ -600,18 +589,10 @@ export function initChromeHiding(elRoot) {
     clearProgress(which);
   }, { passive: true, ...alive });
 
-  toggle?.addEventListener('click', () => {
-    // Anything hidden: bring it all back. Nothing hidden: put it all away.
-    const restore = isHidden('top') || isHidden('bottom');
-    setHidden('top', !restore);
-    setHidden('bottom', !restore);
-  }, alive);
-
   try {
     if (localStorage.getItem('ls_chrome_top') === '1') setHidden('top', true);
     if (localStorage.getItem('ls_chrome_bottom') === '1') setHidden('bottom', true);
   } catch (_) { /* storage unavailable: start with both showing */ }
-  syncToggle();
 
   return () => {
     life.abort();

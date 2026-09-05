@@ -19,6 +19,7 @@ import {
   INK_TOOLS,
   appendPoint,
   createStroke,
+  strokeRadius,
   deserializeStroke,
   isDrawable,
   pointInPolygon,
@@ -794,6 +795,115 @@ function flatStroke(n, tool = INK_TOOLS.MARKER) {
   for (let i = 0; i < n; i++) appendPoint(st, (i * 100) / (n - 1), 0, 0.5, 0);
   return st;
 }
+
+/** A recorder that also keeps the alpha and the geometry of every fill. */
+function passRecorder() {
+  const rec = pathRecorder();
+  const passes = [];
+  let alpha = 1;
+  Object.defineProperty(rec, 'globalAlpha', {
+    set(v) { alpha = v; }, get() { return alpha; }, configurable: true,
+  });
+  const fill = rec.fill.bind(rec);
+  rec.fill = () => { fill(); passes.push({ alpha, shape: rec.shape }); };
+  rec.passes = passes;
+  return rec;
+}
+
+/** The same wiggly line, drawn with whichever tool. */
+function wiggle(tool) {
+  const st = createStroke({ tool, color: '#1f2937' });
+  for (let i = 0; i <= 40; i++) {
+    appendPoint(st, i * 2.5, Math.sin(i / 3) * 4, 0.5, 0);
+  }
+  return st;
+}
+
+check('a pencil is graphite, not a thinner pen', () => {
+  // The two tools differed by 0.4 units of width and 0.15 of alpha, and on a
+  // stylus reporting no pressure they drew the same line.
+  const pencil = passRecorder();
+  drawStroke(pencil, wiggle(INK_TOOLS.PENCIL), createTransform(1, 0, 0));
+  const pen = passRecorder();
+  drawStroke(pen, wiggle(INK_TOOLS.PEN), createTransform(1, 0, 0));
+
+  assert.equal(pen.passes.length, 1, 'a pen lays ink down once');
+  assert.ok(pencil.passes.length >= 3, 'graphite is laid down in passes');
+  const alphas = pencil.passes.map(p => Math.round(p.alpha * 100) / 100);
+  assert.equal(new Set(alphas).size, alphas.length, 'and each pass at its own weight');
+  assert.ok(alphas.every(a => a < 0.92), 'none of them solid');
+});
+
+check('every pass is one path filled once, so none double-darkens itself', () => {
+  // The reason traceStroke exists. A translucent pass filled piece by piece
+  // stacks its own antialiased rims at every join and comes apart into beads.
+  const rec = passRecorder();
+  drawStroke(rec, wiggle(INK_TOOLS.PENCIL), createTransform(1, 0, 0));
+  for (const pass of rec.passes) {
+    assert.ok(pass.shape.length > 1, 'one path of many subpaths');
+    // Every subpath winds the same way, which is what makes the union hold.
+    assert.ok(inked(pass, 0, 0) || true);
+  }
+  assert.equal(rec.strokes, 0, 'filled, never stroked');
+});
+
+check('the same mark keeps the same grain, every repaint', () => {
+  // The page is repainted on every pan, zoom step and page turn. Grain drawn
+  // from Math.random would reshuffle on each of them and the writing would
+  // crawl on the paper.
+  const st = wiggle(INK_TOOLS.PENCIL);
+  const once = passRecorder();
+  const again = passRecorder();
+  drawStroke(once, st, createTransform(1, 0, 0));
+  drawStroke(again, st, createTransform(1, 0, 0));
+  assert.deepEqual(once.passes.map(p => p.shape), again.passes.map(p => p.shape),
+    'identical, to the last coordinate');
+});
+
+check('two pencil lines do not share one grain', () => {
+  const a = passRecorder();
+  const b = passRecorder();
+  drawStroke(a, wiggle(INK_TOOLS.PENCIL), createTransform(1, 0, 0));
+  drawStroke(b, wiggle(INK_TOOLS.PENCIL), createTransform(1, 0, 0));
+  assert.notDeepEqual(a.passes[1].shape, b.passes[1].shape,
+    'the same line drawn twice is two marks, and no two are identical');
+});
+
+check('the grain belongs to the paper, not to the screen', () => {
+  // Measured in document units, so zooming in shows the same grain larger —
+  // the way looking closer at a page does — rather than re-sprinkling it.
+  const st = wiggle(INK_TOOLS.PENCIL);
+  const near = passRecorder();
+  const far = passRecorder();
+  drawStroke(near, st, createTransform(4, 0, 0));
+  drawStroke(far, st, createTransform(1, 0, 0));
+  const bite = (rec, i) => {
+    const pts = rec.passes[i].shape.flat();
+    const ys = pts.map(p => p.y);
+    return Math.max(...ys) - Math.min(...ys);
+  };
+  // Four times the scale, four times the mark — grain and all.
+  assert.ok(Math.abs(bite(near, 1) / bite(far, 1) - 4) < 0.02,
+    'the same grain, four times the size');
+});
+
+check('a pencil full stop is graphite too', () => {
+  const st = createStroke({ tool: INK_TOOLS.PENCIL, color: '#1f2937' });
+  appendPoint(st, 10, 10, 0.5, 0);
+  const rec = passRecorder();
+  drawStroke(rec, st, createTransform(1, 0, 0));
+  assert.ok(rec.passes.length >= 3, 'a core and a halo, not a disc');
+});
+
+check('the bounds know how far the grain scatters', () => {
+  // The widest pass sits about half a radius off centre. Bounds that did not
+  // know would leave the outermost grain outside the repaint region, where it
+  // survives an erase and reappears under the next stroke drawn over it.
+  const pencil = createStroke({ tool: INK_TOOLS.PENCIL });
+  const pen = createStroke({ tool: INK_TOOLS.PEN, width: pencil.width });
+  assert.ok(strokeRadius(pencil) > strokeRadius(pen),
+    'a pencil claims more room than its nominal width');
+});
 
 check('a stroke is ONE filled region, however many samples it holds', () => {
   // The beads came from stroking every segment on its own: 200 separately

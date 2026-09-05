@@ -22,7 +22,7 @@ import { INPUT_MODES, InkSurface } from '../src/ink/ink-surface.js';
 import { InkToolbar } from '../src/ink/ink-toolbar.js';
 import { PdfWorkspace } from '../src/pdf/pdf-workspace.js';
 import { PdfPane } from '../src/pdf/pdf-pane.js';
-import { SLOTS } from '../src/pdf/workspace-state.js';
+import { SLOTS, CLOSE_THRESHOLD } from '../src/pdf/workspace-state.js';
 import { renderAnswerNotice } from '../src/pdf/answer-panel.js';
 import { onDoubleTap } from '../src/ui/double-tap.js';
 import { initChromeHiding } from '../src/pdf/pdf-workspace-ui.js';
@@ -591,6 +591,263 @@ check('the divider records its starting widths before it claims the pointer', ()
     + 'it was skipped — leaving the drag running with no width to scale from');
   assert.ok(/try \{ this\.elDivider\.setPointerCapture/.test(down),
     'and the claim itself is allowed to fail');
+});
+
+/** A pane mid-preview: rendered at `rendered`, painted at `rendered * k`. */
+function previewingPane({ view, page, zoom, rendered, k, scroll = { x: 0, y: 0 } }) {
+  const pane = Object.create(PdfPane.prototype);
+  pane.state = { zoom, fitMode: 'page', scrollX: scroll.x, scrollY: scroll.y };
+  pane.pageSize = page;
+  pane._renderedZoom = rendered;
+  pane._previewScale = k;
+  pane._viewport = () => view;
+  return pane;
+}
+
+check('a previewed page is centred by the size it is painted at', () => {
+  // The whole of the left/right difference. A divider drag grows one pane and
+  // shrinks the other, and the page was centred by the size its ZOOM implied
+  // rather than the size on screen — so the error was half the difference, one
+  // way on the left and the other way on the right. Two panes, one drag, two
+  // visibly different animations.
+  const view = { width: 400, height: 800 };
+  const page = { width: 200, height: 300 };
+
+  const shrinking = previewingPane({ view, page, zoom: 1, rendered: 1, k: 0.5 });
+  assert.equal(shrinking._drawnSize().width, 100, 'painted at half');
+  assert.equal(shrinking._origin().x, 150, 'and centred at half: (400-100)/2');
+
+  const growing = previewingPane({ view, page, zoom: 1, rendered: 1, k: 1.5 });
+  assert.equal(growing._drawnSize().width, 300);
+  assert.equal(growing._origin().x, 50, '(400-300)/2');
+
+  // Both panes are the same distance from centre, which is what makes the two
+  // sides of the divider look like one gesture.
+  const off = (p) => p._origin().x + p._drawnSize().width / 2 - view.width / 2;
+  assert.equal(off(shrinking), 0);
+  assert.equal(off(growing), 0);
+});
+
+check('with nothing previewed the origin is exactly what it always was', () => {
+  const view = { width: 400, height: 800 };
+  const page = { width: 200, height: 300 };
+  const plain = previewingPane({ view, page, zoom: 2, rendered: 2, k: 1 });
+  assert.equal(plain._drawnScale(), 2, 'the zoom in the state');
+  assert.deepEqual(plain._origin(), { x: 0, y: 100 }, 'wider than the pane, shorter than it');
+});
+
+check('a pinch is not previewed twice', () => {
+  // During a pinch the zoom in the state is already live and the transform is
+  // standing in for a bitmap drawn at the old one, so the painted scale IS the
+  // state's zoom — this must not scale it a second time.
+  const pane = previewingPane({
+    view: { width: 400, height: 800 },
+    page: { width: 200, height: 300 },
+    zoom: 3, rendered: 1.5, k: 2,
+  });
+  assert.equal(pane._drawnScale(), 3, 'rendered x preview = the live zoom');
+  assert.equal(pane._drawnSize().width, 600);
+});
+
+check('the scroll offset travels with the painted scale', () => {
+  // Scroll is measured in the page's pixels at the zoom in the state. A page
+  // painted larger has to be offset further, or the preview and the refit
+  // disagree by exactly the distance the reader had scrolled.
+  const pane = previewingPane({
+    view: { width: 400, height: 500 },
+    page: { width: 200, height: 300 },
+    zoom: 3, rendered: 3, k: 1.5, scroll: { x: 60, y: 90 },
+  });
+  assert.equal(pane._origin().x, -90, '60 x 1.5');
+  assert.equal(pane._origin().y, -135, '90 x 1.5');
+});
+
+check('a page previewed smaller cannot be scrolled past its own end', () => {
+  const pane = previewingPane({
+    view: { width: 400, height: 500 },
+    page: { width: 200, height: 300 },
+    zoom: 3, rendered: 3, k: 0.8, scroll: { x: 200, y: 400 },
+  });
+  // painted 480x720; the most it can be pushed is 80 across and 220 up
+  assert.ok(Math.abs(pane._origin().x + 80) < 1e-6);
+  assert.ok(Math.abs(pane._origin().y + 220) < 1e-6);
+});
+
+check('ink is transformed at the scale the page is painted at', () => {
+  const code = $code('src/pdf/pdf-pane.js');
+  const at = code.indexOf('  _syncInk() {');
+  const sync = code.slice(at, at + 500);
+  assert.ok(/const scale = this\._drawnScale\(\);/.test(sync)
+    && /setTransform\(scale, -x \/ scale, -y \/ scale\)/.test(sync),
+    'reading state.zoom left the handwriting at its old size on a page that '
+    + 'had changed size under it — drifting the opposite way in each pane');
+});
+
+check('an animated ratio change previews the refit too, frame by frame', () => {
+  const code = $code('src/pdf/pdf-workspace.js');
+  for (const fn of ['animateToRatio(targetRatio)', 'animateToFocus(slot)']) {
+    const at = code.indexOf(fn);
+    assert.ok(at > -1, fn);
+    const body = code.slice(at, at + 700);
+    assert.ok(/_trackPaneFits\(380\)/.test(body), fn + ' tracks the panes');
+    assert.ok(/_stopTrackingPaneFits\(\)/.test(body), fn + ' hands back to the real refit');
+  }
+  assert.ok(/requestAnimationFrame/.test(code),
+    'a CSS transition has no pointer frames to hang the preview on');
+});
+
+check('a pane the divider must not re-zoom is still re-placed', () => {
+  // A manual zoom is not the divider's to change. Its page still has to sit in
+  // the middle of a pane whose middle is moving — left out of the loop, it
+  // stayed pinned where it was, drifted 88px off centre as the pane grew, and
+  // snapped back when the finger lifted. Only on the side that was not on a
+  // fit, which is what made the two sides look like different gestures.
+  const code = $code('src/pdf/pdf-workspace.js');
+  const at = code.indexOf('_previewPaneFits(base) {');
+  const body = code.slice(at, at + 900);
+  assert.ok(/fitMode === FIT_MODES\.NONE \|\| !\(from > 1\)\) \{\s*pane\.reposition\?\.\(\);/.test(body),
+    'reposition, not skip');
+  assert.ok(/reposition\(\) \{/.test($code('src/pdf/pdf-pane.js')), 'and the pane offers it');
+});
+
+check('the preview is not dropped before the render that replaces it arrives', () => {
+  // Resetting the transform and then asking PDF.js to rasterise leaves a gap:
+  // for as long as the raster takes, the page is back at the size it had
+  // before the drag. The preview is priced off the bitmap on screen, so it can
+  // simply stay up — and _render clears it in the frame that swaps the canvas.
+  const code = $code('src/pdf/pdf-workspace.js');
+  const release = code.slice(code.indexOf('_stopTrackingPaneFits();'), code.indexOf('_stopTrackingPaneFits();') + 300);
+  assert.ok(!/previewScale\?\.\(1\)/.test(release), 'nothing is reset on the way out');
+  assert.ok(/_previewScale = 1;/.test($code('src/pdf/pdf-pane.js')), 'the render does it instead');
+  // Except for a pane that is being closed: no refit is coming for that one.
+  const closing = code.slice(code.indexOf('if (closing) {'), code.indexOf('if (closing) {') + 200);
+  assert.ok(/_clearPaneFitPreviews\(\)/.test(closing), 'a pane being closed is let go of');
+});
+
+check('the drag and the transition price the fit the same way', () => {
+  // One previewer, called from both, because two would be two chances for the
+  // left and the right to disagree.
+  const code = $code('src/pdf/pdf-workspace.js');
+  const priced = code.match(/pane\.previewScale\(was && will \? will \/ was : now \/ from\)/g);
+  assert.equal((priced || []).length, 1, 'the fit is priced in exactly one place');
+});
+
+/** A workspace whose grip is a 9x54 pill centred at (600, 400) — the tablet's. */
+function workspaceWithGrip() {
+  const ws = Object.create(PdfWorkspace.prototype);
+  ws.elGrip = { getBoundingClientRect: () => ({ left: 595.5, right: 604.5, top: 373, bottom: 427, height: 54 }) };
+  return ws;
+}
+
+check('the divider is taken hold of by its grip, not by the whole line', () => {
+  // The strip runs the full height of the workspace, and on the way down it
+  // crosses the band the dock is swiped away from. So a swipe to put the bars
+  // away also grabbed the divider and the columns changed width on the way
+  // past: one finger, one intention, two gestures.
+  const ws = workspaceWithGrip();
+  assert.ok(ws._onDividerGrip(600, 400), 'the middle of the pill');
+  assert.ok(ws._onDividerGrip(600, 373), 'its top edge');
+  assert.ok(ws._onDividerGrip(600, 427), 'its bottom edge');
+
+  // The band above the dock, which is where the dock gesture starts.
+  assert.equal(ws._onDividerGrip(600, 600), false, 'the dock is swiped away from here');
+  assert.equal(ws._onDividerGrip(600, 640), false);
+  // And the top of the line, which crosses the import row's own band.
+  assert.equal(ws._onDividerGrip(600, 100), false);
+});
+
+check('the grip is reachable by a finger, not only by a pixel', () => {
+  const ws = workspaceWithGrip();
+  // 9px wide and 54 tall is a mark saying where the target is, not the target.
+  assert.ok(ws._onDividerGrip(600, 373 - 20), 'a little above still counts');
+  assert.ok(ws._onDividerGrip(600, 427 + 20), 'and a little below');
+  assert.ok(ws._onDividerGrip(595.5 - 20, 400), 'and to either side');
+  assert.ok(ws._onDividerGrip(604.5 + 20, 400));
+  // But the reach is finite, or we are back to grabbing the whole line.
+  assert.equal(ws._onDividerGrip(600, 427 + 40), false);
+  const box = 54 + 2 * 22;
+  assert.ok(box < 120, 'and the whole target stays well clear of the dock band');
+});
+
+check('a press that is not on the grip is left completely alone', () => {
+  const code = $code('src/pdf/pdf-workspace.js');
+  const at = code.indexOf("elDivider.addEventListener('pointerdown'");
+  const down = code.slice(at, at + 1400);
+  const guard = down.indexOf('_onDividerGrip');
+  assert.ok(guard > -1, 'the guard is there');
+  assert.ok(guard < down.indexOf('dragging = true'), 'and it comes first');
+  assert.ok(guard < down.indexOf('preventDefault'),
+    'no preventDefault and no capture on a press that was not ours, or the '
+    + 'gesture it did belong to never sees the rest of itself');
+});
+
+check('a workspace with no grip yet does not take the press', () => {
+  const ws = Object.create(PdfWorkspace.prototype);
+  assert.equal(ws._onDividerGrip(600, 400), false, 'nothing to be on');
+  ws.elGrip = { getBoundingClientRect: () => ({ left: 0, right: 0, top: 0, bottom: 0, height: 0 }) };
+  assert.equal(ws._onDividerGrip(0, 0), false, 'nor a grip with no box');
+});
+
+check('the swap button and the grip do not share any pixels', () => {
+  const css = $read('src/styles/material.css');
+  const rule = css.slice(css.indexOf('.pdf-ws-swap {'), css.indexOf('.pdf-ws-swap[hidden]'));
+  const top = /top:\s*calc\(50% - (\d+)px\)/.exec(rule);
+  const size = /height:\s*(\d+)px/.exec(rule);
+  assert.ok(top && size);
+  // Button centred `top` above the middle; grip 60 tall while held, so its top
+  // edge is 30 above the middle and its reach another 22 above that.
+  const buttonBottom = Number(top[1]) - Number(size[1]) / 2;
+  assert.ok(buttonBottom > 30 + 22,
+    `the button's lower edge sits ${buttonBottom}px above centre and has to clear `
+    + 'the grip and the reach around it — at 46 they overlapped, and the ring '
+    + 'the button grows when the swap is armed closed the gap entirely');
+});
+
+check('a button that can act on your documents is a button you can see', () => {
+  // Opacity does not remove an element from hit-testing, and the rule meant to
+  // bring this one back on touch screens — @media (hover: none) — does not
+  // match the tablet, whose stylus reports hover. So what shipped was an
+  // invisible 30px button on the line between two documents that exchanged
+  // them when a finger aimed past it landed on it.
+  const css = $code('src/styles/material.css');   // the prose below mentions the old value
+  const rule = css.slice(css.indexOf('.pdf-ws-swap {'), css.indexOf('.pdf-ws-swap[hidden]'));
+  const rest = /opacity:\s*([\d.]+)/.exec(rule);
+  assert.ok(rest && Number(rest[1]) > 0.3, `visible at rest, got ${rest && rest[1]}`);
+  assert.ok(!/pointer-events:\s*none/.test(rule), 'and pressable, since it can be seen');
+  assert.ok(/is-dragging \.pdf-ws-swap/.test($read('src/styles/material.css')),
+    'and it comes up to full while the divider is held');
+  assert.ok(!/\(hover: none\)[\s\S]{0,60}pdf-ws-swap/.test($read('src/styles/mobile.css')),
+    'the media-query rescue is gone, because it never fired');
+});
+
+check('the swap button never starts a resize as well', () => {
+  const code = $code('src/pdf/pdf-workspace.js');
+  const at = code.indexOf("elDivider.addEventListener('pointerdown'");
+  const down = code.slice(at, at + 1400);
+  const swap = down.indexOf('data-role="swap"');
+  assert.ok(swap > -1 && swap < down.indexOf('_onDividerGrip'),
+    'it sits just above the grip and the grip reaches up under it');
+});
+
+check('the divider follows the finger the whole way, with nothing pulling at it', () => {
+  // Inside 4% of either end the divider used to stop tracking and jump to the
+  // edge, and 4% of this workspace is 48px — an ordinary amount of resizing.
+  // A narrow column was not something you could ask for: asking for it shut
+  // the pane instead.
+  const code = $code('src/pdf/pdf-workspace.js');
+  const at = code.indexOf('const ratioFromEvent');
+  const body = code.slice(at, code.indexOf('elDivider.addEventListener'));
+  assert.ok(!/raw = 0;/.test(body) && !/raw = 1;/.test(body), 'no snap to either end');
+  assert.ok(/return clamp\(raw, MIN_RATIO, MAX_RATIO\);/.test(body),
+    'the ratio is where the finger is');
+});
+
+check('closing a pane means taking the divider to the edge of the workspace', () => {
+  // Still reachable, and now only on purpose.
+  assert.ok(CLOSE_THRESHOLD > 0, 'the gesture is still there');
+  assert.ok(CLOSE_THRESHOLD * 1200 < 8,
+    `on a 1200px workspace that is ${CLOSE_THRESHOLD * 1200}px from the edge, `
+    + 'which nobody reaches by accident');
 });
 
 check('the pinch runs on pointer events, not a second touch stream', () => {
@@ -1330,7 +1587,6 @@ function chromePage({ topHidden = false, bottomHidden = false } = {}) {
     '<div class="bar-peek" data-role="bar-peek"></div>',
     '<div class="dock-peek" data-role="dock-peek"></div>',
     '<div class="page" id="page-pdf">',
-    '  <button type="button" data-role="chrome-toggle"></button>',
     '  <div class="pdf-page-bar"></div>',
     '</div>',
     '<nav class="bottom-nav">',
@@ -1462,12 +1718,28 @@ check('the drag that moved a bar does not also press the button under it', () =>
   assert.equal(pressed, 0, 'the click the drag ends on is swallowed, once');
 });
 
-check('the corner button restores whatever is hidden', () => {
+check('the gesture is the only way, and there is no button left to press', () => {
+  // The chevron in the corner did the same job as the swipe, floated over the
+  // page it was making room for, and was the one control on this screen that
+  // was not about reading. Removing it means the swipe has to be right — which
+  // is what the rest of this group is for.
   const root = chromePage({ topHidden: true, bottomHidden: true });
-  root.querySelector('[data-role="chrome-toggle"]').click();
-  assert.ok(!hidden('top') && !hidden('bottom'), 'one press brings back both');
-  root.querySelector('[data-role="chrome-toggle"]').click();
-  assert.ok(hidden('top') && hidden('bottom'), 'and the next puts both away');
+  assert.equal(root.querySelector('[data-role="chrome-toggle"]'), null,
+    'no button in the markup');
+  assert.ok(!/chrome-toggle/.test($read('index.html')), 'nor in the page');
+  assert.ok(!/pdf-chrome-toggle/.test($read('src/styles/pdf.css')), 'nor in the stylesheet');
+  assert.ok(!/chrome-toggle|syncToggle/.test($read('src/pdf/pdf-workspace-ui.js')),
+    'and nothing left listening for it');
+
+  swipe(600, 40, 70);
+  assert.ok(!hidden('top'), 'the top edge brings the row back');
+});
+
+check('the strip that wakes the row has the whole width of the edge', () => {
+  const css = $read('src/styles/pdf.css');
+  const rule = css.slice(css.indexOf('.bar-peek {'), css.indexOf('body.is-top-hidden .bar-peek'));
+  assert.ok(/right:\s*0;/.test(rule),
+    'it stopped 52px short to clear the collapse button, which is gone');
 });
 
 check('a drag that starts on a capsule leaves the dock alone', () => {
@@ -1532,12 +1804,13 @@ await checkAsync('the dock is marked as moving while it travels, and only while'
     'once it has arrived the capsules come back');
 });
 
-check('the corner button marks them moving too', () => {
-  const root = chromePage();
-  root.querySelector('[data-role="chrome-toggle"]').click();
-  assert.ok(document.body.classList.contains('is-bottom-moving')
-    && document.body.classList.contains('is-top-moving'),
-    'the bars go the same distance however the journey was started');
+check('a bar sent away is marked moving whichever edge it left by', () => {
+  chromePage();
+  swipe(600, 600, 70);
+  assert.ok(document.body.classList.contains('is-bottom-moving'), 'the dock');
+  chromePage();
+  swipe(600, 40, -70);
+  assert.ok(document.body.classList.contains('is-top-moving'), 'and the row');
 });
 
 check('a bar in motion has nothing on it that can be pressed', () => {
@@ -1576,12 +1849,31 @@ check('the strip is inert while the row is showing', () => {
     'and it has to refuse the gesture to the WebView, which is the whole point');
 });
 
-check('the strip leaves the corner button reachable', () => {
-  const css = $read('src/styles/pdf.css');
-  const block = css.slice(css.indexOf('.bar-peek {'), css.indexOf('body.is-top-hidden .bar-peek'));
-  const right = /right:\s*(\d+)px/.exec(block);
-  assert.ok(right && Number(right[1]) >= 44,
-    'the toggle is 30px wide at right:10px — the strip has to stop clear of it');
+check('a panel that floats over a document does not let the document through', () => {
+  // backdrop-filter is a compositing effect and it comes back empty over the
+  // page on this tablet, so a 0.42 fill was a 0.42 fill: ruled lines and
+  // formulae ran straight through the settings panel at full contrast.
+  const css = $read('src/styles/ink-toolbar.css');
+  const card = css.slice(css.indexOf('[data-skin="liquid-math"] .ink-card {'));
+  const bg = /--glass-bg:\s*rgba\(255,\s*255,\s*255,\s*([\d.]+)\)/.exec(card);
+  assert.ok(bg, 'the card sets its own fill');
+  assert.ok(Number(bg[1]) >= 0.9,
+    'a card that is read needs a floor the blur is not required to reach, got ' + bg[1]);
+
+  const well = css.slice(css.indexOf('.ink-preview {'), css.indexOf('.ink-preview-line'));
+  assert.ok(/background:\s*#fff;/.test(well),
+    'and the stroke sample is paper, not a window onto the page behind it');
+});
+
+check('nothing offers to update itself unless it was asked to', () => {
+  const code = $code('src/update-checker.js');
+  assert.ok(/autoUpdate'\) !== 'true'\) return;/.test(code),
+    'opt-in: a changelog took the screen from whatever was on it, including a '
+    + 'dialog the reader was in the middle of answering');
+  assert.ok(!/=== 'false'/.test(code), 'the opt-out rule is gone');
+  const settings = $code('src/settings/settings.js');
+  assert.ok(/localStorage\.getItem\('latexsnipper-autoUpdate'\) === 'true'/.test(settings),
+    'and the switch shows the same rule the checker follows');
 });
 
 console.log('\n═══════════════════════════════════════════════════════════════');

@@ -39,34 +39,11 @@
    as the page. Hidden, the workspace takes the whole height, which on this
    tablet is the difference between seeing a page and seeing most of one.
 
-   The toggle itself never hides — a control that puts away the way back is a
-   control that has taken something from you. It sits in the corner the page
-   does not use, and turns over to point the other way once pressed. */
-.pdf-chrome-toggle {
-  position: absolute;
-  top: 4px;
-  right: 10px;
-  z-index: 30;
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  color: var(--text-secondary, #52606d);
-  background: rgba(255, 255, 255, 0.72);
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.10);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  cursor: pointer;
-  transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1), background 0.2s;
-}
-.pdf-chrome-toggle:hover { background: rgba(255, 255, 255, 0.9); }
-.pdf-chrome-toggle:active { scale: 0.94; }
-.pdf-chrome-toggle svg { transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1); }
-.pdf-chrome-toggle[aria-pressed="true"] svg { transform: rotate(180deg); }
-
+   Both are moved by the gesture alone. A chevron in the top-right corner used
+   to do the same job; it was removed. It was the only control on this screen
+   that was not about reading, it floated over the very page it was making room
+   for, and a 30px circle in a corner is a worse target than the whole width of
+   an edge. */
 /* Sliding them away, each independently of the other.
 
    Both bars are placed by a progress number rather than by a class: 0 is out,
@@ -148,10 +125,10 @@ body.is-top-moving .pdf-page-bar select { pointer-events: none; }
   position: fixed;
   top: 0;
   left: 0;
-  /* Stopping clear of the collapse button, which sits in this same band at the
-     top right. The strip would otherwise cover it, and the one control for
-     bringing the bars back would be the one thing that could not be pressed. */
-  right: 52px;
+  /* The whole width. It used to stop 52px short of the right edge, to keep
+     clear of the collapse button that sat in this same band; that button is
+     gone, and the corner it held is the corner a right hand reaches first. */
+  right: 0;
   height: 64px;
   z-index: 999;
   pointer-events: none;
@@ -829,8 +806,7 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
 }
 
 body.is-library-open .ink-toolbar,
-body.is-library-open .ink-card-layer,
-body.is-library-open .pdf-chrome-toggle { display: none; }
+body.is-library-open .ink-card-layer { display: none; }
 
 @keyframes libraryIn {
   from { opacity: 0; transform: scale(0.97); }

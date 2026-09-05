@@ -141,11 +141,11 @@ html, body { overscroll-behavior: none; }
 }
 
 /* A stylus reports hover on some tablets and not others, so hover states must
-   never be the only way to find a control. The swap handle on the divider is
-   the one that was hover-revealed; on a touch tablet it stays visible. */
-@media (hover: none) {
-  .pdf-ws-swap { opacity: 0.85; }
-}
+   never be the only way to find a control — which is why the swap handle on
+   the divider is no longer hover-REVEALED at all, only hover-brightened. This
+   rule stood in for that on touch screens and could not, because the tablet it
+   was written for reports `hover: hover` through its stylus and never matched
+   it. See .pdf-ws-swap in material.css. */
 
 /* Wide tablets in landscape: give the pages the width and keep the chrome thin. */
 @media (min-width: 1024px) and (orientation: landscape) {

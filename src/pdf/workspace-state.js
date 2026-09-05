@@ -29,8 +29,20 @@ export const ORIENTATIONS = Object.freeze({
 export const MIN_RATIO = 0;
 export const MAX_RATIO = 1;
 
-/** Within this of an end, releasing the divider closes that side. */
-export const CLOSE_THRESHOLD = 0.04;
+/**
+ * Within this of an end, releasing the divider closes that side.
+ *
+ * It was 0.04, and inside that zone the divider stopped following the finger
+ * and jumped the rest of the way — edge magnetism, to make the answer to "will
+ * this close?" visible before the release. The trouble is that 4% of a
+ * 1200px workspace is 48px, and 48px is a normal amount of resizing: someone
+ * making one column narrow found it snatched out from under them and the pane
+ * shut. A drag is a drag for the whole of its travel.
+ *
+ * 0.004 is about five pixels — the divider has to be taken to the edge of the
+ * workspace, which nobody does by accident and anybody can do on purpose.
+ */
+export const CLOSE_THRESHOLD = 0.004;
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 

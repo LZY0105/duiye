@@ -56,8 +56,15 @@ function widthAt(stroke, pressure) {
 function screenSamples(stroke, transform, points) {
   const out = [];
   const minGap = 0.55;
+  // How far along the mark this sample is, in DOCUMENT units — summed over
+  // every point, including the ones decimation drops, so it is the same number
+  // at every zoom. It is what the pencil's grain is a function of, and grain
+  // measured any other way would be re-sprinkled each time the page changed
+  // scale instead of staying on the paper.
+  let travelled = 0;
   for (let i = 0; i < points.length; i++) {
     const pt = points[i];
+    if (i > 0) travelled += Math.hypot(pt.x - points[i - 1].x, pt.y - points[i - 1].y);
     const x = (pt.x - transform.offsetX) * transform.scale;
     const y = (pt.y - transform.offsetY) * transform.scale;
     const r = Math.max(0.2, widthAt(stroke, pt.p) * transform.scale / 2);
@@ -66,7 +73,7 @@ function screenSamples(stroke, transform, points) {
     // dropping it would shorten the mark.
     if (last && i < points.length - 1
       && Math.abs(x - last.x) < minGap && Math.abs(y - last.y) < minGap) continue;
-    out.push({ x, y, r });
+    out.push({ x, y, r, s: travelled });
   }
   return out;
 }
@@ -145,6 +152,130 @@ function traceStroke(ctx, pts) {
   ctx.fill();
 }
 
+/** A hash in [0, 1), stable for a given number. */
+function hash01(n) {
+  const v = Math.sin(n * 12.9898) * 43758.5453;
+  return v - Math.floor(v);
+}
+
+/**
+ * Value noise in [0, 1) with a period of 1 in `t`, in two octaves.
+ *
+ * Deterministic, not random, and that is the first requirement: the page is
+ * repainted on every pan, every zoom step and every page turn, and grain drawn
+ * from Math.random would reshuffle its graphite on each of them. The mark has
+ * to keep the grain it was made with.
+ *
+ * Interpolated between lattice points, and that is the second. The first
+ * version of this hashed `t` directly — `sin(seed * 127.1 + t * 311.7)` — which
+ * has no period at all: at the spacing samples are stored at, that expression
+ * turns over six times BETWEEN consecutive samples. What came out was white
+ * noise at the sampling frequency, finer than the line was wide, and it
+ * averaged straight back out to a smooth line. Grain is a low frequency; it has
+ * to be built as one.
+ */
+function grainNoise(seed, t) {
+  const lattice = (u) => {
+    const i = Math.floor(u);
+    const f = u - i;
+    const w = f * f * (3 - 2 * f);   // smoothstep, so it is grain and not a sawtooth
+    const a = hash01(seed + i * 57.31);
+    const b = hash01(seed + (i + 1) * 57.31);
+    return a + (b - a) * w;
+  };
+  // A coarse swing for where the pencil bore down, and a finer one for the
+  // tooth of the paper inside it.
+  return 0.68 * lattice(t) + 0.32 * lattice(t * 3.7 + 19.4);
+}
+
+/** A stable number per stroke, so two pencil lines do not share a grain. */
+function strokeSeed(stroke) {
+  const id = String(stroke.id || '');
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) {
+    h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+  }
+  return ((h >>> 0) % 100003) / 1000;
+}
+
+/**
+ * The three passes a pencil mark is made of.
+ *
+ * A thin dark core inside a broad pale skirt, which is what graphite looks
+ * like: the point deposits most of its powder along the line it travelled and
+ * scatters the rest either side. Three even passes read as one soft pen at
+ * reading size, where the whole mark is three device pixels wide and there is
+ * no room for texture — the contrast BETWEEN the passes is what survives.
+ *
+ * `alpha` multiplies the stroke's own; `across` displaces the pass sideways in
+ * radii; `width` scales it; `bite` is how deeply the noise is allowed to thin
+ * it — 0 draws an even line, 1 lets it break up entirely.
+ */
+const PENCIL_PASSES = Object.freeze([
+  { phase: 0.0, alpha: 0.18, across: -0.10, width: 1.50, bite: 0.20 },
+  { phase: 5.3, alpha: 0.36, across: 0.14, width: 1.00, bite: 0.38 },
+  // The point itself, and the one allowed to run out. A pencil skips where the
+  // paper does not take it, and that break along the line is the cue the eye
+  // reads as graphite long before it can see the tooth.
+  { phase: 11.9, alpha: 0.85, across: 0.00, width: 0.50, bite: 0.78 },
+]);
+
+/**
+ * How far the mark travels, in document units, per swing of the grain.
+ *
+ * Roughly four times the width of the line, so the grain varies over a
+ * distance the eye reads as texture rather than as a fuzzy edge.
+ */
+const GRAIN_PERIOD = 6;
+
+/**
+ * A pencil mark: the same line laid down three times, each wandering.
+ *
+ * Graphite is not a fluid. It is a powder scraped onto the tooth of the paper,
+ * so a pencil line is dark where the tooth caught and pale where it did not,
+ * and its edge is ragged rather than cut. It is never the even deposit a pen
+ * leaves — which is exactly what this tool used to draw, a pen 0.4 units
+ * thinner and 15% paler, indistinguishable from the real one on a stylus that
+ * reports no pressure.
+ *
+ * Each pass is ONE path filled ONCE, for the reason traceStroke gives at
+ * length: a translucent pass filled piece by piece double-darkens itself at
+ * every join and comes apart into beads. So the passes are what stack, and
+ * their stacking is the mark — solid where all three agree, broken at the
+ * edges where they do not.
+ *
+ * The wander is measured in DOCUMENT units, not screen pixels, so it belongs
+ * to the paper: zooming in shows the same grain larger, the way looking closer
+ * at a page does, instead of re-sprinkling it at the new scale.
+ */
+function drawPencil(ctx, stroke, pts, alpha) {
+  const seed = strokeSeed(stroke);
+
+  // The direction of travel at each sample, for displacing a pass across the
+  // line. Taken from the neighbours rather than the segment, so a pass does
+  // not kink where two segments meet.
+  const normals = pts.map((p, i) => {
+    const a = pts[Math.max(0, i - 1)];
+    const b = pts[Math.min(pts.length - 1, i + 1)];
+    const d = norm(b.x - a.x, b.y - a.y);
+    return d ? { x: -d.y, y: d.x } : { x: 0, y: 0 };
+  });
+
+  for (const pass of PENCIL_PASSES) {
+    const shifted = pts.map((p, i) => {
+      const n = grainNoise(seed + pass.phase, p.s / GRAIN_PERIOD);
+      const off = pass.across * p.r * (0.55 + 0.9 * n);
+      return {
+        x: p.x + normals[i].x * off,
+        y: p.y + normals[i].y * off,
+        r: Math.max(0.15, p.r * pass.width * (1 - pass.bite * n)),
+      };
+    });
+    ctx.globalAlpha = alpha * pass.alpha;
+    traceStroke(ctx, shifted);
+  }
+}
+
 /**
  * Paints one stroke.
  *
@@ -168,8 +299,22 @@ export function drawStroke(ctx, stroke, transform) {
   // A single tap is a dot, not a zero-length line.
   if (points.length === 1) {
     const p0 = documentToScreen(transform, points[0].x, points[0].y);
+    const r0 = Math.max(0.4, widthAt(stroke, points[0].p) * transform.scale / 2);
+    if (defaults.grain) {
+      // Even a full stop is graphite: a core with a lighter halo, not a disc.
+      const n = grainNoise(strokeSeed(stroke), 0);
+      for (const pass of PENCIL_PASSES) {
+        ctx.globalAlpha = stroke.opacity * pass.alpha;
+        ctx.beginPath();
+        ctx.arc(p0.x + pass.across * r0 * n, p0.y + pass.across * r0 * (1 - n),
+          Math.max(0.2, r0 * pass.width * (1 - pass.bite * n)), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+      return;
+    }
     ctx.beginPath();
-    ctx.arc(p0.x, p0.y, Math.max(0.4, widthAt(stroke, points[0].p) * transform.scale / 2), 0, Math.PI * 2);
+    ctx.arc(p0.x, p0.y, r0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
     return;
@@ -218,7 +363,8 @@ export function drawStroke(ctx, stroke, transform) {
     ctx.restore();
     return;
   }
-  traceStroke(ctx, pts);
+  if (defaults.grain) drawPencil(ctx, stroke, pts, stroke.opacity);
+  else traceStroke(ctx, pts);
   ctx.restore();
 }
 

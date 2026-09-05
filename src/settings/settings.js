@@ -120,7 +120,9 @@ function initDevTools() {
 function initUpdates() {
   const autoUpdate = document.getElementById('setAutoUpdate');
   try {
-    if (autoUpdate) autoUpdate.checked = localStorage.getItem('latexsnipper-autoUpdate') !== 'false';
+    // Off unless it was turned on. The switch reads the same rule the checker
+    // does, so what it shows is what will happen.
+    if (autoUpdate) autoUpdate.checked = localStorage.getItem('latexsnipper-autoUpdate') === 'true';
   } catch (_) { /* storage unavailable */ }
   autoUpdate?.addEventListener('change', () => {
     try {

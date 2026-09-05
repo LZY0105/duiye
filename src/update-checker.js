@@ -87,10 +87,19 @@ let _autoCheckTimer = null;
 
 async function _autoCheck() {
   try {
-    const pref = localStorage.getItem('latexsnipper-autoUpdate');
-    // null = never set (new user): default to enabled
-    if (pref === 'false') return;
-  } catch (_) {}
+    // OPT-IN, not opt-out. Nothing here asks to be interrupted: the check ran
+    // in the background of every session and put a full-screen changelog over
+    // whatever was on the page — over an open document, and over the dialog
+    // asking which kind of file had just been imported, which is a dialog with
+    // a question in it that the reader then could not answer. An update is
+    // never urgent enough to take the screen from the thing someone is doing.
+    //
+    // "自动检查更新" in 设置 still turns it on, and 检查更新 beside it still
+    // checks on the spot, because that is someone asking.
+    if (localStorage.getItem('latexsnipper-autoUpdate') !== 'true') return;
+  } catch (_) {
+    return;   // no way to know it was asked for: assume it was not
+  }
 
   try {
     const lastCheck = parseInt(localStorage.getItem('latexsnipper-lastUpdateCheck'), 10) || 0;

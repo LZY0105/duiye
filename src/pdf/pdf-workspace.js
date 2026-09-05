@@ -60,6 +60,9 @@ const HEADER_LADDER = ['is-snug', 'is-snugger'];
  */
 const TAP_SLOP = 6;
 
+/** How far outside the grip a press still counts as being on it. */
+const GRIP_REACH = 22;
+
 /** How far the swap control travels before a release commits the swap. */
 const SWAP_THRESHOLD = 34;
 
@@ -162,7 +165,7 @@ export class PdfWorkspace {
             <path d="M20 16H7" />
           </svg>
         </button>
-        <span class="pdf-ws-divider-grip"></span>
+        <span class="pdf-ws-divider-grip" data-role="grip"></span>
         <div class="pdf-ws-ratio-badge" data-role="ratio-badge" aria-hidden="true">50% : 50%</div>
       </div>
       <div class="pdf-ws-slot" data-slot="b">
@@ -188,6 +191,7 @@ export class PdfWorkspace {
 
     this.elDivider = this.root.querySelector('[data-role="divider"]');
     this.elSwap = this.root.querySelector('[data-role="swap"]');
+    this.elGrip = this.root.querySelector('[data-role="grip"]');
     this.elRatioBadge = this.root.querySelector('[data-role="ratio-badge"]');
     this.elEmpty = this.root.querySelector('[data-role="empty-state"]');
     this.elSlots = {
@@ -237,14 +241,18 @@ export class PdfWorkspace {
       // mirrored, or dragging the divider would move it away from the finger.
       if (this.state.swapped) raw = 1 - raw;
 
-      // Edge magnetism. Inside the closing zone the divider stops tracking the
-      // finger and goes the rest of the way on its own, so the pane visibly
-      // collapses to nothing rather than being held at a 3% sliver while the
-      // user tries to decide. The pull IS the answer to "will this close?".
-      if (raw <= CLOSE_THRESHOLD) raw = 0;
-      else if (raw >= 1 - CLOSE_THRESHOLD) raw = 1;
-
-      // Free drag. There used to be magnetic detents at 0.3, 0.5 and 0.7 —
+      // No magnetism at the ends.
+      //
+      // Inside the closing zone the divider used to stop tracking the finger
+      // and jump the rest of the way, so that the pull was the answer to "will
+      // this close?" before the release. But that zone was 4% of the workspace,
+      // which is 48px on this tablet, and 48px is an ordinary amount of
+      // resizing: a narrow column was not a thing you could ask for, because
+      // asking for it snapped the pane shut instead. A drag now means the ratio
+      // it points at for the whole of its travel, and closing a pane means
+      // taking the divider to the edge of the workspace — see CLOSE_THRESHOLD.
+      //
+      // There used to be magnetic detents at 0.3, 0.5 and 0.7 as well —
       // the three preset buttons wearing a different hat. They are gone with
       // the buttons: the divider now rests wherever it is put, anywhere in
       // MIN_RATIO..MAX_RATIO. Double-click still returns it to 50:50, which is
@@ -254,6 +262,15 @@ export class PdfWorkspace {
     };
 
     this.elDivider.addEventListener('pointerdown', (e) => {
+      // The swap button lives on this line and has its own drag; its press is
+      // never also a resize. It sits just above the grip, and the grip's reach
+      // extends up under it, so without this both would run from one press —
+      // the same fault as the dock, three pixels wide.
+      if (e.target?.closest?.('[data-role="swap"]')) return;
+      // Anywhere but the grip, the press is not ours — and it has to be left
+      // alone completely, with no preventDefault and no capture, or the
+      // gesture it did belong to never sees the rest of itself.
+      if (!this._onDividerGrip(e.clientX, e.clientY)) return;
       dragging = true;
       this._dividerDragging = true;
       // A press that goes nowhere is a tap; one that travels is a drag. The
@@ -309,17 +326,7 @@ export class PdfWorkspace {
       // and the real refit on release snapped it back. Asking the pane what the
       // fit would be at the new width makes the preview and the result the same
       // number, so there is nothing left to snap.
-      for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
-        const pane = this.panes[slot];
-        if (!pane?.previewScale || !pane.isLoaded?.()) continue;
-        if (pane.state?.fitMode === FIT_MODES.NONE) continue;   // a manual zoom is not ours to move
-        const base = this._dragBaseWidth?.[slot];
-        if (!(base > 1)) continue;            // no starting width, nothing to scale from
-        const now = this.elSlots[slot].clientWidth || base;
-        const was = pane.fitZoomFor?.(base);
-        const will = pane.fitZoomFor?.(now);
-        pane.previewScale(was && will ? will / was : now / base);
-      }
+      this._previewPaneFits(this._dragBaseWidth);
     });
 
     const end = (e) => {
@@ -339,13 +346,17 @@ export class PdfWorkspace {
       //
       // Decided on release rather than on `click`, because a drag produces a
       // click too and the two are indistinguishable by the time it arrives.
+      //
+      // Only reachable from the grip now, since that is the only place a press
+      // is taken at all — which also makes it discoverable: the tap is on the
+      // thing that looks like a handle, not on 660px of hairline.
       const tapped = e && e.type === 'pointerup'
         && (this._dividerTravelled || 0) <= TAP_SLOP
         && !e.target?.closest?.('[data-role="swap"]');
       this._dividerFrom = null;
       this.elDivider.classList.remove('is-dragging');
-      // Drop the preview transform before the real refit replaces it.
-      for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) this.panes[slot]?.previewScale?.(1);
+      // The preview stays up until the refit's own render replaces it.
+      this._stopTrackingPaneFits();
       this._dragBaseWidth = null;
       this.root.classList.remove('is-closing-primary', 'is-closing-secondary');
       this.elSlots[SLOTS.PRIMARY].classList.remove('is-closing');
@@ -363,6 +374,7 @@ export class PdfWorkspace {
         : r >= 1 - CLOSE_THRESHOLD ? (this.state.swapped ? SLOTS.PRIMARY : SLOTS.SECONDARY)
           : null;
       if (closing) {
+        this._clearPaneFitPreviews();
         this._absorbPane(closing, () => {
           // Put the divider back to centre first, so the surviving document
           // does not inherit a ratio that means "closed".
@@ -406,7 +418,105 @@ export class PdfWorkspace {
     });
   }
 
+  /**
+   * Whether a press at this point is on the divider's handle.
+   *
+   * The handle, not the strip. The strip runs the full height of the workspace,
+   * and on its way down it crosses the band the dock is swiped away from — so
+   * putting the bars away also took hold of the divider, and the columns
+   * changed width on the way past. Two gestures at once, out of one finger that
+   * meant only one of them.
+   *
+   * The pill with the φ on it is the handle; the line above and below it is a
+   * line. The reach around it is generous because a 9px pill is not a target —
+   * it is a mark saying where the target is.
+   */
+  _onDividerGrip(clientX, clientY, reach = GRIP_REACH) {
+    const g = this.elGrip?.getBoundingClientRect();
+    if (!g || !g.height) return false;
+    return clientX >= g.left - reach && clientX <= g.right + reach
+      && clientY >= g.top - reach && clientY <= g.bottom + reach;
+  }
+
   // ── ratio & sizing animations ──────────────────────────────────────────────
+
+  /**
+   * Shows each pane the page it is about to be refitted to.
+   *
+   * `base` is the width each slot had when the change started. Both panes are
+   * priced the same way and from the same place, which is the point: the left
+   * one shrinks while the right one grows, and any difference in how the two
+   * are measured shows up as two different animations either side of the line
+   * the finger is holding.
+   */
+  _previewPaneFits(base) {
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+      const pane = this.panes[slot];
+      if (!pane?.previewScale || !pane.isLoaded?.()) continue;
+      const from = base?.[slot];
+      // A manual zoom is not ours to re-price, and nor is a pane we never took
+      // a starting width from — but both still have to be re-PLACED, because
+      // the middle of a pane that is changing width is a moving target.
+      if (pane.state?.fitMode === FIT_MODES.NONE || !(from > 1)) {
+        pane.reposition?.();
+        continue;
+      }
+      const now = this.elSlots[slot].clientWidth || from;
+      const was = pane.fitZoomFor?.(from);
+      const will = pane.fitZoomFor?.(now);
+      pane.previewScale(was && will ? will / was : now / from);
+    }
+  }
+
+  /**
+   * Stops previewing, and hands the page over to the refit WITHOUT letting go
+   * of it first.
+   *
+   * Resetting the transform here is the obvious thing and it is wrong: the
+   * refit that replaces it has to rasterise, PDF.js takes a moment, and in that
+   * moment the page snapped back to the size it had before the drag and then
+   * grew again. The preview is left standing instead. It is priced off the
+   * bitmap actually on screen, so through the refit's await it keeps showing
+   * exactly the size the new render is going to arrive at, and `_render` clears
+   * it in the same frame that swaps the canvas.
+   */
+  _stopTrackingPaneFits() {
+    if (this._trackFrame) cancelAnimationFrame(this._trackFrame);
+    this._trackFrame = 0;
+  }
+
+  /** Drops every preview transform outright, for a pane that is going away. */
+  _clearPaneFitPreviews() {
+    this._stopTrackingPaneFits();
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) this.panes[slot]?.previewScale?.(1);
+  }
+
+  /**
+   * Keeps the pages with the panes for the length of a CSS width transition.
+   *
+   * A drag previews the refit on every pointer frame; an ANIMATED ratio change
+   * — double-tapping the bar to centre it, or focusing one pane — handed the
+   * width to CSS and refitted once, when the transition was over. For those
+   * 380ms the pages sat at the size they had for the old width, and then the
+   * refit landed all at once. That is the same jump the drag used to end on,
+   * arriving at the end of an animation instead of at the end of a gesture, so
+   * it takes the same cure: price the fit every frame, from the width the pane
+   * actually has at that moment.
+   */
+  _trackPaneFits(duration) {
+    if (typeof requestAnimationFrame !== 'function') return;
+    const base = {
+      [SLOTS.PRIMARY]: this.elSlots[SLOTS.PRIMARY].clientWidth || 0,
+      [SLOTS.SECONDARY]: this.elSlots[SLOTS.SECONDARY].clientWidth || 0,
+    };
+    if (this._trackFrame) cancelAnimationFrame(this._trackFrame);
+    const until = Date.now() + duration;
+    const step = () => {
+      this._previewPaneFits(base);
+      this._trackFrame = Date.now() < until ? requestAnimationFrame(step) : 0;
+    };
+    this._trackFrame = requestAnimationFrame(step);
+  }
 
   animateToRatio(targetRatio) {
     targetRatio = clamp(targetRatio, MIN_RATIO, MAX_RATIO);
@@ -414,12 +524,14 @@ export class PdfWorkspace {
       this.state = clearFocus(this.state);
     }
     this.root.classList.add('is-animating');
+    this._trackPaneFits(380);
     this._setState(setDividerRatio(this.state, targetRatio));
     this._showRatioBadge(targetRatio);
 
     clearTimeout(this._animTimer);
     this._animTimer = setTimeout(() => {
       this.root.classList.remove('is-animating');
+      this._stopTrackingPaneFits();
       this._resizePanes();
       this._persist();
       this._hideRatioBadge();
@@ -428,10 +540,12 @@ export class PdfWorkspace {
 
   animateToFocus(slot) {
     this.root.classList.add('is-animating');
+    this._trackPaneFits(380);
     this._setState(toggleFocus(this.state, slot));
     clearTimeout(this._animTimer);
     this._animTimer = setTimeout(() => {
       this.root.classList.remove('is-animating');
+      this._stopTrackingPaneFits();
       this._resizePanes();
       this._persist();
     }, 380);
@@ -1392,6 +1506,9 @@ export class PdfWorkspace {
   destroy() {
     window.removeEventListener('resize', this._onResize);
     window.removeEventListener('orientationchange', this._onResize);
+    clearTimeout(this._animTimer);
+    if (this._trackFrame) cancelAnimationFrame(this._trackFrame);
+    this._trackFrame = 0;
     this.toolbar?.destroy();
     for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) this.panes[slot].unload();
   }

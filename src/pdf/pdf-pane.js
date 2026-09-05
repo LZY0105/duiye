@@ -964,7 +964,14 @@ export class PdfPane {
     // page does. Reading scroll directly would leave annotations pinned to the
     // top-left while a centred page moved out from under them.
     const { x, y } = this._origin();
-    this.ink.setTransform(this.state.zoom, -x / this.state.zoom, -y / this.state.zoom);
+    // At the scale the page is PAINTED at. During a pinch that is the live zoom
+    // — the bitmap is the stand-in and the ink is already true — but during a
+    // divider drag the zoom has not changed yet, and reading it left the
+    // handwriting at its old size on a page that had changed size underneath
+    // it: drifting off the words it belongs to, and drifting the opposite way
+    // in each pane, because one was growing while the other shrank.
+    const scale = this._drawnScale();
+    this.ink.setTransform(scale, -x / scale, -y / scale);
   }
 
   /**
@@ -1253,6 +1260,21 @@ export class PdfPane {
   }
 
   /**
+   * Re-places the page for the size the pane is NOW, without re-rasterising.
+   *
+   * For the pane the divider is not allowed to re-zoom. A page smaller than its
+   * pane is centred, and a pane changing width moves the centre — so a manually
+   * zoomed page, left alone through a drag, stayed pinned where it was and slid
+   * out of the middle as the pane grew around it, then jumped back the moment
+   * the finger lifted. Nearly ninety pixels of it, on the tablet, and only on
+   * whichever side was not on a fit: one gesture, two different animations.
+   */
+  reposition() {
+    if (!this.state) return;
+    this._position();
+  }
+
+  /**
    * Holds one point of the document still across a zoom change.
    *
    * `point` is in viewport pixels; without one, the middle of the frame is used,
@@ -1292,15 +1314,59 @@ export class PdfPane {
     return this._anchorZoomToPoint(before, after, null);
   }
 
-  /** Where the page's top-left corner sits, in viewport pixels. */
-  _origin() {
-    const content = this._contentSize();
-    const viewport = this._viewport();
-    const slackX = viewport.width - content.width;
-    const slackY = viewport.height - content.height;
+  /**
+   * The zoom the page is actually PAINTED at, which is not always the one in
+   * the state.
+   *
+   * A preview transform stands in for a zoom the bitmap has not been rasterised
+   * at yet, so what reaches the screen is the canvas — drawn at `_renderedZoom`
+   * — scaled by `_previewScale`. During a pinch those two multiply back to
+   * `state.zoom` and this is exactly that. During a divider drag they do not:
+   * the zoom has not changed yet, and the scale is the refit that the release
+   * is going to land on.
+   */
+  _drawnScale() {
+    const zoom = this.state?.zoom;
+    if (!zoom) return 1;
+    const rendered = this._renderedZoom;
+    const k = this._previewScale;
+    return rendered > 0 && k > 0 ? rendered * k : zoom;
+  }
+
+  /** The page's size on screen, at the scale it is being painted at. */
+  _drawnSize() {
+    if (!this.pageSize) return { width: 0, height: 0 };
+    const scale = this._drawnScale();
     return {
-      x: slackX > 0 ? slackX / 2 : -this.state.scrollX,
-      y: slackY > 0 ? slackY / 2 : -this.state.scrollY,
+      width: this.pageSize.width * scale,
+      height: this.pageSize.height * scale,
+    };
+  }
+
+  /**
+   * Where the page's top-left corner sits, in viewport pixels.
+   *
+   * Measured against the size the page is DRAWN at, not the size its zoom
+   * implies. The two differ only while a preview stands in for a refit — and
+   * that is precisely when it matters. Centring by the old size left the page
+   * off-centre by half the difference, and a divider drag grows one pane while
+   * it shrinks the other, so the error ran one way on the left and the other
+   * way on the right: the same drag, animated differently on each side of it.
+   *
+   * The scroll offset travels with the scale for the same reason. It is
+   * measured in the page's own pixels at the zoom in the state, so a page
+   * painted larger has to be offset further, or the preview and the refit
+   * disagree by exactly the distance the reader had scrolled.
+   */
+  _origin() {
+    const drawn = this._drawnSize();
+    const viewport = this._viewport();
+    const shown = this.state.zoom > 0 ? this._drawnScale() / this.state.zoom : 1;
+    const slackX = viewport.width - drawn.width;
+    const slackY = viewport.height - drawn.height;
+    return {
+      x: slackX > 0 ? slackX / 2 : -Math.min(this.state.scrollX * shown, -slackX),
+      y: slackY > 0 ? slackY / 2 : -Math.min(this.state.scrollY * shown, -slackY),
     };
   }
 

@@ -705,11 +705,17 @@
 
 .pdf-ws-swap {
   position: absolute;
-  top: calc(50% - 46px);
+  /* Clear of the grip, by more than the grip's own touch margin.
+     At 46px the two boxes were 3px apart, and the ring this button grows when
+     the swap is armed closed even that — so the top of the handle and the
+     bottom of the button were the same pixels, and a finger going for one got
+     the other. The grip is 54 tall (60 while held) and takes a 22px reach
+     around it; sitting at 76 puts this button's edge clear of all of it. */
+  top: calc(50% - 76px);
   left: 50%;
   transform: translateX(-50%);
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   display: grid;
   place-items: center;
   padding: 0;
@@ -720,7 +726,16 @@
   cursor: grab;
   touch-action: none;
   z-index: 12;
-  opacity: 0;
+  /* Visible at rest, dimmed.
+
+     It used to be `opacity: 0` until the divider was hovered, with a
+     `(hover: none)` rule to bring it back on touch screens. That rule does not
+     match the tablet this app runs on — a stylus makes it report hover — so
+     what shipped was an invisible thirty-pixel button sitting on the line
+     between two documents, doing nothing except catch fingers aimed past it
+     and exchange the two documents without being asked. Half-lit and honest is
+     better than absent and armed. */
+  opacity: 0.5;
   box-shadow:
     0 1px 2px rgba(15, 23, 42, 0.10),
     0 6px 16px -8px rgba(15, 23, 42, 0.24),
@@ -733,10 +748,13 @@
 }
 .pdf-ws-swap[hidden] { display: none; }
 
-/* It stays out of the way until the divider is approached — the split is the
-   common action, swapping is the occasional one. */
+
+
+/* It comes up to full when the divider is approached or held — the split is
+   the common action, swapping is the occasional one. */
 .pdf-ws-divider:hover .pdf-ws-swap,
 .pdf-ws-divider:focus-within .pdf-ws-swap,
+.pdf-ws-divider.is-dragging .pdf-ws-swap,
 .pdf-ws-swap:focus-visible,
 .pdf-ws-swap.is-grabbed { opacity: 1; }
 
@@ -770,7 +788,7 @@
 
 .pdf-workspace.is-column .pdf-ws-swap {
   top: 50%;
-  left: calc(50% - 46px);
+  left: calc(50% - 76px);
   transform: translateY(-50%);
 }
 

@@ -54,16 +54,12 @@
     <!-- ── Tab 2: Editor (MathLive created by JS) ── -->
     <!-- ── Tab: PDF learning workspace (dual document) ── -->
     <div class="page" id="page-pdf">
-      <!-- Puts the import row and the dock away, so a page can be read whole.
-           A tablet in landscape is short, and between them the two bars take
-           160px off the top and bottom of the one thing the app is for. -->
-      <button type="button" class="pdf-chrome-toggle" data-role="chrome-toggle"
-              aria-label="隐藏工具栏" title="隐藏工具栏" aria-pressed="false">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
-             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M7 14l5-5 5 5"/>
-        </svg>
-      </button>
+      <!-- The import row and the dock are put away by swiping them off, and
+           brought back by swiping down from the top edge or up from the bottom.
+           There was a chevron in the corner that did the same thing; it was the
+           only control on this screen with nothing to do with reading, it sat
+           over the page it was making room for, and once the gesture worked
+           reliably at both edges nobody was going to aim at a 30px circle. -->
       <div class="pdf-page-bar">
         <div class="pdf-bar-group">
           <button type="button" class="pdf-bar-btn" data-role="import-exercise" data-i18n="pdf.importExercise">导入练习册</button>

@@ -111,10 +111,28 @@ export function applyFit(state, mode, viewport, pageSize, minZoom = ZOOM_MIN) {
   return next(state, { zoom, fitMode: mode, scrollX: 0, scrollY: 0 });
 }
 
-/** Re-applies the remembered fit mode; a no-op when the user set zoom manually. */
+/**
+ * Re-applies the remembered fit mode; a no-op when the user set zoom manually.
+ *
+ * Unlike a fit the reader ASKED for, this one keeps their place. `applyFit`
+ * sends the page back to its origin, which is the right answer for "show me
+ * the whole page" — you start at the top of it. A resize is not that request:
+ * the pane changed shape under a page someone was already reading, and putting
+ * them back at the top of it is a jump nobody asked for. The position carries
+ * across in the page's own coordinates, and the new zoom decides what that is
+ * worth in pixels.
+ */
 export function refit(state, viewport, pageSize, minZoom = ZOOM_MIN) {
   if (state.fitMode === FIT_MODES.NONE) return state;
-  return applyFit(state, state.fitMode, viewport, pageSize, minZoom);
+  const after = applyFit(state, state.fitMode, viewport, pageSize, minZoom);
+  if (after === state || !(state.zoom > 0) || !pageSize?.width || !viewport) return after;
+  const k = after.zoom / state.zoom;
+  const maxX = Math.max(0, pageSize.width * after.zoom - viewport.width);
+  const maxY = Math.max(0, pageSize.height * after.zoom - viewport.height);
+  const scrollX = clamp(state.scrollX * k, 0, maxX);
+  const scrollY = clamp(state.scrollY * k, 0, maxY);
+  if (scrollX === after.scrollX && scrollY === after.scrollY) return after;
+  return next(after, { scrollX, scrollY });
 }
 
 /**
