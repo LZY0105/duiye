@@ -43,11 +43,16 @@ function group(n) { console.log(`\n─── [${n}] ───`); }
 function check(label, fn) {
   try { fn(); pass(label); } catch (e) { fail(label, e.message); }
 }
+/** For the few checks that have to let a timer run before they can look. */
+async function checkAsync(label, fn) {
+  try { await fn(); pass(label); } catch (e) { fail(label, e.message); }
+}
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ── environment ─────────────────────────────────────────────────────────────
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/' });
-for (const key of ['window', 'document', 'PointerEvent', 'Event', 'getComputedStyle', 'localStorage']) {
+for (const key of ['window', 'document', 'PointerEvent', 'Event', 'getComputedStyle', 'localStorage', 'AbortController', 'AbortSignal']) {
   if (dom.window[key] === undefined) continue;
   Object.defineProperty(globalThis, key, {
     value: dom.window[key], configurable: true, writable: true,
@@ -1208,6 +1213,11 @@ group('12. Hiding the bars, and getting them back');
  */
 function chromePage({ topHidden = false, bottomHidden = false } = {}) {
   document.body.className = '';
+  // initChromeHiding restores what was hidden last time, and localStorage is
+  // one object for the whole run — without this a scenario starts wherever the
+  // previous one left the bars, and a check on where they ended up is really a
+  // check on what ran before it.
+  try { localStorage.clear(); } catch (_) { /* not available */ }
   document.body.innerHTML = [
     '<div class="bar-peek" data-role="bar-peek"></div>',
     '<div class="dock-peek" data-role="dock-peek"></div>',
@@ -1216,8 +1226,8 @@ function chromePage({ topHidden = false, bottomHidden = false } = {}) {
     '  <div class="pdf-page-bar"></div>',
     '</div>',
     '<nav class="bottom-nav">',
-    '  <button class="nav-btn" data-nav="textbook">课本</button>',
-    '  <button class="nav-btn" data-nav="settings">设置</button>',
+    '  <button class="active" data-page="pdf"><svg></svg><span>课本</span></button>',
+    '  <button data-page="settings"><svg></svg><span>设置</span></button>',
     '</nav>',
   ].join('\n');
 
@@ -1232,16 +1242,32 @@ function chromePage({ topHidden = false, bottomHidden = false } = {}) {
   box(q('.bar-peek'), topHidden ? [0, 0, 1148, 64] : [0, 0, 0, 0]);
   box(q('.bottom-nav'), bottomHidden ? [0, 700, 1200, 766] : [0, 634, 1200, 700]);
   box(q('[data-role="dock-peek"]'), bottomHidden ? [200, 620, 1000, 700] : [0, 0, 0, 0]);
+  // The capsules sit in the middle of it, with glass either side.
+  box(q('[data-page="pdf"]'), [380, 640, 620, 694]);
+  box(q('[data-page="settings"]'), [640, 640, 820, 694]);
 
   if (topHidden) document.body.classList.add('is-top-hidden');
   if (bottomHidden) document.body.classList.add('is-bottom-hidden');
-  initChromeHiding(root);
+  // The last scenario's listeners come off first. Left on, they would handle
+  // every gesture twice — which is exactly the fault initChromeHiding's
+  // teardown exists to prevent in the app, so the tests would be papering over
+  // the thing they are meant to catch.
+  chromeOff?.();
+  chromeOff = initChromeHiding(root);
   return root;
 }
+let chromeOff = null;
 
-/** A finger going down at (x,y), travelling `dy`, and lifting. */
-function swipe(x, y, dy, { steps = 8 } = {}) {
-  const fire = (type, cy) => document.dispatchEvent(new window.PointerEvent(type, {
+/**
+ * A finger going down at (x,y), travelling `dy`, and lifting.
+ *
+ * `on` is what it comes down on, which is half of what the handler decides
+ * from: a press on a capsule and a press on the glass beside it are the same
+ * coordinates as far as a box test goes, and must not be the same gesture.
+ */
+function swipe(x, y, dy, { steps = 8, on = null } = {}) {
+  const target = on || document;
+  const fire = (type, cy) => target.dispatchEvent(new window.PointerEvent(type, {
     clientX: x, clientY: cy, pointerId: 1, pointerType: 'touch', isPrimary: true,
     bubbles: true, cancelable: true,
   }));
@@ -1249,6 +1275,8 @@ function swipe(x, y, dy, { steps = 8 } = {}) {
   for (let i = 1; i <= steps; i++) fire('pointermove', y + (dy * i) / steps);
   fire('pointerup', y + dy);
 }
+
+const capsule = (page) => document.querySelector(`[data-page="${page}"]`);
 
 const hidden = (which) => document.body.classList.contains('is-' + which + '-hidden');
 
@@ -1318,12 +1346,10 @@ check('a drag that changes its mind leaves the bar where it was', () => {
 check('the drag that moved a bar does not also press the button under it', () => {
   chromePage();
   let pressed = 0;
-  document.querySelector('[data-nav="textbook"]')
-    .addEventListener('click', () => { pressed++; });
-  swipe(600, 660, 70);
+  capsule('pdf').addEventListener('click', () => { pressed++; });
+  swipe(120, 660, 70, { on: document.querySelector('.bottom-nav') });
   assert.ok(hidden('bottom'), 'the dock went away');
-  document.querySelector('[data-nav="textbook"]')
-    .dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
+  capsule('pdf').dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
   assert.equal(pressed, 0, 'the click the drag ends on is swallowed, once');
 });
 
@@ -1333,6 +1359,88 @@ check('the corner button restores whatever is hidden', () => {
   assert.ok(!hidden('top') && !hidden('bottom'), 'one press brings back both');
   root.querySelector('[data-role="chrome-toggle"]').click();
   assert.ok(hidden('top') && hidden('bottom'), 'and the next puts both away');
+});
+
+check('a drag that starts on a capsule leaves the dock alone', () => {
+  chromePage();
+  swipe(500, 660, 70, { on: capsule('pdf') });
+  assert.ok(!hidden('bottom'), 'a finger on 课本 is reaching for 课本, not for the dock');
+  chromePage();
+  swipe(700, 660, 70, { on: capsule('settings').querySelector('span') });
+  assert.ok(!hidden('bottom'), 'and the label inside it counts as the capsule');
+});
+
+check('a drag that starts on the glass beside them still moves the dock', () => {
+  chromePage();
+  swipe(120, 660, 70, { on: document.querySelector('.bottom-nav') });
+  assert.ok(hidden('bottom'), 'there is bar either side of the capsules to take hold of');
+});
+
+check('a drag that starts above the dock still moves it', () => {
+  chromePage();
+  swipe(500, 610, 70);
+  assert.ok(hidden('bottom'), 'the reach above the dock is over the page, not over a capsule');
+});
+
+check('a press on an import button does not move the row', () => {
+  chromePage();
+  const btn = document.createElement('button');
+  btn.textContent = '导入练习册';
+  document.querySelector('.pdf-page-bar').appendChild(btn);
+  swipe(120, 30, -60, { on: btn });
+  assert.ok(!hidden('top'), 'the same rule, at the other end of the screen');
+});
+
+await checkAsync('the dock is marked as moving while it travels, and only while', async () => {
+  chromePage();
+  const nav = document.querySelector('.bottom-nav');
+  const during = [];
+  nav.addEventListener('pointermove', () => {
+    during.push(document.body.classList.contains('is-bottom-moving'));
+  });
+  swipe(120, 660, 70, { on: nav });
+  assert.ok(during.slice(-1)[0], 'it is marked from the moment it starts travelling');
+  assert.ok(document.body.classList.contains('is-bottom-moving'),
+    'and still on its way when the finger lets go');
+  assert.ok(!document.body.classList.contains('is-top-moving'),
+    'the row at the other end is standing still, so it stays usable');
+  await wait(500);
+  assert.ok(!document.body.classList.contains('is-bottom-moving'),
+    'once it has arrived the capsules come back');
+});
+
+check('the corner button marks them moving too', () => {
+  const root = chromePage();
+  root.querySelector('[data-role="chrome-toggle"]').click();
+  assert.ok(document.body.classList.contains('is-bottom-moving')
+    && document.body.classList.contains('is-top-moving'),
+    'the bars go the same distance however the journey was started');
+});
+
+check('a bar in motion has nothing on it that can be pressed', () => {
+  const css = $read('src/styles/pdf.css');
+  assert.ok(/body\.is-bottom-moving \.bottom-nav > button[\s\S]{0,160}?pointer-events:\s*none/.test(css),
+    'a capsule arriving under a thumb must not register as a press');
+  assert.ok(/body\.is-top-moving \.pdf-page-bar button/.test(css), 'and the same for the row');
+  const moving = css.slice(css.indexOf('body.is-bottom-moving'));
+  assert.ok(!/^body\.is-bottom-moving \.bottom-nav\s*\{/m.test(moving),
+    'the bar itself keeps its events — it has to answer the finger carrying it');
+});
+
+check('building the workspace twice does not handle every gesture twice', () => {
+  chromePage();
+  // A second set of listeners, left on, would arm two swallows per drag — and
+  // the second one eats the user's next real tap. This is the fault behind
+  // capsules that work, then do not, then do.
+  const off = initChromeHiding(document.getElementById('page-pdf'));
+  let pressed = 0;
+  capsule('pdf').addEventListener('click', () => { pressed++; });
+  off();
+  swipe(120, 660, 70, { on: document.querySelector('.bottom-nav') });
+  capsule('pdf').dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
+  assert.equal(pressed, 0, 'the drag it ends on is still swallowed once');
+  capsule('pdf').dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
+  assert.equal(pressed, 1, 'and the tap after it is not');
 });
 
 check('the strip is inert while the row is showing', () => {

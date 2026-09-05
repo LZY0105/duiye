@@ -20,6 +20,8 @@ import { deleteDocumentInk } from '../ink/ink-store.js';
 import Logger from '../core/logger.js';
 
 let workspace = null;
+/** Takes the chrome-hiding listeners back off, so a rebuild does not double them. */
+let chromeOff = null;
 let elRoot = null;
 
 const SLOT_LABELS = {
@@ -250,7 +252,8 @@ export async function initPdfWorkspace() {
 
   workspace = new PdfWorkspace(host);
 
-  initChromeHiding(elRoot);
+  chromeOff?.();
+  chromeOff = initChromeHiding(elRoot);
 
   elRoot.querySelector('[data-role="import-exercise"]')?.addEventListener('click', () => {
     elRoot.querySelector('[data-role="file-exercise"]')?.click();
@@ -281,6 +284,8 @@ export async function initPdfWorkspace() {
 export function destroyPdfWorkspace() {
   workspace?.destroy();
   workspace = null;
+  chromeOff?.();
+  chromeOff = null;
 }
 
 // ── hiding the two bars ─────────────────────────────────────────────────────
@@ -298,6 +303,14 @@ export function destroyPdfWorkspace() {
  * brush past on the way to a button must not disappear.
  */
 export function initChromeHiding(elRoot) {
+  // Everything below is hung on the document and on the window, and the
+  // workspace can be built more than once in a session — leave the last set
+  // attached and every gesture is handled twice, which for the swallowed click
+  // means the tap AFTER a drag is eaten as well. One controller takes them all
+  // off again.
+  const life = new AbortController();
+  const alive = { signal: life.signal };
+
   const toggle = elRoot?.querySelector('[data-role="chrome-toggle"]');
   const topBar = elRoot?.querySelector('.pdf-page-bar');
   const dock = document.querySelector('.bottom-nav');
@@ -323,6 +336,7 @@ export function initChromeHiding(elRoot) {
 
   const setHidden = (which, hidden) => {
     if (isHidden(which) === hidden) return;
+    markMoving(which);
     body.classList.toggle(`is-${which}-hidden`, hidden);
     try { localStorage.setItem(`ls_chrome_${which}`, hidden ? '1' : '0'); } catch (_) { /* private mode */ }
     syncToggle();
@@ -346,7 +360,7 @@ export function initChromeHiding(elRoot) {
     if (h > 0) document.documentElement.style.setProperty('--pdf-bar-h', `${h}px`);
   };
   measure();
-  window.addEventListener('resize', measure);
+  window.addEventListener('resize', measure, alive);
 
   /**
    * Dragging a bar away, and dragging it back.
@@ -375,8 +389,19 @@ export function initChromeHiding(elRoot) {
   const SETTLE = 0.4;
   /** A flick this fast commits regardless of how far it got. */
   const FLICK = 0.5;   // px per ms
-  /** How far above the dock a press still counts as taking hold of it. */
-  const DOCK_REACH = 44;
+  /**
+   * How far above the dock a press still counts as taking hold of it.
+   *
+   * This is now the whole of it. The dock's glass runs 360-840 and its two
+   * capsules run 370-830, so there is five pixels of bar either side of them
+   * and nothing else — and a press on a capsule is a press on the capsule, not
+   * a hold on the dock. What is left to take hold of is the band above, so the
+   * band has to be worth aiming at: a thumb coming up off the bezel lands here.
+   *
+   * It is over the page, which costs nothing — the page turns on a SIDEWAYS
+   * drag, and ink is drawn with the pen.
+   */
+  const DOCK_REACH = 76;
   /** Travel before a press becomes a drag rather than a wandering tap. */
   const DRAG_START = 12;
 
@@ -390,6 +415,36 @@ export function initChromeHiding(elRoot) {
 
   let drag = null;
 
+  /**
+   * How long a bar is treated as still moving after it is let go.
+   *
+   * A shade past the 0.32s the transform takes, so the controls come back only
+   * once the bar has actually arrived.
+   */
+  const MOVE_SETTLE = 380;
+  const moveTimers = { top: 0, bottom: 0 };
+
+  /**
+   * Marks a bar as in motion, which puts the controls on it out of reach.
+   *
+   * The other half of keeping the two gestures apart: a bar arriving under a
+   * resting thumb, or leaving from under one, must not register as a press. The
+   * swallowed click was not enough on its own — it catches the click a drag
+   * produces, but not a finger that comes down on a bar already in flight.
+   *
+   * Timed rather than waiting for transitionend, because a drag that does not
+   * cross the threshold settles BACK to where it started: the class never
+   * changes, and on some paths neither does the transform, so the event that
+   * would end this may never arrive.
+   */
+  const markMoving = (which) => {
+    document.body.classList.add(`is-${which}-moving`);
+    clearTimeout(moveTimers[which]);
+    moveTimers[which] = setTimeout(() => {
+      document.body.classList.remove(`is-${which}-moving`);
+    }, MOVE_SETTLE);
+  };
+
   const setProgress = (which, p) => {
     document.body.style.setProperty(`--${which}-drag`, String(p));
   };
@@ -398,9 +453,23 @@ export function initChromeHiding(elRoot) {
     document.body.style.removeProperty(`--${which}-drag`);
   };
 
+  /**
+   * Whether the press landed on something meant to be pressed.
+   *
+   * A capsule and the bar under it want opposite things from the same finger,
+   * and there is no reading of a gesture that gives both. So they are separated
+   * by where it starts: on 课本, on 设置, on 导入练习册 — on any control at all —
+   * the bar does not move, whatever the finger does next. The bar is taken hold
+   * of by its own glass, of which there is plenty either side of the capsules,
+   * or by the strip it leaves behind.
+   */
+  const onControl = (t) => !!(t && t.closest)
+    && !!t.closest('button, a, input, select, textarea, [role="button"], [role="tab"]');
+
   document.addEventListener('pointerdown', (e) => {
     drag = null;
     if (document.body.classList.contains('is-library-open')) return;
+    if (onControl(e.target)) return;
     const x = e.clientX;
     const y = e.clientY;
 
@@ -420,7 +489,7 @@ export function initChromeHiding(elRoot) {
     drag.y = y;
     drag.at = e.timeStamp || performance.now();
     drag.moved = false;
-  }, { passive: true });
+  }, { passive: true, ...alive });
 
   document.addEventListener('pointermove', (e) => {
     if (!drag) return;
@@ -437,6 +506,7 @@ export function initChromeHiding(elRoot) {
       drag.moved = true;
       document.body.classList.add('is-chrome-dragging');
     }
+    markMoving(drag.which);
     // Toward 1 is away; `sign` says which direction that is for this bar.
     const p = Math.max(0, Math.min(1, drag.from + (dy * drag.sign) / drag.span));
     drag.p = p;
@@ -449,7 +519,7 @@ export function initChromeHiding(elRoot) {
     drag.lastY = e.clientY;
     drag.lastAt = e.timeStamp || performance.now();
     setProgress(drag.which, p);
-  }, { passive: true });
+  }, { passive: true, ...alive });
 
   const endDrag = (e) => {
     if (!drag) return;
@@ -467,6 +537,7 @@ export function initChromeHiding(elRoot) {
     // whichever journey it is nearer to completing.
     const away = v > FLICK ? true : v < -FLICK ? false : p >= SETTLE;
     clearProgress(which);           // the class takes over, and it transitions
+    markMoving(which);              // and it is out of reach until it lands
     setHidden(which, away);
   };
 
@@ -502,27 +573,37 @@ export function initChromeHiding(elRoot) {
     clearTimeout(swallowTimer);
     e.stopPropagation();
     e.preventDefault();
-  }, true);
+  }, { capture: true, ...alive });
 
-  document.addEventListener('pointerup', endDrag, { passive: true });
+  document.addEventListener('pointerup', endDrag, { passive: true, ...alive });
   document.addEventListener('pointercancel', () => {
     if (!drag) return;
     const which = drag.which;
     drag = null;
     document.body.classList.remove('is-chrome-dragging');
     clearProgress(which);
-  }, { passive: true });
+  }, { passive: true, ...alive });
 
   toggle?.addEventListener('click', () => {
     // Anything hidden: bring it all back. Nothing hidden: put it all away.
     const restore = isHidden('top') || isHidden('bottom');
     setHidden('top', !restore);
     setHidden('bottom', !restore);
-  });
+  }, alive);
 
   try {
     if (localStorage.getItem('ls_chrome_top') === '1') setHidden('top', true);
     if (localStorage.getItem('ls_chrome_bottom') === '1') setHidden('bottom', true);
   } catch (_) { /* storage unavailable: start with both showing */ }
   syncToggle();
+
+  return () => {
+    life.abort();
+    clearTimeout(swallowTimer);
+    clearTimeout(moveTimers.top);
+    clearTimeout(moveTimers.bottom);
+    document.body.classList.remove('is-chrome-dragging', 'is-top-moving', 'is-bottom-moving');
+    clearProgress('top');
+    clearProgress('bottom');
+  };
 }

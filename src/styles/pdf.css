@@ -120,6 +120,19 @@ body.is-bottom-hidden .bottom-nav { pointer-events: none; }
 body.is-chrome-dragging .pdf-page-bar,
 body.is-chrome-dragging .bottom-nav { transition: none; }
 
+/* A bar on its way in or out cannot be pressed.
+
+   Only the controls go dead, not the bar: the glass around them still has to
+   answer the finger that is carrying it. And only the bar that is moving — the
+   other one is standing still and is perfectly usable.
+
+   This is the second half of keeping the two gestures apart. The first is that
+   a press starting on a capsule never becomes a drag; this is that a capsule
+   arriving under a thumb, or leaving from under one, never becomes a press. */
+body.is-bottom-moving .bottom-nav > button,
+body.is-top-moving .pdf-page-bar button,
+body.is-top-moving .pdf-page-bar select { pointer-events: none; }
+
 /* Where the import row is taken hold of once it has gone.
 
    A band watched on the document was not enough: with nothing to declare
