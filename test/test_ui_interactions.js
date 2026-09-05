@@ -850,6 +850,31 @@ check('closing a pane means taking the divider to the edge of the workspace', ()
     + 'which nobody reaches by accident');
 });
 
+check('every file the service worker pre-caches actually exists', () => {
+  // The list went stale in silence. It named the ONNX runtime and the
+  // formula-recognition models long after both were deleted, and because each
+  // entry is cached with its own catch, thirteen of seventeen failed on every
+  // install and the only trace was a console warning nobody was reading.
+  const sw = $code('public/sw.js');
+  const block = sw.slice(sw.indexOf('PRE_CACHE = ['), sw.indexOf('];', sw.indexOf('PRE_CACHE = [')));
+  const paths = [...block.matchAll(/'(\/[^']*)'/g)].map(m => m[1]);
+  assert.ok(paths.length > 0, 'the list is found');
+
+  const missing = paths.filter((p) => {
+    const file = p === '/' ? 'index.html' : join('public', p);
+    try { statSync(join(ROOT, file)); return false; } catch (_) { return true; }
+  });
+  assert.deepEqual(missing, [], 'a pre-cache entry that 404s is a warning nobody sees');
+});
+
+check('the fetch handler is cache-first about things that never change', () => {
+  const sw = $code('public/sw.js');   // the prose above still names what was removed
+  assert.ok(/startsWith\('\/vendor\/'\)/.test(sw),
+    'the vendored libraries, character maps and fonts are pinned into the repo, '
+    + 'so the cached copy is always right');
+  assert.ok(!/\/models\/|\/ort\//.test(sw), 'and neither of those directories exists any more');
+});
+
 check('the pinch runs on pointer events, not a second touch stream', () => {
   // It used to be a pair of touch listeners alongside the pointer ones, so a
   // second finger started a pinch while the first was still panning and both
