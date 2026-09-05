@@ -1256,12 +1256,21 @@ body.is-library-open .pdf-chrome-toggle { display: none; }
   position: relative;
 }
 
+/* Centred the way the base rule centres it, not by `left: 50%`.
+
+   The base rule sets `inset: 0; margin: 0 auto`, which centres a fixed width
+   between the two edges. Adding `left: 50%` on top of that did not replace it:
+   `right: 0` and the auto margins were still in force, so with left, right and
+   width all set the box was over-constrained and the leftover 5.5px was split
+   evenly between the margins — putting the hairline 2.7px RIGHT of the middle,
+   with the grip still centred on the middle. Two things that should be one
+   line, a finger's width apart. */
 [data-skin="liquid-math"] .pdf-ws-divider::before {
   content: '';
   position: absolute;
-  top: 0; bottom: 0; left: 50%;
+  inset: 0;
+  margin: 0 auto;
   width: 1.5px;
-  transform: translateX(-50%);
   background: rgba(15, 23, 42, 0.08);
   box-shadow: none;
 }
@@ -1278,11 +1287,15 @@ body.is-library-open .pdf-chrome-toggle { display: none; }
   position: relative;
 }
 
+/* φ has a descender, and translate(-50%) centres the LINE BOX, which put the
+   letter itself low in the grip. `line-height: 1` and a hair of lift put the
+   mark where the eye says the middle is. */
 [data-skin="liquid-math"] .pdf-ws-divider-grip::after {
   content: 'φ';
   position: absolute;
   top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, calc(-50% - 1.5px));
+  line-height: 1;
   font-family: "KaTeX_Math", "STIX Two Math", serif;
   font-size: 0.75rem;
   font-weight: 700;

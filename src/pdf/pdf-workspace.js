@@ -261,16 +261,20 @@ export class PdfWorkspace {
       this._dividerTravelled = 0;
       this._dividerFrom = { x: e.clientX, y: e.clientY };
       pointerId = e.pointerId;
-      this.elDivider.setPointerCapture(pointerId);
-      this.elDivider.classList.add('is-dragging');
-      this.root.classList.remove('is-animating');
-      this._showRatioBadge(this.state.dividerRatio);
       // Widths at the start of the gesture, so the live preview knows what it
-      // is scaling from.
+      // is scaling from. Recorded BEFORE the capture, and the capture is allowed
+      // to fail: it throws if the pointer is not one the element can claim, and
+      // everything after it used to be skipped — leaving the drag running with
+      // no starting width, so the preview scaled from a nominal 1px pane and
+      // blew the page up several times its size until the release put it back.
       this._dragBaseWidth = {
         [SLOTS.PRIMARY]: this.elSlots[SLOTS.PRIMARY].clientWidth || 1,
         [SLOTS.SECONDARY]: this.elSlots[SLOTS.SECONDARY].clientWidth || 1,
       };
+      try { this.elDivider.setPointerCapture(pointerId); } catch (_) { /* not ours to capture */ }
+      this.elDivider.classList.add('is-dragging');
+      this.root.classList.remove('is-animating');
+      this._showRatioBadge(this.state.dividerRatio);
       e.preventDefault();
     });
 
@@ -294,16 +298,27 @@ export class PdfWorkspace {
         );
       }
 
-      // Preview the refit. A fit-to-width page should track the divider, and
-      // rasterising it once per frame is not affordable, so the rendered page
-      // is scaled by how much its pane has grown or shrunk. The real refit
-      // happens on release, at which point this is cleared.
+      // Preview the refit, at the scale the release will actually land on.
+      //
+      // Rasterising a PDF once per frame is not affordable, so the bitmap on
+      // screen is scaled by a transform for the duration. It used to be scaled
+      // by how much the PANE had grown, which is only the same number when the
+      // fit is limited by width. A whole-page fit — what 100% means here — is
+      // usually limited by HEIGHT, and a sideways drag does not change the
+      // height: the page should barely move, the preview stretched it anyway,
+      // and the real refit on release snapped it back. Asking the pane what the
+      // fit would be at the new width makes the preview and the result the same
+      // number, so there is nothing left to snap.
       for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
         const pane = this.panes[slot];
         if (!pane?.previewScale || !pane.isLoaded?.()) continue;
         if (pane.state?.fitMode === FIT_MODES.NONE) continue;   // a manual zoom is not ours to move
-        const base = this._dragBaseWidth?.[slot] || 1;
-        pane.previewScale((this.elSlots[slot].clientWidth || base) / base);
+        const base = this._dragBaseWidth?.[slot];
+        if (!(base > 1)) continue;            // no starting width, nothing to scale from
+        const now = this.elSlots[slot].clientWidth || base;
+        const was = pane.fitZoomFor?.(base);
+        const will = pane.fitZoomFor?.(now);
+        pane.previewScale(was && will ? will / was : now / base);
       }
     });
 

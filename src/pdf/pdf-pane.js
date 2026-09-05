@@ -42,6 +42,14 @@ const SWIPE_MAX_MS = 600;
  * far sideways in the few milliseconds between two fingers landing.
  */
 const TURN_GRAB = 28;
+/**
+ * Travel before a one-finger drag is committed to panning or to turning.
+ *
+ * Smaller than TURN_GRAB on purpose: a pan should start under the hand rather
+ * than after it, and a drag ruled a turn at 6px still waits until 28 before the
+ * page actually lifts.
+ */
+const PAN_GRAB = 6;
 
 /**
  * How far the crease must have travelled before the turn stands on release.
@@ -169,6 +177,40 @@ export class PdfPane {
                     viewport.height / this.pageSize.height);
   }
 
+  /**
+   * What the zoom would settle at if this pane were `width` wide.
+   *
+   * For previewing a divider drag with the number the release will actually
+   * produce. Scaling the bitmap by how much the PANE grew is only right when
+   * the fit is limited by width; a whole-page fit is usually limited by height,
+   * which a sideways drag does not change at all — so the preview stretched the
+   * page while the finger moved and the real refit snapped it back on release.
+   * That snap is what a jump at the end of a drag looks like.
+   *
+   * Returns null when there is no fit to preview, i.e. the reader set the zoom
+   * themselves and it is not the divider's to move.
+   */
+  fitZoomFor(width) {
+    if (!this.state || !this.pageSize?.width || !this.pageSize?.height) return null;
+    if (this.state.fitMode === FIT_MODES.NONE) return null;
+    const height = this._viewport().height;
+    if (!(width > 0) || !(height > 0)) return null;
+    // Through applyFit rather than beside it, so the preview and the release
+    // cannot drift apart.
+    //
+    // With ZOOM_MIN as the floor, NOT this.minZoom. The pane's floor is itself
+    // the fit at the width it has right now (setMinZoom takes the smaller of
+    // the caller's number and the whole-page scale), so asking about a NARROWER
+    // pane clamped the answer straight back up to the current width's fit —
+    // both widths priced the same, the factor came out 1, and there was no
+    // preview at all. The release does not have that problem, because it
+    // recomputes the floor from the new width first; so it moved, and the
+    // still page jumped to meet it. A fit never lands below its own floor
+    // anyway, which is why dropping it here changes nothing else.
+    return applyFit(this.state, this.state.fitMode, { width, height },
+                    this.pageSize, ZOOM_MIN).zoom;
+  }
+
   /** The zoom as the reader sees it: 1 is the whole page, 2 is twice that. */
   displayZoom() {
     const base = this.fitScale();
@@ -279,6 +321,30 @@ export class PdfPane {
         if (touches.size === 1 && swipe && swipe.id === e.pointerId) {
           const dx = e.clientX - swipe.x;
           const dy = e.clientY - swipe.y;
+
+          // A page bigger than its pane is read by sliding it, and until now it
+          // could not be: one finger only ever turned pages, so zooming in with
+          // two fingers showed a corner of the page and no way to reach the
+          // rest of it. What the gesture means is decided ONCE, on the first
+          // real movement, and does not change under the hand — deciding per
+          // frame would turn a page the moment a pan ran out of room.
+          if (!swipe.turning && !swipe.mode && Math.hypot(dx, dy) >= PAN_GRAB) {
+            swipe.mode = this._roomToPan(dx, dy) ? 'pan' : 'turn';
+            swipe.lx = e.clientX;
+            swipe.ly = e.clientY;
+          }
+          if (swipe.mode === 'pan') {
+            e.preventDefault();
+            this._apply(
+              panBy(this.state, e.clientX - swipe.lx, e.clientY - swipe.ly,
+                    this._viewport(), this._contentSize()),
+              false,
+            );
+            swipe.lx = e.clientX;
+            swipe.ly = e.clientY;
+            return;
+          }
+
           if (!swipe.turning) {
             // Wait until the hand has said which way it is going. A finger that
             // has moved further down than across is not turning a page.
@@ -393,6 +459,9 @@ export class PdfPane {
       }
 
       if (e.type !== 'pointerup') return;
+      // A drag that slid the page is finished. Without this the same gesture
+      // would also be measured as a flick and turn the page it had just moved.
+      if (from.mode === 'pan') return;
       try { maybeTurnPage(from, e); } catch (_) { /* a failed turn is not fatal */ }
     };
 
@@ -641,6 +710,28 @@ export class PdfPane {
     ctx.restore();
     live.point = point;
     live.progress = this._turnProgress(live, point);
+  }
+
+  /**
+   * Whether the page has anywhere left to go in the direction of this drag.
+   *
+   * Read along the drag's dominant axis, and against the direction of travel:
+   * dragging the page RIGHT reveals what is off to its left, which needs the
+   * view to be scrolled away from the left edge. At the whole-page fit there is
+   * no room on either axis, so nothing changes for a reader who has not zoomed
+   * — a sideways swipe still turns the page. Zoomed in, the swipe slides the
+   * page until it reaches the edge, and the swipe after that turns.
+   */
+  _roomToPan(dx, dy) {
+    if (!this.state) return false;
+    const v = this._viewport();
+    const c = this._contentSize();
+    const maxX = Math.max(0, c.width - v.width);
+    const maxY = Math.max(0, c.height - v.height);
+    const EDGE = 0.5;
+    return Math.abs(dx) > Math.abs(dy)
+      ? (dx > 0 ? this.state.scrollX > EDGE : this.state.scrollX < maxX - EDGE)
+      : (dy > 0 ? this.state.scrollY > EDGE : this.state.scrollY < maxY - EDGE);
   }
 
   /** How far across the page the crease has travelled, 0..1. */

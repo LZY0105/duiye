@@ -464,25 +464,133 @@ check('a resting palm still cannot draw, whatever the mode', () => {
   );
 });
 
-check('one finger turns the page and does not pan', () => {
-  // The rule the tablet asked for: the hand taps, turns pages, and pinches.
-  // Taking single-finger panning away is what makes the page turn
-  // unambiguous — no threshold that means something different at each zoom.
+check('one finger slides a page too big for its pane, and turns one that fits', () => {
+  // A page zoomed past its pane has to be reachable, and the only hand on the
+  // tablet is one finger. So the gesture means whichever of the two the page
+  // has room for — decided once, at the start, and not again under the hand.
   const code = $code('src/pdf/pdf-pane.js');
   assert.ok(/if \(e\.pointerType === 'pen'\) return;/.test(code),
     'the pen never reaches the page gestures');
   assert.ok(/touches\.size === 2/.test(code), 'two fingers are a pinch');
-  // The gate that only turned the page once panning had run out of room went
-  // with single-finger panning. It existed so one gesture did not mean two
-  // things; there is only one meaning left.
-  assert.ok(!/atEnd/.test(code) && !/atStart/.test(code),
-    'the "only turn at the edge" rule is gone');
+  assert.ok(/swipe\.mode = this\._roomToPan\(dx, dy\) \? 'pan' : 'turn'/.test(code),
+    'the reading is taken once and kept');
+});
 
-  // A single touch must not reach panBy. The only pan paths left are the
-  // mouse drag, the two-finger pinch and the wheel.
-  const single = code.slice(code.indexOf('if (e.pointerType === \'touch\')'));
-  const beforePinch = single.slice(0, single.indexOf('touches.size !== 2'));
-  assert.ok(!/panBy/.test(beforePinch), 'one finger must not pan');
+/** A pane with a page of `content` in a viewport of `view`, scrolled to `at`. */
+function pannablePane({ view, content, at }) {
+  const pane = Object.create(PdfPane.prototype);
+  pane.state = { scrollX: at.x, scrollY: at.y, zoom: 1, fitMode: 'page' };
+  pane.pageSize = { width: content.width, height: content.height };
+  pane._viewport = () => view;
+  pane._contentSize = () => content;
+  return pane;
+}
+
+check('a page that fits its pane has nowhere to slide, so the swipe turns it', () => {
+  const pane = pannablePane({
+    view: { width: 580, height: 610 },
+    content: { width: 432, height: 610 },
+    at: { x: 0, y: 0 },
+  });
+  assert.equal(pane._roomToPan(-40, 0), false, 'nothing to the right of it');
+  assert.equal(pane._roomToPan(40, 0), false, 'nor to the left');
+  assert.equal(pane._roomToPan(0, -40), false, 'nor below');
+});
+
+check('a page zoomed past its pane slides, until it reaches the edge', () => {
+  const view = { width: 580, height: 610 };
+  const content = { width: 1200, height: 1700 };
+
+  const middle = pannablePane({ view, content, at: { x: 300, y: 400 } });
+  assert.ok(middle._roomToPan(-40, 0), 'room to carry on right');
+  assert.ok(middle._roomToPan(40, 0), 'and back to the left');
+  assert.ok(middle._roomToPan(0, -40), 'and down');
+  assert.ok(middle._roomToPan(0, 40), 'and up');
+
+  const hardLeft = pannablePane({ view, content, at: { x: 0, y: 400 } });
+  assert.equal(hardLeft._roomToPan(40, 0), false,
+    'at the left edge, a rightward drag has nothing to reveal — that swipe turns the page');
+  assert.ok(hardLeft._roomToPan(-40, 0), 'the other way still slides');
+
+  const hardRight = pannablePane({ view, content, at: { x: 620, y: 400 } });
+  assert.equal(hardRight._roomToPan(-40, 0), false, 'and the same at the right edge');
+});
+
+check('the axis the hand chose is the axis that is asked about', () => {
+  // Mostly-sideways on a page with vertical room only must not be read as a
+  // pan, or a swipe meant to turn the page would slide it up instead.
+  const pane = pannablePane({
+    view: { width: 580, height: 610 },
+    content: { width: 432, height: 1700 },
+    at: { x: 0, y: 400 },
+  });
+  assert.equal(pane._roomToPan(-60, 10), false, 'sideways asks about sideways');
+  assert.ok(pane._roomToPan(10, -60), 'and up-and-down about up-and-down');
+});
+
+check('a drag that slid the page does not also turn it', () => {
+  const code = $code('src/pdf/pdf-pane.js');
+  const end = code.slice(code.indexOf('if (e.type !== \'pointerup\') return;'));
+  assert.ok(/from\.mode === 'pan'/.test(end.slice(0, 400)),
+    'the same gesture would otherwise be measured as a flick as well');
+});
+
+check('the divider preview is priced by the fit, not by how much the pane grew', () => {
+  // A whole-page fit is usually limited by HEIGHT, and a sideways drag does not
+  // change the height — so scaling the bitmap by the pane's width ratio showed
+  // a page that was not going to be there when the finger lifted.
+  const pane = Object.create(PdfPane.prototype);
+  pane.state = { zoom: 0.725, fitMode: 'page', scrollX: 0, scrollY: 0 };
+  pane.pageSize = { width: 595, height: 842 };
+  pane.minZoom = 0.725;
+  pane._viewport = () => ({ width: 582, height: 611 });
+
+  // Wide enough that height binds: the page does not care how wide the pane is.
+  assert.equal(pane.fitZoomFor(582), pane.fitZoomFor(495),
+    'between these two widths the fit is the same, so the preview must not move');
+  const widthRatio = 495 / 582;
+  assert.ok(Math.abs(widthRatio - 1) > 0.1, 'while the pane itself changed by 15%');
+
+  // Narrow enough that width binds: now it tracks, and by the width.
+  const narrow = pane.fitZoomFor(370);
+  assert.ok(narrow < pane.fitZoomFor(582), 'a pane too narrow for the page shrinks it');
+  assert.ok(Math.abs(narrow - 370 / 595) < 1e-9, 'and exactly to what fits');
+});
+
+check('the floor of the pane it has now does not price the pane it would have', () => {
+  // minZoom is itself the whole-page scale at the CURRENT width, so clamping a
+  // hypothetical narrower fit against it returned the current fit for every
+  // width — the factor came out 1 and there was no preview at all.
+  const pane = Object.create(PdfPane.prototype);
+  pane.state = { zoom: 0.49, fitMode: 'page', scrollX: 0, scrollY: 0 };
+  pane.pageSize = { width: 595, height: 842 };
+  pane.minZoom = 0.49;                       // == the fit at 293px wide
+  pane._viewport = () => ({ width: 293, height: 611 });
+  assert.ok(pane.fitZoomFor(126) < pane.minZoom,
+    'a narrower pane must be allowed to price below the floor it has today');
+  assert.ok(pane.fitZoomFor(126) < pane.fitZoomFor(293), 'so the two differ');
+});
+
+check('a manual zoom is not the divider\u2019s to move', () => {
+  const pane = Object.create(PdfPane.prototype);
+  pane.state = { zoom: 2, fitMode: 'none', scrollX: 0, scrollY: 0 };
+  pane.pageSize = { width: 595, height: 842 };
+  pane.minZoom = 0.25;
+  pane._viewport = () => ({ width: 582, height: 611 });
+  assert.equal(pane.fitZoomFor(370), null, 'there is no fit to preview');
+});
+
+check('the divider records its starting widths before it claims the pointer', () => {
+  const code = $code('src/pdf/pdf-workspace.js');
+  const down = code.slice(code.indexOf("elDivider.addEventListener('pointerdown'"));
+  const base = down.indexOf('_dragBaseWidth');
+  const capture = down.indexOf('setPointerCapture');
+  assert.ok(base > -1 && capture > -1);
+  assert.ok(base < capture,
+    'setPointerCapture throws on a pointer it cannot claim, and everything after '
+    + 'it was skipped — leaving the drag running with no width to scale from');
+  assert.ok(/try \{ this\.elDivider\.setPointerCapture/.test(down),
+    'and the claim itself is allowed to fail');
 });
 
 check('the pinch runs on pointer events, not a second touch stream', () => {
@@ -1242,9 +1350,10 @@ function chromePage({ topHidden = false, bottomHidden = false } = {}) {
   box(q('.bar-peek'), topHidden ? [0, 0, 1148, 64] : [0, 0, 0, 0]);
   box(q('.bottom-nav'), bottomHidden ? [0, 700, 1200, 766] : [0, 634, 1200, 700]);
   box(q('[data-role="dock-peek"]'), bottomHidden ? [200, 620, 1000, 700] : [0, 0, 0, 0]);
-  // The capsules sit in the middle of it, with glass either side.
-  box(q('[data-page="pdf"]'), [380, 640, 620, 694]);
-  box(q('[data-page="settings"]'), [640, 640, 820, 694]);
+  // Measured off the tablet: the capsules fill the bar but for five pixels
+  // either side, which is the whole reason the bar is not a grab any more.
+  box(q('[data-page="pdf"]'), [365, 640, 600, 696]);
+  box(q('[data-page="settings"]'), [600, 640, 835, 696]);
 
   if (topHidden) document.body.classList.add('is-top-hidden');
   if (bottomHidden) document.body.classList.add('is-bottom-hidden');
@@ -1303,7 +1412,7 @@ check('the row comes back from a press anywhere along the strip', () => {
 
 check('dragging the dock down puts it away, and a swipe up brings it back', () => {
   chromePage();
-  swipe(600, 660, 70);
+  swipe(600, 600, 70);
   assert.ok(hidden('bottom'), 'the dock goes down');
   assert.ok(!hidden('top'), 'and the row above stays');
 
@@ -1314,7 +1423,7 @@ check('dragging the dock down puts it away, and a swipe up brings it back', () =
 
 check('a wandering tap on the dock is not a drag', () => {
   chromePage();
-  swipe(600, 660, 9, { steps: 3 });
+  swipe(600, 600, 9, { steps: 3 });
   assert.ok(!hidden('bottom'),
     'a finger resting on 课本 moves a few pixels before it lifts — that is a press');
 });
@@ -1347,7 +1456,7 @@ check('the drag that moved a bar does not also press the button under it', () =>
   chromePage();
   let pressed = 0;
   capsule('pdf').addEventListener('click', () => { pressed++; });
-  swipe(120, 660, 70, { on: document.querySelector('.bottom-nav') });
+  swipe(120, 600, 70);
   assert.ok(hidden('bottom'), 'the dock went away');
   capsule('pdf').dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
   assert.equal(pressed, 0, 'the click the drag ends on is swallowed, once');
@@ -1370,10 +1479,23 @@ check('a drag that starts on a capsule leaves the dock alone', () => {
   assert.ok(!hidden('bottom'), 'and the label inside it counts as the capsule');
 });
 
-check('a drag that starts on the glass beside them still moves the dock', () => {
+check('nothing inside the dock takes hold of it, not even the glass', () => {
+  // Five pixels of bar either side of the capsules is not something to defend:
+  // a finger there is on the capsule as far as the eye goes, and both firing at
+  // once is what made the boundary unusable.
+  for (const [x, label] of [[365, 'the sliver at the left end'],
+                            [500, 'over 课本'],
+                            [835, 'the sliver at the right end']]) {
+    chromePage();
+    swipe(x, 668, 70);
+    assert.ok(!hidden('bottom'), label);
+  }
+});
+
+check('the band above the dock is what moves it', () => {
   chromePage();
-  swipe(120, 660, 70, { on: document.querySelector('.bottom-nav') });
-  assert.ok(hidden('bottom'), 'there is bar either side of the capsules to take hold of');
+  swipe(500, 600, 70);
+  assert.ok(hidden('bottom'), 'and it reaches 76px up, so it is worth aiming at');
 });
 
 check('a drag that starts above the dock still moves it', () => {
@@ -1393,12 +1515,13 @@ check('a press on an import button does not move the row', () => {
 
 await checkAsync('the dock is marked as moving while it travels, and only while', async () => {
   chromePage();
-  const nav = document.querySelector('.bottom-nav');
   const during = [];
-  nav.addEventListener('pointermove', () => {
-    during.push(document.body.classList.contains('is-bottom-moving'));
-  });
-  swipe(120, 660, 70, { on: nav });
+  // The grab is the band above the dock, which is the page — so the reading is
+  // taken from the document, where the gesture actually travels.
+  const watch = () => during.push(document.body.classList.contains('is-bottom-moving'));
+  document.addEventListener('pointermove', watch);
+  swipe(120, 600, 70);
+  document.removeEventListener('pointermove', watch);
   assert.ok(during.slice(-1)[0], 'it is marked from the moment it starts travelling');
   assert.ok(document.body.classList.contains('is-bottom-moving'),
     'and still on its way when the finger lets go');
@@ -1436,7 +1559,7 @@ check('building the workspace twice does not handle every gesture twice', () => 
   let pressed = 0;
   capsule('pdf').addEventListener('click', () => { pressed++; });
   off();
-  swipe(120, 660, 70, { on: document.querySelector('.bottom-nav') });
+  swipe(120, 600, 70);
   capsule('pdf').dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
   assert.equal(pressed, 0, 'the drag it ends on is still swallowed once');
   capsule('pdf').dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));

@@ -405,6 +405,22 @@ export function initChromeHiding(elRoot) {
   /** Travel before a press becomes a drag rather than a wandering tap. */
   const DRAG_START = 12;
 
+  /**
+   * The band the dock is taken hold of by — above it, never on it.
+   *
+   * Reaching INTO the dock left a boundary where both things fired at once: a
+   * finger on the few pixels between the dock's edge and a capsule's edge is
+   * on the capsule as far as the eye goes, and was on the bar as far as the
+   * box test went, so it both pressed 课本 and started dragging the dock away.
+   * There is no width of glass there worth defending — the capsules run
+   * 370-830 inside a bar that runs 360-840 — so the bar keeps none of it.
+   */
+  const dockGrip = () => {
+    const r = dock?.getBoundingClientRect();
+    if (!r || !r.width) return null;
+    return { left: r.left, right: r.right, top: r.top - DOCK_REACH, bottom: r.top };
+  };
+
   const boxOf = (el, padTop = 0) => {
     if (!el) return null;
     const r = el.getBoundingClientRect();
@@ -476,7 +492,7 @@ export function initChromeHiding(elRoot) {
     // Taking hold of a bar that is out, to push it away.
     if (!isHidden('top') && inBox(boxOf(topBar), x, y)) {
       drag = { which: 'top', from: 0, span: Math.max(24, topBar.getBoundingClientRect().height), sign: -1 };
-    } else if (!isHidden('bottom') && inBox(boxOf(dock, DOCK_REACH), x, y)) {
+    } else if (!isHidden('bottom') && inBox(dockGrip(), x, y)) {
       drag = { which: 'bottom', from: 0, span: Math.max(24, dock.getBoundingClientRect().height), sign: 1 };
     // Taking hold of one that is away, to pull it back.
     } else if (isHidden('top') && (inBox(boxOf(barPeek), x, y) || y <= EDGE_TOP)) {
