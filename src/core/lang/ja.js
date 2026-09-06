@@ -4,7 +4,7 @@ export default {
   "nav.history": "履歴",
   "nav.settings": "設定",
 
-  "nav.pdf": "教材",
+  "nav.pdf": "練習",
   "pdf.importExercise": "問題集を読み込む",
   "pdf.importAnswer": "解答集を読み込む",
   "pdf.library": "ライブラリ",

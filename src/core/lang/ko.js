@@ -4,7 +4,7 @@ export default {
   "nav.history": "기록",
   "nav.settings": "설정",
 
-  "nav.pdf": "교재",
+  "nav.pdf": "연습",
   "pdf.importExercise": "문제집 가져오기",
   "pdf.importAnswer": "정답집 가져오기",
   "pdf.library": "라이브러리",

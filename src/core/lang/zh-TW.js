@@ -4,7 +4,7 @@ export default {
   "nav.history": "歷史",
   "nav.settings": "設定",
 
-  "nav.pdf": "課本",
+  "nav.pdf": "練習",
   "pdf.importExercise": "匯入練習冊",
   "pdf.importAnswer": "匯入答案冊",
   "pdf.library": "文件庫",

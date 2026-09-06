@@ -850,23 +850,30 @@
    工具按钮的选中态由 .is-selected::before 那枚圆形透镜承担——按钮本身不能再填
    一次底色，否则会得到一个黑方块里套着一个灰圆圈：上一版就是这样，两条规则各画
    各的。这里让透镜变成一整块墨，图标反白，形状仍是圆的，因为工具按钮本来就是圆的。 */
+/* 不用实心黑。
+ *
+ * 反白确实一眼就能认出来，但一块纯黑落在一整条白色工具栏上，是这块屏幕上最重的
+ * 东西——比正文的字还重。选中一支笔而已，不该抢到那个份量。
+ *
+ * 改成同一支墨的最浅一档做底，外加一圈细边。图标保持墨色不反白：认出"选中"靠的
+ * 是那圈边和底色的变化，不是靠把图标整个换掉。 */
 [data-skin="minimal"] .ink-tool.is-selected {
   background: transparent;
-  color: #ffffff;
+  color: var(--fg);
 }
 [data-skin="minimal"] .ink-tool.is-selected::before {
-  background: var(--fg);
-  box-shadow: none;
+  background: rgba(15, 23, 42, 0.06);
+  box-shadow: inset 0 0 0 1.5px rgba(15, 23, 42, 0.55);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
 
 /* 分段按钮是方的，所以它按方的来反转。 */
 [data-skin="minimal"] .ink-seg-btn.is-selected {
-  background: var(--fg);
-  color: #ffffff;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--fg);
   border-radius: var(--btn-radius);
-  box-shadow: none;
+  box-shadow: inset 0 0 0 1.5px rgba(15, 23, 42, 0.55);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   font-weight: 500;

@@ -1449,3 +1449,15 @@ body.is-library-open .ink-card-layer { display: none; }
 
 [data-skin="minimal"] .bar-peek,
 [data-skin="minimal"] .dock-peek { background: transparent; }
+
+
+/* 当前页签的图标上有一层蓝色辉光——base.css 给它加了
+   drop-shadow(0 2px 6px rgba(0,122,255,.4))，那是液态玻璃的强调色。纸上不会有
+   东西发光，何况这抹蓝在这套皮肤里再无第二处，看上去像是漏进来的。 */
+[data-skin="minimal"] .bottom-nav button.active svg,
+[data-skin="minimal"] .bottom-nav button svg { filter: none; }
+
+/* 胶囊栏那圈菲涅耳环也一并收掉：它是一整圈随光转的渐变，纸只有一条切边，
+   而那条边由 .bottom-nav 自己的 border 提供。 */
+[data-skin="minimal"] .bottom-nav::after,
+[data-skin="minimal"] .bottom-nav::before { display: none !important; }

@@ -5,7 +5,7 @@ export default {
   "nav.history": "History",
   "nav.settings": "Settings",
 
-  "nav.pdf": "Books",
+  "nav.pdf": "Practice",
   "pdf.importExercise": "Import exercises",
   "pdf.importAnswer": "Import answers",
   "pdf.library": "Library",
