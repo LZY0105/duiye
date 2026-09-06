@@ -1193,6 +1193,9 @@ export class PdfWorkspace {
    * 侧的分栏，那是另一个更难看的问题。
    */
   _syncOverlayState() {
+    // _resetOutline 会在文档卸载和构造中途被调用，那时 root 与 elSlots 可能还不
+    // 存在——这里只是同步一个装饰性的类名，够不着就什么都不做。
+    if (!this.root || !this.elSlots) return;
     const open = [SLOTS.PRIMARY, SLOTS.SECONDARY].some((slot) => {
       const panel = this.elSlots[slot]?.querySelector('[data-role="outline-panel"]');
       return panel && !panel.hidden;
