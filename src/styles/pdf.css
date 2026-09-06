@@ -1298,7 +1298,7 @@ body.is-library-open .ink-card-layer { display: none; }
 }
 
 /* ══════════════════════════════════════════════════════════════
-   皮肤：极简纤白 —— 阅读页
+   皮肤：对页 · 纸 —— 阅读页
    ══════════════════════════════════════════════════════════════ */
 
 /* 有六处把模糊写死在规则里而不是写在变量里，覆盖令牌够不着，逐个关掉。
@@ -1461,3 +1461,27 @@ body.is-library-open .ink-card-layer { display: none; }
    而那条边由 .bottom-nav 自己的 border 提供。 */
 [data-skin="minimal"] .bottom-nav::after,
 [data-skin="minimal"] .bottom-nav::before { display: none !important; }
+
+
+/* 极简里没有一块纯黑。
+ *
+ * 握柄被按住、以及互换按钮进入"松手即换"的状态时，material.css 把它们填成
+ * var(--accent)——在这套皮肤里 --accent 是墨色，于是屏幕上出现一根纯黑的竖条和
+ * 一颗纯黑的圆。它们是这一屏最重的两个东西，而它们说的只是"你正按着我"。
+ *
+ * 换成深一点的白：底色比纸暗几档，边线加重一档。状态照样看得出来，份量退回到
+ * 它该有的位置。 */
+[data-skin="minimal"] .pdf-ws-divider:hover .pdf-ws-divider-grip,
+[data-skin="minimal"] .pdf-ws-divider.is-dragging .pdf-ws-divider-grip,
+[data-skin="minimal"] .pdf-workspace.is-swap-armed .pdf-ws-divider-grip {
+  background: #dfe3e8;
+  border-color: rgba(15, 23, 42, 0.28);
+  box-shadow: none;
+}
+
+[data-skin="minimal"] .pdf-workspace.is-swap-armed .pdf-ws-swap {
+  background: #dfe3e8;
+  border-color: rgba(15, 23, 42, 0.28);
+  color: var(--fg);
+  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.06);
+}

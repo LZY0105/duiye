@@ -443,7 +443,12 @@ export class InkToolbar {
       glyph.dataset.tool = this.state.tool;
       glyph.innerHTML = iconFor(this.state.tool, 24);
     }
-    token.querySelector('.ink-token-dot').style.background = this.state.color;
+    // 颜色点只对"会留下颜色"的工具有意义。橡皮和套索没有颜色，给它们点一颗红点
+    // 是在说一件不存在的事，而且那颗点就压在图标的边上。
+    const dot = token.querySelector('.ink-token-dot');
+    const colourful = Object.values(INK_TOOLS).includes(this.state.tool);
+    dot.hidden = !colourful;
+    if (colourful) dot.style.background = this.state.color;
 
     // Docked, the puck is the only control the toolbar has left, so it takes
     // the button semantics. In flight it is scenery attached to the pointer,

@@ -62,11 +62,11 @@
   font-weight: 500; letter-spacing: -0.01em;
 }
 /* ═══════════════════════════════════════════
-   Skin: Minimal — 极简纤白
+   Skin: Minimal — 对页 · 纸
    白 · 超轻阴影 · 窄圆角 · 干净 · 空气感
    ═══════════════════════════════════════════ */
 /* ══════════════════════════════════════════════════════════════
-   皮肤：极简纤白 —— 纸
+   皮肤：对页 · 纸
    ══════════════════════════════════════════════════════════════
 
    和液态玻璃是同一套表面、同一份用心，材质不同。
@@ -1184,10 +1184,18 @@ a:hover { color: var(--accent-hover); }
 .set-toggle input:checked + .set-toggle-track::after { transform: translateX(20px); }
 
 /* ── Toast Popup: Liquid Glass ── */
+/* 提示框压在正文上，所以它得自己不透明。
+ *
+ * 原本取的是 --card-bg，在液态玻璃里那是 0.18 的白，全靠 backdrop-filter 把身下
+ * 糊掉才读得出来——而这块 WebView 上 backdrop-filter 计算结果是 none（见
+ * ink-toolbar.css 里那段记录）。于是「检查失败」四个字直接叠在它盖住的「检查
+ * 更新」上面，两行字互相穿过对方。
+ *
+ * 要被读的表面不能把可读性押在一个不保证落地的模糊上。两套皮肤都一样。 */
 .toast-popup {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
   z-index: 10000;
-  background: var(--card-bg); border: var(--glass-border);
+  background: #ffffff; border: var(--glass-border);
   backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
   border-radius: 20px; padding: 22px 30px; max-width: 340px; width: 90%;
   box-shadow: var(--glass-shadow); text-align: center;
