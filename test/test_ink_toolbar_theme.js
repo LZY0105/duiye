@@ -232,9 +232,18 @@ ok(
   'no card rasterises strokes or merges ink into the PDF',
 );
 ok(
-  /onClearInk/.test(toolbarCode) && /清空本页笔迹/.test($read('src/ink/ink-toolbar.js')),
+  /onClearInk/.test(toolbarCode)
+    && /data-role="clear-ink">\$\{t\('ink\.clearPage'\)\}/.test($read('src/ink/ink-toolbar.js')),
   'the clear action is scoped to ink on the current page',
 );
+// The label is a key now, so the promise it makes lives in the dictionaries.
+// It is the one control here that destroys work, and every language has to say
+// so — that it clears THIS page, and that the PDF is untouched.
+for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
+  const dict = $read(`src/core/lang/${lang}.js`);
+  ok(/"ink\.clearPage":\s*"[^"]+"/.test(dict) && /"ink\.clearNote":\s*"[^"]+"/.test(dict),
+    `${lang} states what clearing does, and what it does not touch`);
+}
 
 const workspaceCode = $code('src/pdf/pdf-workspace.js');
 ok(
