@@ -19,7 +19,12 @@ export const INK_TOOLS = Object.freeze({
 /** Per-tool rendering behaviour. Width is a document-space base width. */
 export const TOOL_DEFAULTS = Object.freeze({
   [INK_TOOLS.PEN]: { width: 2, opacity: 1, pressureRange: 0.6, composite: 'source-over' },
-  [INK_TOOLS.PENCIL]: { width: 1.6, opacity: 0.85, pressureRange: 0.8, composite: 'source-over' },
+  // grain 是铅笔之所以是铅笔的地方。除它以外，铅笔与钢笔的差别只有 0.4 个单位的
+  // 粗细和 0.15 的不透明度——在一支不报告压力的触控笔下，两者画出来一模一样。
+  // 具体怎么画见 ink-renderer.js 的 drawPencil。
+  [INK_TOOLS.PENCIL]: {
+    width: 2.6, opacity: 0.72, pressureRange: 0.8, composite: 'source-over', grain: true,
+  },
   [INK_TOOLS.MARKER]: { width: 6, opacity: 1, pressureRange: 0.2, composite: 'source-over' },
   // A highlighter must not darken where a single stroke overlaps itself, which
   // is why it is drawn as one flattened path rather than per-segment.
@@ -48,7 +53,10 @@ export function createStroke({ tool = INK_TOOLS.PEN, color = '#111827', width, o
 
 /** Half the maximum painted width, used to inflate bounds and hit tests. */
 export function strokeRadius(stroke) {
-  return Math.max(0.5, stroke.width / 2);
+  const defaults = TOOL_DEFAULTS[stroke.tool] || TOOL_DEFAULTS[INK_TOOLS.PEN];
+  // 石墨会散到笔画两侧去，最外那一层比标称宽度还要宽。边界如果不知道这件事，
+  // 最外圈的颗粒就落在重绘区域之外——擦不掉，还会在邻近笔画重绘时冒出来。
+  return Math.max(0.5, (stroke.width * (defaults.grain ? 1.5 : 1)) / 2);
 }
 
 function growBounds(bounds, x, y, pad) {
