@@ -1047,6 +1047,7 @@ export class PdfWorkspace {
       const panel = el.querySelector('[data-role="outline-panel"]');
       panel.hidden = !panel.hidden;
       if (!panel.hidden) this._renderOutline(slot, this._outlines[slot]);
+      this._syncOverlayState();
     });
 
     // Tool selection lives in the floating toolbar (spec chapter 5); per-pane
@@ -1177,6 +1178,26 @@ export class PdfWorkspace {
       panel.hidden = true;
     }
     if (button) button.disabled = true;
+    this._syncOverlayState();
+  }
+
+  /**
+   * 目录展开时把浮动笔迹栏收起来。
+   *
+   * 笔迹栏挂在工作区上、z-index 36，而目录面板是分栏内部的一块，怎么排都在它下面。
+   * 于是一打开目录，六个工具图标就压在条目上，两边都读不成——而这一刻本来也没人
+   * 在写字：目录是用来跳转的，点完就关。
+   *
+   * 文档库早就是这么做的（见 pdf.css 里的 body.is-library-open），这里用同一个
+   * 办法，而不是去调 z-index：面板在分栏里面，把它抬到 36 以上就会连带盖住另一
+   * 侧的分栏，那是另一个更难看的问题。
+   */
+  _syncOverlayState() {
+    const open = [SLOTS.PRIMARY, SLOTS.SECONDARY].some((slot) => {
+      const panel = this.elSlots[slot]?.querySelector('[data-role="outline-panel"]');
+      return panel && !panel.hidden;
+    });
+    this.root.classList.toggle('is-outline-open', open);
   }
 
   _renderOutline(slot, outline) {

@@ -730,9 +730,10 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
   max-height: 42%;
   overflow: auto;
   border-bottom: var(--glass-border-subtle);
-  background: var(--card-bg);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
+  /* 不透明。这是一张要被读的清单，而它取的 --card-bg 在液态玻璃里是 0.18 的白，
+     全靠 backdrop-filter 把身下糊掉才成立——这块 WebView 上那个属性计算结果是
+     none。于是正文的公式与题号从条目中间穿过去，两边都读不成。 */
+  background: #ffffff;
   padding: 0.5rem 0;
   box-shadow: var(--glass-shadow);
   animation: outlineIn 0.22s var(--spring-ease);
@@ -1485,3 +1486,9 @@ body.is-library-open .ink-card-layer { display: none; }
   color: var(--fg);
   box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.06);
 }
+
+
+/* 目录展开时，浮动笔迹栏与它的设置卡片让位——理由见 pdf-workspace.js 的
+   _syncOverlayState。 */
+.pdf-workspace.is-outline-open .ink-toolbar,
+.pdf-workspace.is-outline-open .ink-card-layer { display: none; }
