@@ -86,6 +86,40 @@
   --font-stack: "Inter","Helvetica Neue","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
   --spacing-unit: 1rem;
 }
+/* 极简纤白也要盖住「课本」。
+ *
+ * 这套皮肤原先只定义了自己的颜色与圆角，而阅读页上的每一个面——分栏、分隔条、
+ * 页码条、浮动笔迹栏、设置卡片——都是从下面这组 --glass-* 令牌取值的，它一个也没
+ * 覆盖。于是选了极简，阅读页仍然是玻璃：模糊、渐变边框、跟着指针走的高光。
+ *
+ * 覆盖令牌是这里的杠杆：读这些变量的面有几十个，改一处就全部跟着变。真正需要
+ * 单独处理的只有那些结构上就是玻璃的东西——菲涅耳环、高光层、以及少数把模糊写死
+ * 在规则里而不是写在变量里的地方。它们在下面的 pdf.css 与 ink-toolbar.css 里关掉。
+ *
+ * 纸的定义：白底、发丝级的灰边、极浅的一层投影、没有任何模糊。 */
+[data-skin="minimal"] {
+  --glass-bg: #ffffff;
+  --glass-bg-subtle: #fafafa;
+  --glass-blur: none;
+  --card-blur: none;
+  --nav-blur: none;
+  --glass-border: 1px solid var(--border-color);
+  --glass-border-subtle: 1px solid var(--border-color);
+  --glass-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --glass-cast: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --glass-bevel: none;
+  --glass-inner-glow: none;
+  --nav-border: 1px solid var(--border-color);
+  /* 环与高光靠它们自己的颜色关掉：宽度归零会让遮罩算出一条零宽的带子，
+     不同引擎对此的处理并不一致。 */
+  --glass-rim-width: 1px;
+  --glass-rim-bright: var(--border-color);
+  --glass-rim-mid: var(--border-color);
+  --glass-rim-dim: var(--border-color);
+  --glass-glint-size: 0px;
+  --glass-glint-core: transparent;
+}
+
 [data-skin="minimal"] .ocr-btn {
   border: 1px solid var(--fg);
   background: transparent;
