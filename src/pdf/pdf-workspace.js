@@ -669,8 +669,16 @@ export class PdfWorkspace {
       travelled = Math.abs(d);
       // The control follows the finger a little, and resists — it is a switch
       // being thrown, not something being dragged to a destination.
+      //
+      // The pull has to be COMPOSED with the centring, not written over it.
+      // This button is centred on the divider by `transform: translateX(-50%)`
+      // in the stylesheet, and an inline transform replaces that property whole:
+      // the moment a finger landed, the button jumped half its own width to the
+      // right, then snapped back on release. That jump is the drift.
       const pull = Math.sign(d) * Math.min(14, travelled * 0.5);
-      this.elSwap.style.transform = column ? `translateY(${pull}px)` : `translateX(${pull}px)`;
+      this.elSwap.style.transform = column
+        ? `translateY(calc(-50% + ${pull}px))`
+        : `translateX(calc(-50% + ${pull}px))`;
       this.root.classList.toggle('is-swap-armed', travelled >= SWAP_THRESHOLD);
     });
 

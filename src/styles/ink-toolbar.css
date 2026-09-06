@@ -895,3 +895,20 @@
 [data-skin="minimal"] .ink-sep {
   background: var(--glass-border-subtle, rgba(15, 23, 42, 0.07));
 }
+
+
+/* 收起时只留那一个圆。
+ *
+ * 工具栏本身是 8px 圆角的方块，收起后里面只剩一枚 48px 的圆形令牌——于是屏幕上
+ * 是一个圆被裹在一个方里，两种形状各说各的。液态玻璃那边早就处理过：收起和拖动
+ * 时外壳整个隐去，只留令牌。这套皮肤照做。
+ *
+ * 顺带说明这里的形状规则，免得下次又打架：会浮起来、单独完成一件事的东西是圆的
+ * （令牌、颜色小样、互换按钮）；盛放内容的东西是圆角方块（面板、工具栏、胶囊栏、
+ * 卡片）。两类各有其形，但不能同时出现在同一个东西上。 */
+[data-skin="minimal"] .ink-toolbar.is-docked,
+[data-skin="minimal"] .ink-toolbar.is-dragging {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}

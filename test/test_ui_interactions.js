@@ -875,6 +875,35 @@ check('the fetch handler is cache-first about things that never change', () => {
   assert.ok(!/\/models\/|\/ort\//.test(sw), 'and neither of those directories exists any more');
 });
 
+check('the swap button is pulled from where it already sits, not from zero', () => {
+  // 它靠 transform: translateX(-50%) 居中在分隔条上，而内联 transform 会整个替换
+  // 这个属性——所以手指一落下，按钮就往右跳了自己一半的宽度，松手再弹回来。
+  const code = $code('src/pdf/pdf-workspace.js');
+  const at = code.indexOf('const pull = Math.sign(d)');
+  const body = code.slice(at, at + 300);
+  assert.ok(/calc\(-50% \+ \$\{pull\}px\)/.test(body),
+    'the pull composes with the centring instead of overwriting it');
+  assert.ok(/translateY\(calc\(-50%/.test(body) && /translateX\(calc\(-50%/.test(body),
+    'both orientations centre on their own axis, so both need it');
+
+  const css = $read('src/styles/material.css');
+  const rule = css.slice(css.indexOf('.pdf-ws-swap {'), css.indexOf('.pdf-ws-swap[hidden]'));
+  assert.ok(/transform:\s*translateX\(-50%\)/.test(rule),
+    'and this is the centring the drag has to preserve');
+});
+
+check('nothing is a circle inside a square', () => {
+  // 收起后工具栏只剩一枚圆形令牌，外壳却仍是 8px 圆角的方块，一个圆被裹在方里。
+  // 形状规则：浮起来单独做一件事的是圆，盛放内容的是圆角方块，两者不叠在同一个
+  // 东西上。
+  const css = $read('src/styles/ink-toolbar.css');
+  const docked = css.slice(css.indexOf('[data-skin="minimal"] .ink-toolbar.is-docked'));
+  assert.ok(/background:\s*transparent/.test(docked.slice(0, 260)),
+    'the shell steps out of the way when only the round token is left');
+  assert.ok(/box-shadow:\s*none/.test(docked.slice(0, 260)),
+    'shell included its shadow, which would otherwise outline the square');
+});
+
 check('the pinch runs on pointer events, not a second touch stream', () => {
   // It used to be a pair of touch listeners alongside the pointer ones, so a
   // second finger started a pinch while the first was still panning and both
