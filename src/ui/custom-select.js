@@ -116,7 +116,8 @@ export function initCustomSelects() {
       cursor = Math.max(0, Math.min(rows.length - 1, i));
       rows.forEach((r, n) => r.classList.toggle('is-active', n === cursor));
       button.setAttribute('aria-activedescendant', rows[cursor].id);
-      rows[cursor].scrollIntoView({ block: 'nearest' });
+      // 列表可能比可视区长；把高亮项带进视野。并非所有环境都实现这个方法。
+      rows[cursor].scrollIntoView?.({ block: 'nearest' });
     };
 
     /**
