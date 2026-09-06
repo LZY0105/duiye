@@ -1299,11 +1299,10 @@ body.is-library-open .ink-card-layer { display: none; }
 
 /* ══════════════════════════════════════════════════════════════
    皮肤：极简纤白 —— 阅读页
-   纸、发丝线、直角一点的圆角，没有模糊也没有高光。
    ══════════════════════════════════════════════════════════════ */
 
-/* 模糊在这几处是写死的，不走令牌，所以要单独关掉。留着它们会让「极简」在一块
-   毛玻璃上画发丝线——两种材质叠在一起，哪一种都不成立。 */
+/* 有六处把模糊写死在规则里而不是写在变量里，覆盖令牌够不着，逐个关掉。
+   留着它们会变成在一层毛玻璃上画发丝线——两种材质叠在一起，哪一种都不成立。 */
 [data-skin="minimal"] .pdf-page-bar,
 [data-skin="minimal"] .bottom-nav,
 [data-skin="minimal"] .pdf-ws-divider-grip,
@@ -1314,40 +1313,43 @@ body.is-library-open .ink-card-layer { display: none; }
   -webkit-backdrop-filter: none;
 }
 
+/* 桌面。分栏之间是一条缝，宽到看得见是两张纸，窄到不像两个窗口。 */
 [data-skin="minimal"] .pdf-workspace {
   background: var(--bg);
-  gap: 1px;                       /* 两栏之间是一条线，不是一道空隙 */
+  gap: 6px;
 }
 
+/* 纸：纯白、一条切边、不投影。它是平放着的。 */
 [data-skin="minimal"] .pdf-ws-slot {
   background: #ffffff;
   border: 1px solid var(--border-color);
   border-radius: var(--card-radius);
-  box-shadow: none;               /* 纸不浮在别的东西上面 */
+  box-shadow: none;
 }
+/* 当前分栏：同一条边，换成墨色。两档明度差，不需要光晕来喊。 */
 [data-skin="minimal"] .pdf-ws-slot.is-active {
   border-color: var(--fg);
-  box-shadow: none;               /* 选中靠边框的深浅说话，不靠光晕 */
-}
-
-[data-skin="minimal"] .pdf-page-bar,
-[data-skin="minimal"] .pdf-slot-toolbar {
-  background: #ffffff;
-  border-bottom: 1px solid var(--border-color);
   box-shadow: none;
 }
 
-[data-skin="minimal"] .pdf-pane-viewport {
+/* 纸上的横条只用一条下边线和自己分开，不另起底色——同一张纸不该有两种白。 */
+[data-skin="minimal"] .pdf-page-bar,
+[data-skin="minimal"] .pdf-slot-toolbar {
   background: #ffffff;
+  border-bottom: 1px solid var(--glass-border-subtle, rgba(15, 23, 42, 0.07));
+  box-shadow: none;
 }
 
-/* 页面本身仍然要和它的底衬分开，否则白纸落在白底上就没有边界了。 */
+[data-skin="minimal"] .pdf-pane-viewport { background: #ffffff; }
+
+/* 页面本身要和承载它的纸分开，否则白落在白上就没有边界。一条描边，不是投影：
+   投影会说"页面浮在分栏上面"，而它是嵌在里面的。 */
 [data-skin="minimal"] .pdf-pane-canvas {
   box-shadow: 0 0 0 1px var(--border-color);
   border-radius: 0;
 }
 
-/* 分隔条：一条线加一个可以捏住的握柄。 */
+/* 分隔条：一条缝里的一个握柄。 */
 [data-skin="minimal"] .pdf-ws-divider::before {
   background: var(--border-color);
   width: 1px;
@@ -1357,7 +1359,7 @@ body.is-library-open .ink-card-layer { display: none; }
   background: #ffffff;
   border: 1px solid var(--border-color);
   border-radius: 2px;
-  box-shadow: none;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);   /* 它是可以捏起来的，所以有一点厚度 */
 }
 [data-skin="minimal"] .pdf-ws-divider:hover .pdf-ws-divider-grip,
 [data-skin="minimal"] .pdf-ws-divider.is-dragging .pdf-ws-divider-grip {
@@ -1365,39 +1367,50 @@ body.is-library-open .ink-card-layer { display: none; }
   border-color: var(--fg);
   box-shadow: none;
 }
-[data-skin="minimal"] .pdf-ws-divider-grip::after {
-  content: '';                    /* 玻璃皮肤在这里放了一个 φ；极简不留字面 */
-}
+/* 玻璃皮肤在握柄上刻了一个 φ。极简不留字面——一个只有两像素宽的字读不出来，
+   只会变成一粒脏点。 */
+[data-skin="minimal"] .pdf-ws-divider-grip::after { content: ''; }
 
+/* 互换按钮是悬空的，所以它有影子。 */
 [data-skin="minimal"] .pdf-ws-swap {
   background: #ffffff;
   border: 1px solid var(--border-color);
   color: var(--fg);
-  box-shadow: none;
+  box-shadow: var(--glass-cast);
 }
 
+/* 比例提示只在拖动时出现，是一块墨。 */
 [data-skin="minimal"] .pdf-ws-ratio-badge {
   background: var(--fg);
   color: #ffffff;
   border: 0;
-  border-radius: 3px;
+  border-radius: 5px;
   box-shadow: none;
   text-shadow: none;
+  font-weight: 500;
 }
 
+/* 底部胶囊栏浮在文档之上，所以它有边、有影，也有圆角——0 圆角的满幅横条读起来
+   像出了故障，不像一个决定。 */
 [data-skin="minimal"] .bottom-nav {
   background: #ffffff;
   border: 1px solid var(--border-color);
   border-radius: var(--nav-radius);
-  box-shadow: none;
+  box-shadow: var(--glass-cast);
 }
 [data-skin="minimal"] .bottom-nav::after,
 [data-skin="minimal"] .bottom-nav::before { display: none; }
+[data-skin="minimal"] .bottom-nav [data-page].is-active {
+  background: var(--accent-light);
+  color: var(--fg);
+  border-radius: var(--btn-radius-lg);
+}
 
+/* 文档库从侧面推进来，压在页面上，所以它投影。 */
 [data-skin="minimal"] .pdf-library-panel {
   background: #ffffff;
   border-right: 1px solid var(--border-color);
-  box-shadow: none;
+  box-shadow: 0 0 40px -12px rgba(15, 23, 42, 0.18);
 }
 
 [data-skin="minimal"] .bar-peek,

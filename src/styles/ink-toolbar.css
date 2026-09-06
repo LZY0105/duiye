@@ -816,33 +816,36 @@
    皮肤：极简纤白 —— 浮动笔迹栏
    ══════════════════════════════════════════════════════════════ */
 
+/* 这两件东西是真的悬在页面上方的，所以它们是这套皮肤里少数几个有影子的表面。
+   上一版把影子也一并去掉了，结果工具栏和它下面的纸贴成了一层。 */
 [data-skin="minimal"] .ink-toolbar,
 [data-skin="minimal"] .ink-card {
   background: #ffffff;
   border: 1px solid var(--border-color);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--glass-cast);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
+[data-skin="minimal"] .ink-toolbar { border-radius: var(--btn-radius-lg); }
+[data-skin="minimal"] .ink-card { border-radius: var(--card-radius); }
 
-/* 菲涅耳环与高光是玻璃独有的两层，极简里没有对应的东西可留。 */
+/* 菲涅耳环与高光是玻璃独有的两层，纸里没有对应的东西可留。 */
 [data-skin="minimal"] .ink-toolbar::before,
 [data-skin="minimal"] .ink-toolbar::after,
 [data-skin="minimal"] .ink-card::before,
 [data-skin="minimal"] .ink-card::after { display: none; }
 
-[data-skin="minimal"] .ink-card { border-radius: var(--card-radius); }
-[data-skin="minimal"] .ink-toolbar { border-radius: var(--btn-radius-lg); }
-
+/* 收起后的圆令牌：它是悬空的，也保留圆形——那个形状本身就是"还没落位"的意思。 */
 [data-skin="minimal"] .ink-token {
   background: #ffffff;
   border: 1px solid var(--border-color);
-  box-shadow: none;
+  box-shadow: var(--glass-cast);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
 
-/* 选中的工具：反白一块，而不是点一盏灯。 */
+/* 选中：黑白反转。不用色，因为正文就是黑的，再上一个彩色块只会多一处争抢；
+   而反转在任何底色上都读得出来。 */
 [data-skin="minimal"] .ink-tool.is-selected,
 [data-skin="minimal"] .ink-seg-btn.is-selected {
   background: var(--fg);
@@ -854,12 +857,19 @@
   font-weight: 500;
 }
 
+/* 笔迹样例是一小块纸，要有自己的边界，否则白落在白上。 */
 [data-skin="minimal"] .ink-preview {
   background: #ffffff;
   box-shadow: inset 0 0 0 1px var(--border-color);
-  border-radius: 2px;
+  border-radius: var(--btn-radius);
 }
 
+/* 颜色小样保持圆形：这里的圆不是装饰，是"这是一滴墨"的意思。 */
 [data-skin="minimal"] .ink-swatch.is-selected {
-  box-shadow: 0 0 0 2px #ffffff, 0 0 0 3px var(--fg);
+  box-shadow: 0 0 0 2px #ffffff, 0 0 0 3.5px var(--fg);
+}
+
+/* 分隔线用更淡的一档：它分的是同一件工具的两组按钮，不是两张纸。 */
+[data-skin="minimal"] .ink-sep {
+  background: var(--glass-border-subtle, rgba(15, 23, 42, 0.07));
 }
