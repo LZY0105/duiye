@@ -1892,10 +1892,15 @@ check('a panel that floats over a document does not let the document through', (
 
 check('nothing offers to update itself unless it was asked to', () => {
   const code = $code('src/update-checker.js');
-  assert.ok(/autoUpdate'\) !== 'true'\) return;/.test(code),
+  assert.ok(/PREF_AUTO\) !== 'true'\) return;/.test(code),
     'opt-in: a changelog took the screen from whatever was on it, including a '
     + 'dialog the reader was in the middle of answering');
   assert.ok(!/=== 'false'/.test(code), 'the opt-out rule is gone');
+  assert.ok(/github\.com\/repos\/LZY0105\/duiye/.test(code),
+    'and it asks about THIS project — it used to query the upstream repo it '
+    + 'was forked from, so "check for update" checked somebody else’s releases');
+  assert.ok(!/innerHTML/.test(code),
+    'release notes come from the network and must never reach innerHTML');
   const settings = $code('src/settings/settings.js');
   assert.ok(/localStorage\.getItem\('latexsnipper-autoUpdate'\) === 'true'/.test(settings),
     'and the switch shows the same rule the checker follows');

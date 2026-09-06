@@ -11,7 +11,7 @@
 
 import { t, currentLang, setLang } from '../core/i18n.js';
 import Logger from '../core/logger.js';
-import { shareFile } from '../export/share.js';
+import { saveText } from '../export/save-file.js';
 
 const SKIN_KEY = 'ls_skin';
 const DEFAULT_SKIN = 'liquid-math';
@@ -108,7 +108,7 @@ function initDevTools() {
   document.getElementById('devExportLogs')?.addEventListener('click', async () => {
     const text = Logger.getLastLines(2000).join('\n');
     try {
-      await shareFile(new Blob([text], { type: 'text/plain' }), 'latexsnipper-log.txt');
+      saveText(text, 'duiye-log.txt', t('toast.savedToDownload'));
     } catch (error) {
       Logger.error('SETTINGS', 'log export failed', error);
     }

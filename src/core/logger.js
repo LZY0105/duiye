@@ -1,244 +1,182 @@
-/**
- * Logger — centralized debug logging for both JS and Java (NativeOcr) layers.
- * All logs from Java are posted via @JavascriptInterface to the JS log buffer.
- * All logs are persisted to localStorage and can be exported as diagnostic ZIP.
- */
+// 诊断日志。
+//
+// 这台机器上没有开发者工具。应用跑在平板的 WebView 里，出问题时能拿到的只有用户
+// 的一句描述，所以日志必须自己留在设备上、能被导出、并且要熬过一次崩溃——崩溃前
+// 的最后几行往往就是原因。
+//
+// 上一版是上游为「JS + Java 双层」写的：每条日志都会转发给 window.NativeOcr 的
+// Java 桥，导出时打包成含模型清单的 ZIP。那座桥随识别栈一起删了（MainActivity
+// 里留有说明），ZIP 那条路则从来没能跑通——它 new JSZip()，而没有任何地方加载
+// JSZip。这里把两者都去掉了，同时修掉三个它带来的问题：
+//
+//   1. 每写一行日志都要读一次 localStorage、再把整个缓冲区写回去。缓冲区本来就
+//      在内存里，那次读取只是把它覆盖成自己。现在只在内存里追加，落盘走空闲时
+//      的防抖，外加页面隐藏时强制写一次——那是移动端唯一可靠的「最后时刻」。
+//   2. push() 会调用 console.debug，而 console.debug 被下面的捕获逻辑改写过，
+//      于是每一条 Logger.info 都在缓冲区里留下两行。现在捕获逻辑认得自己人。
+//   3. Logger.info/warn/error 各自又向原生桥转发了一次，push() 里已经转发过。
 
+const MAX_LINES = 2000;
+const STORE_KEY = 'ls_log';
+const FLUSH_DELAY = 800;
 
-const MAX_LOG_LINES = 2000;
-const LOG_KEY = 'ls_log';
+/** 内存里的环形缓冲区，是唯一的真相；localStorage 只是它的一份快照。 */
+let lines = [];
+let flushTimer = 0;
+let loaded = false;
 
-let logBuffer = [];
+/** 正在写入的标记：console 被改写过，捕获逻辑靠它认出自己的输出，避免记两遍。 */
+let writing = false;
 
-function load() {
+function restore() {
+  if (loaded) return;
+  loaded = true;
   try {
-    const saved = localStorage.getItem(LOG_KEY);
-    logBuffer = saved ? saved.split('\n').filter(Boolean) : [];
-  } catch (_) { logBuffer = []; }
+    const saved = localStorage.getItem(STORE_KEY);
+    if (saved) lines = saved.split('\n').filter(Boolean);
+  } catch (_) { /* 隐私模式下没有存储，只在内存里记 */ }
 }
 
-function save() {
+function flush() {
+  flushTimer = 0;
   try {
-    localStorage.setItem(LOG_KEY, logBuffer.slice(-MAX_LOG_LINES).join('\n'));
-  } catch (_) {}
+    localStorage.setItem(STORE_KEY, lines.slice(-MAX_LINES).join('\n'));
+  } catch (_) { /* 配额满或不可用：内存里的仍然是全的 */ }
 }
 
-function timestamp() {
+/** 攒一会儿再落盘。日志是成串出现的，一行一次写入毫无意义。 */
+function scheduleFlush() {
+  if (flushTimer) return;
+  flushTimer = setTimeout(flush, FLUSH_DELAY);
+}
+
+// 页面被隐藏时立刻落盘。移动端不保证还会有 unload，pagehide 是最后能确定拿到的
+// 一次机会——崩溃或被系统回收之前的那几行，价值最高。
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', flush);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flush();
+  });
+}
+
+function stamp() {
   const d = new Date();
-  return d.toLocaleTimeString('zh-CN', { hour12: false }) + '.' +
-    String(d.getMilliseconds()).padStart(3, '0');
+  return `${d.toLocaleTimeString('zh-CN', { hour12: false })}.${String(d.getMilliseconds()).padStart(3, '0')}`;
 }
 
-function push(level, tag, msg) {
-  load();
-  const entry = `[${timestamp()}][${level}][${tag}] ${msg}`;
-  logBuffer.push(entry);
-  save();
-  // Forward to native log if available (tagged)
-  _forwardToNative(level, tag, msg);
-  // Also emit as DOM event for dev console (captured by settings.js)
-  _emitLogEvent(level, tag, msg);
-  // Console output
-  if (level === 'ERROR' || level === 'WARN') {
-    console.warn(`[${tag}] ${msg}`);
-  } else {
-    console.debug(`[${tag}] ${msg}`);
+function append(level, tag, text) {
+  restore();
+  lines.push(`[${stamp()}][${level}][${tag}] ${text}`);
+  if (lines.length > MAX_LINES * 1.5) lines = lines.slice(-MAX_LINES);
+  scheduleFlush();
+}
+
+/** 把任意实参转成一行可读文本，Error 连同前几层调用栈一起。 */
+function describe(value) {
+  if (value instanceof Error) {
+    const stack = (value.stack || '').split('\n').slice(0, 5).join('\n');
+    return value.message + (stack ? '\n' + stack : '');
   }
-}
-
-function _forwardToNative(level, tag, msg) {
-  try {
-    if (typeof window.NativeOcr !== 'undefined' && window.NativeOcr.addLog) {
-      window.NativeOcr.addLog(`[JS-${level}][${tag}] ${msg}`);
-    }
-  } catch(_) {}
-}
-
-function _emitLogEvent(level, tag, msg) {
-  try {
-    window.dispatchEvent(new CustomEvent('ls-log', {
-      detail: { level, tag, msg, time: Date.now() }
-    }));
-  } catch(_) {}
-}
-
-// ── Override console methods to capture ALL output ──
-// This intercepts every console.log/warn/error, including from
-// third-party libraries, and captures the stack trace for errors.
-
-const _origLog = console.log;
-const _origWarn = console.warn;
-const _origError = console.error;
-const _origDebug = console.debug;
-
-console.log = function(...args) {
-  _captureConsole('INFO', args);
-  _origLog.apply(console, args);
-};
-
-console.debug = function(...args) {
-  _captureConsole('DEBUG', args);
-  _origDebug.apply(console, args);
-};
-
-console.warn = function(...args) {
-  _captureConsole('WARN', args);
-  _origWarn.apply(console, args);
-};
-
-console.error = function(...args) {
-  _captureConsole('ERROR', args);
-  // For Error objects, include stack trace
-  const errorObj = args.find(a => a instanceof Error);
-  if (errorObj && errorObj.stack) {
-    _captureConsole('ERROR', [errorObj.stack.split('\n').slice(0, 8).join('\n')]);
+  if (value !== null && typeof value === 'object') {
+    try { return JSON.stringify(value, null, 1); } catch (_) { return String(value); }
   }
-  _origError.apply(console, args);
+  return String(value);
+}
+
+// ── 接管 console ────────────────────────────────────────────────────────────
+//
+// 连第三方库的输出一起收进来。没有开发者工具的时候，pdf.js 抱怨了什么、
+// MathLive 什么时候报了警告，都只能从这里看到。
+const native = {
+  log: console.log.bind(console),
+  debug: console.debug.bind(console),
+  warn: console.warn.bind(console),
+  error: console.error.bind(console),
 };
 
-function _captureConsole(level, args) {
-  const msg = args.map(a => {
-    if (a instanceof Error) return a.message + '\n' + (a.stack || '').split('\n').slice(0, 5).join('\n');
-    if (typeof a === 'object') try { return JSON.stringify(a, null, 1); } catch(_) { return String(a); }
-    return String(a);
-  }).join(' ');
-  load();
-  const tagMatch = msg.match(/^\[([^\]]+)\]/);
-  const tag = tagMatch ? tagMatch[1] : 'CONSOLE';
-  logBuffer.push(`[${timestamp()}][${level}][${tag}] ${msg}`);
-  save();
+function capture(level, args) {
+  if (writing) return;          // 自己写的，append() 已经记过一次
+  const text = args.map(describe).join(' ');
+  const tagged = /^\[([^\]]+)\]/.exec(text);
+  append(level, tagged ? tagged[1] : 'CONSOLE', text);
+}
+
+if (typeof console !== 'undefined') {
+  console.log = (...a) => { capture('INFO', a); native.log(...a); };
+  console.debug = (...a) => { capture('DEBUG', a); native.debug(...a); };
+  console.warn = (...a) => { capture('WARN', a); native.warn(...a); };
+  console.error = (...a) => { capture('ERROR', a); native.error(...a); };
+}
+
+/** 写一行，并且原样送到真正的 console，好让连着调试器的时候仍看得见。 */
+function emit(level, tag, text, out) {
+  append(level, tag, text);
+  writing = true;
+  try { out(`[${tag}] ${text}`); } finally { writing = false; }
 }
 
 const Logger = {
-  info(tag, msg) { push('INFO', tag, msg); try { if (typeof window.NativeOcr !== 'undefined') window.NativeOcr.addLog('[JS-INFO][' + tag + '] ' + msg); } catch(_){} },
-  warn(tag, msg) { push('WARN', tag, msg); try { if (typeof window.NativeOcr !== 'undefined') window.NativeOcr.addLog('[JS-WARN][' + tag + '] ' + msg); } catch(_){} },
+  info(tag, msg) { emit('INFO', tag, describe(msg), native.debug); },
+  warn(tag, msg) { emit('WARN', tag, describe(msg), native.warn); },
+
+  /**
+   * @param {string} tag 来源模块
+   * @param {string} msg 出了什么事
+   * @param {Error} [err] 若有异常对象，它的信息与调用栈会附在后面
+   */
   error(tag, msg, err) {
-    let text = msg;
-    if (err) {
-      text += ' | ' + (err.message || err);
-      if (err.stack) text += '\n' + err.stack.split('\n').slice(0, 5).join('\n');
-    }
-    push('ERROR', tag, text);
-    try { if (typeof window.NativeOcr !== 'undefined') window.NativeOcr.addLog('[JS-ERROR][' + tag + '] ' + text); } catch(_){}
+    const text = err ? `${msg} | ${describe(err)}` : String(msg);
+    emit('ERROR', tag, text, native.error);
   },
 
   /**
-   * Accept logs from Java NativeOcr via @JavascriptInterface.
-   * Called from NativeOcrBridge.exportLogs() which pumps accumulated Java logs.
+   * 记一次运行环境。
+   *
+   * 放在日志最前面，因为大部分「只在我这台机器上出现」的问题，答案就在这几行里：
+   * 是哪个 WebView、多少内存、什么语言。
    */
-  ingestJavaLogs(line) {
-    if (!line) return;
-    load();
-    logBuffer.push(line);
-    save();
-  },
-
   logSystemInfo() {
-    load();
-    logBuffer.push('═══════════════════════════════════════');
-    logBuffer.push(`启动时间: ${new Date().toLocaleString('zh-CN')}`);
-    logBuffer.push(`用户代理: ${navigator.userAgent}`);
-    logBuffer.push(`平台: ${navigator.platform || 'unknown'}`);
-    logBuffer.push(`语言: ${navigator.language}`);
-    logBuffer.push(`硬件并发: ${navigator.hardwareConcurrency || 'unknown'}`);
-    logBuffer.push(`内存: ${navigator.deviceMemory ? navigator.deviceMemory + 'GB' : 'unknown'}`);
-    logBuffer.push(`NativeOcr: ${typeof window.NativeOcr !== 'undefined'}`);
-    logBuffer.push(`Capacitor: ${typeof window.Capacitor !== 'undefined'}`);
-    logBuffer.push(`连接: ${navigator.onLine ? '在线' : '离线'}`);
-    logBuffer.push('═══════════════════════════════════════');
-    save();
+    restore();
+    const rule = '═'.repeat(39);
+    lines.push(
+      rule,
+      `启动时间: ${new Date().toLocaleString('zh-CN')}`,
+      `用户代理: ${navigator.userAgent}`,
+      `平台: ${navigator.platform || '未知'}`,
+      `语言: ${navigator.language}`,
+      `硬件并发: ${navigator.hardwareConcurrency || '未知'}`,
+      `内存: ${navigator.deviceMemory ? navigator.deviceMemory + 'GB' : '未知'}`,
+      `Capacitor: ${typeof window.Capacitor !== 'undefined' ? '是' : '否'}`,
+      `屏幕: ${window.innerWidth}x${window.innerHeight} @${window.devicePixelRatio}x`,
+      `网络: ${navigator.onLine ? '在线' : '离线'}`,
+      rule,
+    );
+    scheduleFlush();
   },
 
+  /** 最近 n 行，最新的在最后。 */
+  getLastLines(n = 100) {
+    restore();
+    return lines.slice(-n);
+  },
+
+  /** 导出用的完整文本：一段环境说明，加上留存的全部日志。 */
   getExportText() {
-    load();
-    const lines = logBuffer.slice(-MAX_LOG_LINES);
-    let text = [
-      '=== LaTeXSnipper 调试日志 ===',
+    restore();
+    return [
+      '=== 对页 诊断日志 ===',
       `导出时间: ${new Date().toLocaleString('zh-CN')}`,
-      `平台: ${typeof window.NativeOcr !== 'undefined' ? 'Android' : '浏览器'}`,
       `用户代理: ${navigator.userAgent}`,
       '',
-      ...lines,
+      ...lines.slice(-MAX_LINES),
     ].join('\n');
-
-    // Append Java native logs
-    if (typeof window.NativeOcr !== 'undefined' && window.NativeOcr.getLogs) {
-      try {
-        const javaLogs = window.NativeOcr.getLogs();
-        if (javaLogs && javaLogs.trim()) {
-          text += '\n\n══════ Java Native Logs ══════\n' + javaLogs;
-        }
-      } catch (_) {}
-    }
-    return text;
-  },
-
-  getLastLines(n = 100) {
-    load();
-    return logBuffer.slice(-n);
   },
 
   clear() {
-    logBuffer = [];
-    try { localStorage.removeItem(LOG_KEY); } catch (_) {}
-  },
-
-/** Export diagnostic ZIP with log, system info, settings, model info */
-  async exportAsZip() {
-    const zip = new JSZip();
-
-    // 1. Main log (latest 2000 lines)
-    zip.file('debug-log.txt', this.getExportText());
-
-    // 2. System info
-    const sysInfo = {
-      exportTime: new Date().toLocaleString('zh-CN'),
-      platform: typeof window.NativeOcr !== 'undefined' ? 'Android' : 'Browser',
-      userAgent: navigator.userAgent,
-      language: navigator.language,
-      hardwareConcurrency: navigator.hardwareConcurrency || 'unknown',
-      deviceMemory: navigator.deviceMemory ? navigator.deviceMemory + 'GB' : 'unknown',
-      nativeOcr: typeof window.NativeOcr !== 'undefined' ? 'YES' : 'NO',
-    };
-    zip.file('system.json', JSON.stringify(sysInfo, null, 2));
-
-    // 3. Settings (redacted)
-    try {
-      const settings = JSON.parse(localStorage.getItem('ls_settings') || '{}');
-      if (settings.apiKey) settings.apiKey = settings.apiKey.substring(0, 8) + '...';
-      if (settings.polishApiKey) settings.polishApiKey = settings.polishApiKey.substring(0, 8) + '...';
-      zip.file('settings.json', JSON.stringify(settings, null, 2));
-    } catch (_) {}
-
-    // 4. Model manifest
-    zip.file('models.json', JSON.stringify({
-      formulaDetection: 'mathcraft-mfd.onnx (YOLOv8)',
-      formulaRecognition: 'encoder_model.onnx + decoder_model.onnx (TrOCR)',
-      textDetection: 'ppocrv5_mobile_det.onnx (DBNet)',
-      textRecognition: 'ppocrv5_mobile_rec.onnx (CRNN)',
-      docOrientation: 'pplcnet_doc_ori.onnx',
-    }, null, 2));
-
-    // 5. Native Java logs
-    if (typeof window.NativeOcr !== 'undefined' && window.NativeOcr.getLogs) {
-      try {
-        const javaLogs = await window.NativeOcr.getLogs();
-        if (javaLogs) zip.file('native-log.txt', javaLogs);
-      } catch (_) {}
-    }
-
-    return await zip.generateAsync({ type: 'blob' });
-  },
-
-  /** Export diagnostic text file and share via system share dialog */
-  async exportAndShare() {
-    const text = this.getExportText();
-    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-    const { shareFile } = await import('../export/share.js');
-    await shareFile(blob, 'latexsnipper-debug-log.txt', '', {
-      title: 'LaTeXSnipper 调试日志',
-      dialogTitle: '导出调试日志',
-    });
+    lines = [];
+    loaded = true;
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = 0; }
+    try { localStorage.removeItem(STORE_KEY); } catch (_) { /* 无存储可清 */ }
   },
 };
 
