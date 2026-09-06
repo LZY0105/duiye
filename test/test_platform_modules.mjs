@@ -120,6 +120,21 @@ await check('a hidden <select> gains a button and a listbox', () => {
   assert.equal(btn.textContent, 'A');
 });
 
+await check('opening actually shows the list, by the class the stylesheet reads', () => {
+  // 样式表里 .set-select-dropdown 本身是 display:none，只有 .show 才显示；
+  // 另有一条 .set-group:has(.set-select-dropdown.show) 负责把它抬到上层。
+  // 改写时用了 hidden 属性代替这个类，于是按钮拿到了焦点、菜单却一次也没出现。
+  // 这条断言盯的就是那份契约。
+  const btn = document.querySelector('.set-select-btn');
+  const list = document.querySelector('.set-select-dropdown');
+  assert.ok(!list.classList.contains('show'), 'closed to begin with');
+  btn.dispatchEvent(new dom.window.Event('pointerdown', { bubbles: true, cancelable: true }));
+  assert.ok(list.classList.contains('show'), 'opening adds the class the CSS needs');
+  assert.equal(list.hidden, false);
+  btn.dispatchEvent(new dom.window.Event('pointerdown', { bubbles: true, cancelable: true }));
+  assert.ok(!list.classList.contains('show'), 'and closing takes it away again');
+});
+
 await check('initialising twice does not build a second control', () => {
   sel.initCustomSelects();
   assert.equal(document.querySelectorAll('.set-select-btn').length, 1);

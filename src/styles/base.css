@@ -200,7 +200,9 @@
 [data-skin="minimal"] .theme-toggle {
   border-color: var(--border-color);
 }
-[data-skin="minimal"] .set-select-btn:focus {
+/* :focus-visible，不是 :focus。用手指点过之后 :focus 会一直留在那颗按钮上，于是
+   两个下拉框一深一浅——看起来像其中一个坏了。键盘走到它上面时仍然要有这圈边。 */
+[data-skin="minimal"] .set-select-btn:focus-visible {
   border-color: var(--fg);
 }
 /* Minimal: hi-tag background uses card-bg instead of accent tint */

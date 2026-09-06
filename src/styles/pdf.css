@@ -1400,10 +1400,44 @@ body.is-library-open .ink-card-layer { display: none; }
 }
 [data-skin="minimal"] .bottom-nav::after,
 [data-skin="minimal"] .bottom-nav::before { display: none; }
-[data-skin="minimal"] .bottom-nav [data-page].is-active {
-  background: var(--accent-light);
+/* 当前页签由那枚会滑动的透镜来标示，标签自己不再另铺一层底色——两层叠在一起
+   会看到一个方块套在一个胶囊里。
+   （这里原本写的是 .is-active，而真正的类名是 .active，所以那条规则一次也没生效
+   过；CSS 不会为拼错的选择器报错，只会安静地什么都不做。） */
+[data-skin="minimal"] .bottom-nav [data-page].active {
   color: var(--fg);
+}
+
+/* 极简里没有胶囊。
+ *
+ * .nav-glass-lens 是液态玻璃那枚会滑动的透镜——一片跟着当前页签移动的玻璃。纸上
+ * 不会有一块玻璃滑来滑去，所以它在这套皮肤里没有对应物。
+ *
+ * 上一版试着把它改造成一块浅色圆角，失败了：material.css 用 !important 钉住了
+ * 它的底色、模糊和投影（连那层带蓝的透光池一起），只有圆角听了话。屏幕上于是
+ * 出现一个 8px 圆角的玻璃胶囊——两种材质各出一半，比不改还糟。
+ *
+ * 所以不改造，直接不要。当前页签靠墨色与字重说明自己是当前页；在纸上这就够了，
+ * 也不必再画一个形状去圈住它。 */
+[data-skin="minimal"] .bottom-nav .nav-glass-lens { display: none; }
+
+/* 顶部导入行仍是 999px 的胶囊——那是玻璃的形状语言：胶囊读作"一颗悬浮的药片"，
+   靠的是光而不是边。纸这一套里，同一排按钮该是切出来的方角块，跟着 5/8/12 那个
+   梯度走，否则一屏之内会同时出现两种造型语言。 */
+[data-skin="minimal"] .pdf-bar-group {
+  background: transparent;
   border-radius: var(--btn-radius-lg);
+  gap: 2px;
+}
+[data-skin="minimal"] .pdf-bar-btn {
+  border-radius: var(--btn-radius);
+  background: transparent;
+  border: 1px solid transparent;
+}
+[data-skin="minimal"] .pdf-bar-btn:hover,
+[data-skin="minimal"] .pdf-bar-btn:active {
+  background: var(--glass-bg-subtle);
+  border-color: var(--border-color);
 }
 
 /* 文档库从侧面推进来，压在页面上，所以它投影。 */

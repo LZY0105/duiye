@@ -19,6 +19,10 @@ let openMenu = null;
 function closeOpen() {
   if (!openMenu) return;
   const { wrap, button, list } = openMenu;
+  // 样式表用的是 .show 类，不是 hidden 属性：.set-select-dropdown 本身就是
+  // display:none，把 hidden 去掉并不会让它显示出来，而 .set-group:has(.show)
+  // 那条抬 z-index 的规则也只认这个类。这一处写错，菜单就一次也没弹出来过。
+  list.classList.remove('show');
   list.hidden = true;
   button.classList.remove('open');
   button.setAttribute('aria-expanded', 'false');
@@ -143,6 +147,7 @@ export function initCustomSelects() {
       closeOpen();
       rebuild();
       list.hidden = false;
+      list.classList.add('show');
       button.classList.add('open');
       button.setAttribute('aria-expanded', 'true');
       wrap.classList.add('is-open');
