@@ -253,6 +253,175 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
 
 .pdf-workspace.is-column { flex-direction: column; }
 
+/* ── Agent overlay: opaque white, independent of the glass skin ──────────── */
+
+.pdf-agent-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 120;
+  pointer-events: none;
+}
+
+.pdf-agent-fab {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--accent);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.16);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  pointer-events: auto;
+  transform: translateY(-50%);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+  touch-action: manipulation;
+}
+
+.pdf-agent-fab:hover {
+  transform: translateY(-50%) scale(1.04);
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.2);
+}
+
+.pdf-agent-fab:active { transform: translateY(-50%) scale(0.94); }
+
+.pdf-agent-fab:focus-visible,
+.pdf-agent-dialog-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.pdf-agent-fab[hidden],
+.pdf-agent-dialog[hidden] { display: none; }
+
+.pdf-agent-dialog {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(380px, 42vw);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  pointer-events: auto;
+  background: #fff;
+  color: var(--fg);
+  border-left: 1px solid #e5e7eb;
+  box-shadow: -8px 0 24px rgba(15, 23, 42, 0.14);
+  animation: pdfAgentDrawerIn 0.2s ease both;
+}
+
+@keyframes pdfAgentDrawerIn {
+  from { opacity: 0; transform: translateX(18px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.pdf-agent-dialog-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.85rem 0.9rem;
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.pdf-agent-dialog-header h2 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.35;
+  font-weight: 650;
+}
+
+.pdf-agent-dialog-meta {
+  max-width: 300px;
+  margin-top: 0.25rem;
+  overflow: hidden;
+  color: #6b7280;
+  font-size: 0.76rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-agent-dialog-close {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #fff;
+  color: #4b5563;
+  cursor: pointer;
+  font: inherit;
+  font-size: 1.25rem;
+  line-height: 1;
+  touch-action: manipulation;
+}
+
+.pdf-agent-dialog-close:hover {
+  border-color: #9ca3af;
+  color: var(--fg);
+}
+
+.pdf-agent-dialog-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem;
+  color: var(--fg);
+  font-size: 0.9rem;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.pdf-agent-dialog-content[data-state="loading"],
+.pdf-agent-dialog-content[data-state="notice"] {
+  color: #6b7280;
+}
+
+.pdf-agent-dialog-content[data-state="error"] { color: #b42318; }
+
+.pdf-workspace.is-column .pdf-agent-dialog {
+  top: auto;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: auto;
+  height: min(58%, 460px);
+  border-top: 1px solid #e5e7eb;
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-radius: 14px 14px 0 0;
+  box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.14);
+  animation-name: pdfAgentSheetIn;
+}
+
+@keyframes pdfAgentSheetIn {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pdf-agent-fab,
+  .pdf-agent-dialog {
+    animation: none;
+    transition: none;
+  }
+}
+
 /* Animated sizing adaptation rule */
 .pdf-workspace.is-animating .pdf-ws-slot {
   transition: flex-basis 0.36s cubic-bezier(0.32, 0.72, 0, 1),

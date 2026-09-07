@@ -5,6 +5,9 @@
 // zoom and scroll on one side never reach the other; this file only decides
 // how much room each pane gets and which document is loaded into it.
 
+import { createTextSource, TEXT_ORIGIN } from './text-source.js';
+import { createAgentPanel } from './agent-panel.js';
+import { requestAgent } from '../agent/agent-client.js';
 import { PdfPane } from './pdf-pane.js';
 import { FIT_MODES } from './pdf-view-state.js';
 import {
@@ -117,6 +120,8 @@ export class PdfWorkspace {
     this.restoredViews = {};
     /** Which pane the shared toolbar currently applies to (spec §11.2). */
     this.activeSlot = SLOTS.PRIMARY;
+    /** The document and page captured when the Agent dialog was opened. */
+    this.agentTarget = null;
     // Per slot, the width the slot toolbar wanted at each rung of HEADER_LADDER,
     // so _syncPaneHeaderFit knows how much room it takes to put a rung back.
     this._headerWanted = {};
@@ -198,6 +203,10 @@ export class PdfWorkspace {
       [SLOTS.PRIMARY]: this.root.querySelector('.pdf-ws-slot[data-slot="a"]'),
       [SLOTS.SECONDARY]: this.root.querySelector('.pdf-ws-slot[data-slot="b"]'),
     };
+    this.agentPanel = createAgentPanel(this.root, {
+      onOpen: () => this.openAgentForActiveDocument(),
+      onClose: () => { this.agentTarget = null; },
+    });
 
     this.elEmpty?.querySelector('[data-action="import-exercise"]')?.addEventListener('click', () => {
       document.querySelector('[data-role="file-exercise"]')?.click();
@@ -810,6 +819,7 @@ export class PdfWorkspace {
     this.elSlots[SLOTS.SECONDARY].style.order = swapped ? '1' : '3';
     this.elDivider.style.order = '2';
     this.root.classList.toggle('is-swapped', swapped);
+    this._syncAgentAvailability();
 
     // 100% is the floor for a MANUAL zoom, and only for that.
     //
@@ -1008,6 +1018,20 @@ export class PdfWorkspace {
     this._syncToolbarSize(paneFractions(this.state));
   }
 
+  _syncAgentAvailability() {
+    const available = [SLOTS.PRIMARY, SLOTS.SECONDARY]
+      .some((slot) => this.panes[slot]?.isLoaded());
+    if (!available && this.agentTarget) {
+      this._closeAgentPanel({ notify: false });
+    }
+    this.agentPanel?.setAvailable(available);
+  }
+
+  _closeAgentPanel({ notify = true } = {}) {
+    this.agentPanel?.close({ notify });
+    this.agentTarget = null;
+  }
+
   // ── per-slot chrome (toolbar + outline) ───────────────────────────────────
 
   _bindSlotChrome(slot) {
@@ -1148,7 +1172,7 @@ export class PdfWorkspace {
     panel.classList.add('is-dismissing');
     const anim = panel.animate(
       [{ opacity: 1, transform: 'translateY(0)' },
-       { opacity: 0, transform: 'translateY(-6px)' }],
+      { opacity: 0, transform: 'translateY(-6px)' }],
       { duration: 160, easing: 'cubic-bezier(0.4, 0, 1, 1)' },
     );
     anim.finished.then(done, done);
@@ -1304,6 +1328,7 @@ export class PdfWorkspace {
 
     this._resetOutline(slot);
     const pane = this.panes[slot];
+    if (this.agentTarget?.slot === slot) this._closeAgentPanel();
     if (pane.isLoaded()) pane.unload();
     this._invalidatePairCaches();
 
@@ -1345,6 +1370,7 @@ export class PdfWorkspace {
 
   closeSlot(slot) {
     this._openTokens[slot] = (this._openTokens[slot] || 0) + 1;
+    if (this.agentTarget?.slot === slot) this._closeAgentPanel();
     this.panes[slot].unload();
     this._invalidatePairCaches();
     this._setState(closeSlot(this.state, slot));
@@ -1494,6 +1520,76 @@ export class PdfWorkspace {
     }
   }
 
+  _activeAgentSlot() {
+    if (this.panes[this.activeSlot]?.isLoaded()) return this.activeSlot;
+    return [SLOTS.PRIMARY, SLOTS.SECONDARY]
+      .find((slot) => this.panes[slot]?.isLoaded()) || null;
+  }
+
+  openAgentForActiveDocument() {
+    const slot = this._activeAgentSlot();
+    if (slot) this.showAgentForPage(slot);
+  }
+
+  _isAgentTargetCurrent(target) {
+    return this.agentTarget === target
+      && this.panes[target.slot]?.doc === target.doc;
+  }
+
+  async showAgentForPage(slot) {
+    const pane = this.panes[slot];
+    if (!pane?.isLoaded()) return;
+
+    const target = {
+      slot,
+      doc: pane.doc,
+      page: pane.state.pageNumber,
+      documentName: pane.meta?.name || '当前文档',
+    };
+    this.agentTarget = target;
+    this.agentPanel?.open({
+      documentName: target.documentName,
+      page: target.page,
+    });
+    this.agentPanel?.showLoading();
+
+    try {
+      const source = createTextSource(target.doc, {
+        expectScript: 'han',
+      });
+      const result = await source.pageText(
+        target.page,
+        { needReadable: true },
+      );
+
+      if (!this._isAgentTargetCurrent(target)) return;
+      if (!result.text || result.origin === TEXT_ORIGIN.NONE) {
+        this.agentPanel?.showNotice(
+          '当前页文字无法可靠提取，暂不调用 Agent。',
+          { textOrigin: result.origin },
+        );
+        return;
+      }
+
+      const answer = await requestAgent({
+        version: 1,
+        page: target.page,
+        questionText: result.text,
+        textOrigin: result.origin,
+      });
+
+      if (!this._isAgentTargetCurrent(target)) return;
+      this.agentPanel?.showResult({
+        ...answer,
+        textOrigin: result.origin,
+      });
+    } catch (error) {
+      if (!this._isAgentTargetCurrent(target)) return;
+      Logger.error('Agent', 'agent request failed', error);
+      this.agentPanel?.showNotice('Agent 处理失败。');
+    }
+  }
+
   // ── grading ───────────────────────────────────────────────────────────────
 
 
@@ -1541,6 +1637,8 @@ export class PdfWorkspace {
     clearTimeout(this._animTimer);
     if (this._trackFrame) cancelAnimationFrame(this._trackFrame);
     this._trackFrame = 0;
+    this._closeAgentPanel({ notify: false });
+    this.agentPanel?.destroy();
     this.toolbar?.destroy();
     for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) this.panes[slot].unload();
   }

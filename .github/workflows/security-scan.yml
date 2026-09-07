@@ -8,6 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   pull-requests: read
   security-events: write
@@ -96,9 +97,11 @@ jobs:
 
           # 6. Heavy unicode escaping
           echo "[CHECK 6/12] Checking suspicious encoding ..."
-          while IFS=: read -r file line; do
+          while IFS=: read -r file line content; do
             skip_file "$file" && continue
-            esc_count=$(grep -oE '\\\\u[0-9a-fA-F]{4}' "$file" 2>/dev/null | wc -l)
+            # Count escapes on the matched line, not the whole file. Legitimate
+            # Unicode-range regexes may span several lines without being payloads.
+            esc_count=$(printf '%s\n' "$content" | grep -oE '\\\\u[0-9a-fA-F]{4}' | wc -l || true)
             if [ "${esc_count:-0}" -gt 10 ] 2>/dev/null; then
               echo "  [WARN] heavy unicode escaping: $file:$line ($esc_count escapes)"
               VIOLATIONS=$((VIOLATIONS + 1))
@@ -214,11 +217,15 @@ jobs:
       - name: Upload SARIF to GitHub
         uses: github/codeql-action/upload-sarif@v4
         if: always()
+        # The Gitleaks summary remains the blocking result when Code Scanning
+        # is unavailable for this repository.
+        continue-on-error: true
         with:
           sarif_file: gitleaks-report.sarif
           category: gitleaks
 
       - name: Summary
+        if: always()
         run: |
           if [ -f gitleaks-report.sarif ]; then
             COUNT=$(jq '.runs[0].results | length' gitleaks-report.sarif)
