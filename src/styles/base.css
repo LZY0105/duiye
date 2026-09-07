@@ -62,30 +62,107 @@
   font-weight: 500; letter-spacing: -0.01em;
 }
 /* ═══════════════════════════════════════════
-   Skin: Minimal — 极简纤白
+   Skin: Minimal — 对页 · 纸
    白 · 超轻阴影 · 窄圆角 · 干净 · 空气感
    ═══════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════════════════
+   皮肤：对页 · 纸
+   ══════════════════════════════════════════════════════════════
+
+   和液态玻璃是同一套表面、同一份用心，材质不同。
+
+   玻璃靠透光与折射把层次分开：底下的东西透上来，边缘因菲涅耳效应亮起，投影里
+   带着穿过玻璃的那点颜色。纸没有这些。纸靠的是两件事——明度差，和一条切边。
+   整套皮肤都是从这一句推出来的：
+
+   一、底与纸。工作区的底必须比纸暗一档，白页才落得下去。上一版这里是 #fdfdfd
+       的底配 #ffffff 的纸，差 2/255，等于没有差——所有东西都浮在同一层上，谁
+       也没压住谁。现在底是 #f1f2f4，纸是纯白，这一档就替代了玻璃那层模糊。
+
+   二、边。玻璃画的是一圈随光转的渐变环；纸只有一条切边，粗细不变、明暗不变。
+       它得是墨色的低透明度，而不是灰——这块屏幕上其余一切都是墨，一条中性灰线
+       会读成印刷线，而不是纸的边缘。
+
+   三、影。玻璃投四层（接触、环境、远环境，以及透过玻璃染了色的那一汪）。一张
+       平放在桌上的纸几乎不投影，所以这里只有真正悬空的东西才有影子，而且只有
+       一层、很紧：浮动笔迹栏、展开的卡片、底部胶囊栏。分栏得到的是边，不是影。
+       上一版把影子一律去掉，连悬空的工具栏也没了——于是它没有任何东西说明自己
+       是浮着的。这是这次改动里最要紧的一处。
+
+   四、色。内容是一本黑白的数学书，界面的颜色一旦响亮就会和正文抢。所以颜色只
+       留给"状态"，其余全部让位：选中的工具用黑白反转，不用色；当前分栏用墨色
+       边线对灰色边线，两档之差已经足够。
+
+   五、圆角。上一版胶囊栏是 0 圆角而别处是 4px，两种语言混在一起。现在是一个
+       有理由的梯度：面板 8、按钮 5、握柄 2；圆形只留给本来就该是圆的东西
+       （颜色小样）。 */
 [data-skin="minimal"] {
-  --accent: #111111;
-  --accent-hover: #444444;
-  --bg: #fdfdfd;
-  --fg: #111111;
-  --muted: #888888;
-  --border-color: #e5e5e5;
+  /* 墨与纸 */
+  --accent: #111418;
+  --accent-hover: #000000;
+  --accent-light: rgba(17, 20, 24, 0.06);
+  --bg: #f1f2f4;                    /* 桌面：比纸暗一档 */
+  --fg: #111418;
+  --muted: #6b7280;
+  --border-color: rgba(15, 23, 42, 0.12);
   --card-bg: #ffffff;
-  --hdr-bg: rgba(253,253,253,0.92);
-  --btn-radius: 4px;
-  --btn-radius-lg: 6px;
-  --card-radius: 4px;
-  --nav-radius: 0px;
-  --tab-radius: 4px;
-  --card-shadow: 0 1px 3px rgba(0,0,0,0.04);
-  --btn-shadow: none;
+  --hdr-bg: rgba(255, 255, 255, 0.96);
+
+  /* 玻璃那一组令牌在这里全部改写成纸。读它们的表面有几十个，
+     改这一处就够，不必逐个去追。 */
+  --glass-bg: #ffffff;
+  --glass-bg-subtle: #f7f8f9;
+  --glass-blur: none;
+  --card-blur: none;
   --nav-blur: none;
+  --glass-border: 1px solid var(--border-color);
+  --glass-border-subtle: 1px solid rgba(15, 23, 42, 0.07);
   --nav-border: 1px solid var(--border-color);
-  --font-stack: "Inter","Helvetica Neue","Noto Sans CJK SC","Microsoft YaHei",sans-serif;
+
+  /* 一层，很紧。只给真正悬空的东西。 */
+  --glass-cast: 0 1px 2px rgba(15, 23, 42, 0.06), 0 6px 16px -10px rgba(15, 23, 42, 0.14);
+  --glass-bevel: none;
+  --glass-inner-glow: none;
+  --glass-shadow: var(--glass-cast);
+  --card-shadow: var(--glass-cast);
+  --btn-shadow: none;
+
+  /* 菲涅耳环与高光靠颜色关掉，不靠把宽度归零：零宽的遮罩带在不同引擎里
+     算出的结果并不一致。 */
+  --glass-rim-width: 1px;
+  --glass-rim-bright: var(--border-color);
+  --glass-rim-mid: var(--border-color);
+  --glass-rim-dim: var(--border-color);
+  --glass-glint-size: 0px;
+  --glass-glint-core: transparent;
+
+  /* 一个有理由的梯度，不是随手的 4px */
+  --btn-radius: 5px;
+  --btn-radius-lg: 8px;
+  --card-radius: 8px;
+  --nav-radius: 12px;
+  --tab-radius: 5px;
+  --pill-radius: 999px;
+
+  /* 系统字优先。Inter 并没有随包分发，把它排在最前只会让每台机器都退到下一项；
+     而中文要先找到这台设备真正装了的那一款。 */
+  --font-stack: -apple-system, "Segoe UI", Roboto, "HarmonyOS Sans SC",
+                "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC",
+                "Microsoft YaHei", sans-serif;
   --spacing-unit: 1rem;
+
+  /* 数学里的强调色。玻璃皮肤用蓝、紫、青、金分区；这里换成同一梯度的墨色，
+     因为正文本身就是黑白的数学——再上四种颜色，抢的是公式而不是界面。
+     它们仍然要定义，而不是留空：不定义就会落回玻璃皮肤的蓝，那才是真正的走样。 */
+  --accent-gradient: var(--accent);
+  --math-violet: #3f3f46;
+  --math-cyan: #52525b;
+  --math-gold: #71717a;
+  --math-gold-ink: #52525b;
+  --math-emerald: #3f3f46;
+  --font-math: "KaTeX_Math", "Latin Modern Math", "STIX Two Math", serif;
 }
+
 [data-skin="minimal"] .ocr-btn {
   border: 1px solid var(--fg);
   background: transparent;
@@ -123,7 +200,9 @@
 [data-skin="minimal"] .theme-toggle {
   border-color: var(--border-color);
 }
-[data-skin="minimal"] .set-select-btn:focus {
+/* :focus-visible，不是 :focus。用手指点过之后 :focus 会一直留在那颗按钮上，于是
+   两个下拉框一深一浅——看起来像其中一个坏了。键盘走到它上面时仍然要有这圈边。 */
+[data-skin="minimal"] .set-select-btn:focus-visible {
   border-color: var(--fg);
 }
 /* Minimal: hi-tag background uses card-bg instead of accent tint */
@@ -1105,10 +1184,18 @@ a:hover { color: var(--accent-hover); }
 .set-toggle input:checked + .set-toggle-track::after { transform: translateX(20px); }
 
 /* ── Toast Popup: Liquid Glass ── */
+/* 提示框压在正文上，所以它得自己不透明。
+ *
+ * 原本取的是 --card-bg，在液态玻璃里那是 0.18 的白，全靠 backdrop-filter 把身下
+ * 糊掉才读得出来——而这块 WebView 上 backdrop-filter 计算结果是 none（见
+ * ink-toolbar.css 里那段记录）。于是「检查失败」四个字直接叠在它盖住的「检查
+ * 更新」上面，两行字互相穿过对方。
+ *
+ * 要被读的表面不能把可读性押在一个不保证落地的模糊上。两套皮肤都一样。 */
 .toast-popup {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
   z-index: 10000;
-  background: var(--card-bg); border: var(--glass-border);
+  background: #ffffff; border: var(--glass-border);
   backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
   border-radius: 20px; padding: 22px 30px; max-width: 340px; width: 90%;
   box-shadow: var(--glass-shadow); text-align: center;

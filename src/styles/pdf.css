@@ -899,9 +899,10 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
   max-height: 42%;
   overflow: auto;
   border-bottom: var(--glass-border-subtle);
-  background: var(--card-bg);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
+  /* 不透明。这是一张要被读的清单，而它取的 --card-bg 在液态玻璃里是 0.18 的白，
+     全靠 backdrop-filter 把身下糊掉才成立——这块 WebView 上那个属性计算结果是
+     none。于是正文的公式与题号从条目中间穿过去，两边都读不成。 */
+  background: #ffffff;
   padding: 0.5rem 0;
   box-shadow: var(--glass-shadow);
   animation: outlineIn 0.22s var(--spring-ease);
@@ -1465,3 +1466,198 @@ body.is-library-open .ink-card-layer { display: none; }
   letter-spacing: 0.02em;
   font-weight: 600;
 }
+
+/* ══════════════════════════════════════════════════════════════
+   皮肤：对页 · 纸 —— 阅读页
+   ══════════════════════════════════════════════════════════════ */
+
+/* 有六处把模糊写死在规则里而不是写在变量里，覆盖令牌够不着，逐个关掉。
+   留着它们会变成在一层毛玻璃上画发丝线——两种材质叠在一起，哪一种都不成立。 */
+[data-skin="minimal"] .pdf-page-bar,
+[data-skin="minimal"] .bottom-nav,
+[data-skin="minimal"] .pdf-ws-divider-grip,
+[data-skin="minimal"] .pdf-ws-ratio-badge,
+[data-skin="minimal"] .pdf-library-panel,
+[data-skin="minimal"] .pdf-slot-toolbar {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* 桌面。分栏之间是一条缝，宽到看得见是两张纸，窄到不像两个窗口。 */
+[data-skin="minimal"] .pdf-workspace {
+  background: var(--bg);
+  gap: 6px;
+}
+
+/* 纸：纯白、一条切边、不投影。它是平放着的。 */
+[data-skin="minimal"] .pdf-ws-slot {
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: var(--card-radius);
+  box-shadow: none;
+}
+/* 当前分栏：同一条边，换成墨色。两档明度差，不需要光晕来喊。 */
+[data-skin="minimal"] .pdf-ws-slot.is-active {
+  border-color: var(--fg);
+  box-shadow: none;
+}
+
+/* 纸上的横条只用一条下边线和自己分开，不另起底色——同一张纸不该有两种白。 */
+[data-skin="minimal"] .pdf-page-bar,
+[data-skin="minimal"] .pdf-slot-toolbar {
+  background: #ffffff;
+  border-bottom: 1px solid var(--glass-border-subtle, rgba(15, 23, 42, 0.07));
+  box-shadow: none;
+}
+
+[data-skin="minimal"] .pdf-pane-viewport { background: #ffffff; }
+
+/* 页面本身要和承载它的纸分开，否则白落在白上就没有边界。一条描边，不是投影：
+   投影会说"页面浮在分栏上面"，而它是嵌在里面的。 */
+[data-skin="minimal"] .pdf-pane-canvas {
+  box-shadow: 0 0 0 1px var(--border-color);
+  border-radius: 0;
+}
+
+/* 分隔条：一条缝里的一个握柄。 */
+[data-skin="minimal"] .pdf-ws-divider::before {
+  background: var(--border-color);
+  width: 1px;
+  box-shadow: none;
+}
+[data-skin="minimal"] .pdf-ws-divider-grip {
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: 2px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);   /* 它是可以捏起来的，所以有一点厚度 */
+}
+[data-skin="minimal"] .pdf-ws-divider:hover .pdf-ws-divider-grip,
+[data-skin="minimal"] .pdf-ws-divider.is-dragging .pdf-ws-divider-grip {
+  background: var(--fg);
+  border-color: var(--fg);
+  box-shadow: none;
+}
+/* 玻璃皮肤在握柄上刻了一个 φ。极简不留字面——一个只有两像素宽的字读不出来，
+   只会变成一粒脏点。 */
+[data-skin="minimal"] .pdf-ws-divider-grip::after { content: ''; }
+
+/* 互换按钮是悬空的，所以它有影子。 */
+[data-skin="minimal"] .pdf-ws-swap {
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  color: var(--fg);
+  box-shadow: var(--glass-cast);
+}
+
+/* 比例提示只在拖动时出现，是一块墨。 */
+[data-skin="minimal"] .pdf-ws-ratio-badge {
+  background: var(--fg);
+  color: #ffffff;
+  border: 0;
+  border-radius: 5px;
+  box-shadow: none;
+  text-shadow: none;
+  font-weight: 500;
+}
+
+/* 底部胶囊栏浮在文档之上，所以它有边、有影，也有圆角——0 圆角的满幅横条读起来
+   像出了故障，不像一个决定。 */
+[data-skin="minimal"] .bottom-nav {
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: var(--nav-radius);
+  box-shadow: var(--glass-cast);
+}
+[data-skin="minimal"] .bottom-nav::after,
+[data-skin="minimal"] .bottom-nav::before { display: none; }
+/* 当前页签由那枚会滑动的透镜来标示，标签自己不再另铺一层底色——两层叠在一起
+   会看到一个方块套在一个胶囊里。
+   （这里原本写的是 .is-active，而真正的类名是 .active，所以那条规则一次也没生效
+   过；CSS 不会为拼错的选择器报错，只会安静地什么都不做。） */
+[data-skin="minimal"] .bottom-nav [data-page].active {
+  color: var(--fg);
+}
+
+/* 极简里没有胶囊。
+ *
+ * .nav-glass-lens 是液态玻璃那枚会滑动的透镜——一片跟着当前页签移动的玻璃。纸上
+ * 不会有一块玻璃滑来滑去，所以它在这套皮肤里没有对应物。
+ *
+ * 上一版试着把它改造成一块浅色圆角，失败了：material.css 用 !important 钉住了
+ * 它的底色、模糊和投影（连那层带蓝的透光池一起），只有圆角听了话。屏幕上于是
+ * 出现一个 8px 圆角的玻璃胶囊——两种材质各出一半，比不改还糟。
+ *
+ * 所以不改造，直接不要。当前页签靠墨色与字重说明自己是当前页；在纸上这就够了，
+ * 也不必再画一个形状去圈住它。 */
+[data-skin="minimal"] .bottom-nav .nav-glass-lens { display: none; }
+
+/* 顶部导入行仍是 999px 的胶囊——那是玻璃的形状语言：胶囊读作"一颗悬浮的药片"，
+   靠的是光而不是边。纸这一套里，同一排按钮该是切出来的方角块，跟着 5/8/12 那个
+   梯度走，否则一屏之内会同时出现两种造型语言。 */
+[data-skin="minimal"] .pdf-bar-group {
+  background: transparent;
+  border-radius: var(--btn-radius-lg);
+  gap: 2px;
+}
+[data-skin="minimal"] .pdf-bar-btn {
+  border-radius: var(--btn-radius);
+  background: transparent;
+  border: 1px solid transparent;
+}
+[data-skin="minimal"] .pdf-bar-btn:hover,
+[data-skin="minimal"] .pdf-bar-btn:active {
+  background: var(--glass-bg-subtle);
+  border-color: var(--border-color);
+}
+
+/* 文档库从侧面推进来，压在页面上，所以它投影。 */
+[data-skin="minimal"] .pdf-library-panel {
+  background: #ffffff;
+  border-right: 1px solid var(--border-color);
+  box-shadow: 0 0 40px -12px rgba(15, 23, 42, 0.18);
+}
+
+[data-skin="minimal"] .bar-peek,
+[data-skin="minimal"] .dock-peek { background: transparent; }
+
+
+/* 当前页签的图标上有一层蓝色辉光——base.css 给它加了
+   drop-shadow(0 2px 6px rgba(0,122,255,.4))，那是液态玻璃的强调色。纸上不会有
+   东西发光，何况这抹蓝在这套皮肤里再无第二处，看上去像是漏进来的。 */
+[data-skin="minimal"] .bottom-nav button.active svg,
+[data-skin="minimal"] .bottom-nav button svg { filter: none; }
+
+/* 胶囊栏那圈菲涅耳环也一并收掉：它是一整圈随光转的渐变，纸只有一条切边，
+   而那条边由 .bottom-nav 自己的 border 提供。 */
+[data-skin="minimal"] .bottom-nav::after,
+[data-skin="minimal"] .bottom-nav::before { display: none !important; }
+
+
+/* 极简里没有一块纯黑。
+ *
+ * 握柄被按住、以及互换按钮进入"松手即换"的状态时，material.css 把它们填成
+ * var(--accent)——在这套皮肤里 --accent 是墨色，于是屏幕上出现一根纯黑的竖条和
+ * 一颗纯黑的圆。它们是这一屏最重的两个东西，而它们说的只是"你正按着我"。
+ *
+ * 换成深一点的白：底色比纸暗几档，边线加重一档。状态照样看得出来，份量退回到
+ * 它该有的位置。 */
+[data-skin="minimal"] .pdf-ws-divider:hover .pdf-ws-divider-grip,
+[data-skin="minimal"] .pdf-ws-divider.is-dragging .pdf-ws-divider-grip,
+[data-skin="minimal"] .pdf-workspace.is-swap-armed .pdf-ws-divider-grip {
+  background: #dfe3e8;
+  border-color: rgba(15, 23, 42, 0.28);
+  box-shadow: none;
+}
+
+[data-skin="minimal"] .pdf-workspace.is-swap-armed .pdf-ws-swap {
+  background: #dfe3e8;
+  border-color: rgba(15, 23, 42, 0.28);
+  color: var(--fg);
+  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.06);
+}
+
+
+/* 目录展开时，浮动笔迹栏与它的设置卡片让位——理由见 pdf-workspace.js 的
+   _syncOverlayState。 */
+.pdf-workspace.is-outline-open .ink-toolbar,
+.pdf-workspace.is-outline-open .ink-card-layer { display: none; }

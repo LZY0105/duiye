@@ -44,6 +44,7 @@ import {
   startDrag,
   undock,
 } from './toolbar-state.js';
+import { t } from '../core/i18n.js';
 import { INK_TOOLS } from './stroke.js';
 import { ERASER_MODES } from './ink-eraser.js';
 
@@ -116,18 +117,23 @@ function icon(name, size = 22) {
     stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICON[name]}</svg>`;
 }
 
+// 工具的名字存的是词条键，不是文字本身。
+//
+// 这张表是模块级常量，只求值一次；若在这里就把 t() 的结果写死，切到别的语言之后
+// 工具栏会一直停在启动时的那一门语言上。取键、用时再译。
 const TOOL_META = [
-  { tool: INK_TOOLS.PEN, label: '钢笔', icon: 'pen' },
-  { tool: INK_TOOLS.PENCIL, label: '铅笔', icon: 'pencil' },
-  { tool: INK_TOOLS.MARKER, label: '马克笔', icon: 'marker' },
-  { tool: INK_TOOLS.HIGHLIGHTER, label: '荧光笔', icon: 'highlighter' },
-  { tool: ERASER_TOOL, label: '橡皮', icon: 'eraser' },
-  { tool: LASSO_TOOL, label: '套索', icon: 'lasso' },
+  { tool: INK_TOOLS.PEN, key: 'ink.pen', icon: 'pen' },
+  { tool: INK_TOOLS.PENCIL, key: 'ink.pencil', icon: 'pencil' },
+  { tool: INK_TOOLS.MARKER, key: 'ink.marker', icon: 'marker' },
+  { tool: INK_TOOLS.HIGHLIGHTER, key: 'ink.highlighter', icon: 'highlighter' },
+  { tool: ERASER_TOOL, key: 'ink.eraser', icon: 'eraser' },
+  { tool: LASSO_TOOL, key: 'ink.lasso', icon: 'lasso' },
 ];
 
 const metaFor = (tool) => TOOL_META.find(t => t.tool === tool) || TOOL_META[0];
 const iconFor = (tool, size) => icon(metaFor(tool).icon, size);
-const labelFor = (tool) => metaFor(tool).label;
+/** 工具的显示名。每次调用都重新翻译，所以切换语言后无需重建这张表。 */
+const labelFor = (tool) => t(metaFor(tool).key);
 
 const clampNumber = (v, lo, hi) => (hi < lo ? (lo + hi) / 2 : Math.min(hi, Math.max(lo, v)));
 
@@ -165,7 +171,7 @@ export class InkToolbar {
     this.root = document.createElement('div');
     this.root.className = 'ink-toolbar';
     this.root.setAttribute('role', 'toolbar');
-    this.root.setAttribute('aria-label', '笔迹工具栏');
+    this.root.setAttribute('aria-label', t('ink.toolbarLabel'));
     host.appendChild(this.root);
 
     this.cardLayer = document.createElement('div');
@@ -366,31 +372,36 @@ export class InkToolbar {
     // run, and the stylus had to hunt for the boundary between tool and colour.
     this.root.innerHTML = `
       <button type="button" class="ink-handle" data-role="handle"
-              aria-label="移动工具栏" title="拖动以移动">${icon('grip', 20)}</button>
+              aria-label="${escapeAttr(t('ink.moveToolbar'))}"
+              title="${escapeAttr(t('ink.dragToMove'))}">${icon('grip', 20)}</button>
       <span class="ink-sep" aria-hidden="true"></span>
-      <div class="ink-tools" role="group" aria-label="笔迹工具">
+      <div class="ink-tools" role="group" aria-label="${escapeAttr(t('ink.tools'))}">
         ${TOOL_META.map(meta => `
           <button type="button" class="ink-tool${meta.tool === state.tool ? ' is-selected' : ''}"
-                  data-tool="${meta.tool}" title="${meta.label}" aria-label="${meta.label}"
+                  data-tool="${meta.tool}" title="${escapeAttr(t(meta.key))}"
+                  aria-label="${escapeAttr(t(meta.key))}"
                   aria-pressed="${meta.tool === state.tool}">
             ${icon(meta.icon)}
           </button>`).join('')}
       </div>
       <span class="ink-sep" aria-hidden="true"></span>
-      <div class="ink-swatches" role="group" aria-label="墨水颜色">
+      <div class="ink-swatches" role="group" aria-label="${escapeAttr(t('ink.inkColour'))}">
         ${state.swatches.map(color => `
           <button type="button" class="ink-swatch${sameColor(color, state.color) ? ' is-selected' : ''}"
                   data-swatch="${escapeAttr(color)}"
-                  title="${escapeAttr(color)}" aria-label="颜色 ${escapeAttr(color)}"
+                  title="${escapeAttr(color)}"
+                  aria-label="${escapeAttr(t('ink.colourNamed', { colour: color }))}"
                   aria-pressed="${sameColor(color, state.color)}">
             <span class="ink-swatch-fill" style="background:${escapeAttr(color)}"></span>
           </button>`).join('')}
         <button type="button" class="ink-swatch is-custom" data-role="color-card"
-                title="更多颜色" aria-label="更多颜色">${icon('plus', 18)}</button>
+                title="${escapeAttr(t('ink.moreColours'))}"
+                aria-label="${escapeAttr(t('ink.moreColours'))}">${icon('plus', 18)}</button>
       </div>
       <span class="ink-sep" aria-hidden="true"></span>
       <button type="button" class="ink-overflow" data-role="overflow"
-              aria-label="更多设置" title="更多设置">${icon('more', 20)}</button>
+              aria-label="${escapeAttr(t('ink.moreSettings'))}"
+              title="${escapeAttr(t('ink.moreSettings'))}">${icon('more', 20)}</button>
     `;
 
     this._bindToolbar();
@@ -432,7 +443,12 @@ export class InkToolbar {
       glyph.dataset.tool = this.state.tool;
       glyph.innerHTML = iconFor(this.state.tool, 24);
     }
-    token.querySelector('.ink-token-dot').style.background = this.state.color;
+    // 颜色点只对"会留下颜色"的工具有意义。橡皮和套索没有颜色，给它们点一颗红点
+    // 是在说一件不存在的事，而且那颗点就压在图标的边上。
+    const dot = token.querySelector('.ink-token-dot');
+    const colourful = Object.values(INK_TOOLS).includes(this.state.tool);
+    dot.hidden = !colourful;
+    if (colourful) dot.style.background = this.state.color;
 
     // Docked, the puck is the only control the toolbar has left, so it takes
     // the button semantics. In flight it is scenery attached to the pointer,
@@ -442,8 +458,8 @@ export class InkToolbar {
       token.removeAttribute('aria-hidden');
       token.setAttribute('role', 'button');
       token.setAttribute('tabindex', '0');
-      token.setAttribute('aria-label', '展开笔迹工具栏');
-      token.setAttribute('title', '点按展开 · 拖动可移动');
+      token.setAttribute('aria-label', t('ink.expandToolbar'));
+      token.setAttribute('title', t('ink.tapToExpand'));
     } else {
       delete token.dataset.role;
       token.setAttribute('aria-hidden', 'true');
@@ -924,11 +940,11 @@ export class InkToolbar {
       <div class="ink-preview"><span class="ink-preview-line"
         style="background:${escapeAttr(state.color)};height:${Math.max(1, state.width)}px;opacity:${state.opacity}"></span></div>
       <label class="ink-field">
-        <span>粗细 <b data-role="width-readout">${state.width.toFixed(1)}</b> mm</span>
+        <span>${t('ink.width')} <b data-role="width-readout">${state.width.toFixed(1)}</b> mm</span>
         <input type="range" min="0.2" max="20" step="0.1" value="${state.width}" data-role="width">
       </label>
       <label class="ink-field">
-        <span>不透明度 <b data-role="opacity-readout">${Math.round(state.opacity * 100)}</b>%</span>
+        <span>${t('ink.opacity')} <b data-role="opacity-readout">${Math.round(state.opacity * 100)}</b>%</span>
         <input type="range" min="0" max="100" step="1" value="${Math.round(state.opacity * 100)}" data-role="opacity">
       </label>
       <div class="ink-card-swatches">
@@ -940,19 +956,19 @@ export class InkToolbar {
   _eraserCardHtml() {
     const { state } = this;
     return `
-      <div class="ink-card-title">橡皮</div>
+      <div class="ink-card-title">${t('ink.eraser')}</div>
       <div class="ink-seg">
         <button type="button" class="ink-seg-btn${state.eraserMode === ERASER_MODES.STROKE ? ' is-selected' : ''}"
-                data-eraser-mode="${ERASER_MODES.STROKE}">笔划擦除</button>
+                data-eraser-mode="${ERASER_MODES.STROKE}">${t('ink.eraseStroke')}</button>
         <button type="button" class="ink-seg-btn${state.eraserMode === ERASER_MODES.REGION ? ' is-selected' : ''}"
-                data-eraser-mode="${ERASER_MODES.REGION}">区域擦除</button>
+                data-eraser-mode="${ERASER_MODES.REGION}">${t('ink.eraseRegion')}</button>
       </div>
       <label class="ink-field">
-        <span>橡皮大小 <b data-role="eraser-readout">${state.eraserWidth.toFixed(1)}</b> mm</span>
+        <span>${t('ink.eraserSize')} <b data-role="eraser-readout">${state.eraserWidth.toFixed(1)}</b> mm</span>
         <input type="range" min="1" max="40" step="0.5" value="${state.eraserWidth}" data-role="eraser-width">
       </label>
-      <button type="button" class="ink-danger" data-role="clear-ink">清空本页笔迹</button>
-      <p class="ink-note">只会删除本页的手写笔迹，不会修改导入的 PDF。</p>`;
+      <button type="button" class="ink-danger" data-role="clear-ink">${t('ink.clearPage')}</button>
+      <p class="ink-note">${t('ink.clearNote')}</p>`;
   }
 
   /**
@@ -972,7 +988,7 @@ export class InkToolbar {
     const { state } = this;
     const free = state.lassoShape !== LASSO_SHAPES.RECT;
     return `
-      <div class="ink-card-title">套索</div>
+      <div class="ink-card-title">${t('ink.lasso')}</div>
       <div class="ink-lasso-preview" aria-hidden="true">
         <svg viewBox="0 0 72 48" width="72" height="48" fill="none"
              stroke="var(--math-gold, #d97706)" stroke-width="2"
@@ -984,18 +1000,18 @@ export class InkToolbar {
       </div>
       <div class="ink-seg">
         <button type="button" class="ink-seg-btn${free ? ' is-selected' : ''}"
-                data-lasso-shape="${LASSO_SHAPES.FREE}">自由套索</button>
+                data-lasso-shape="${LASSO_SHAPES.FREE}">${t('ink.lassoFree')}</button>
         <button type="button" class="ink-seg-btn${free ? '' : ' is-selected'}"
-                data-lasso-shape="${LASSO_SHAPES.RECT}">矩形套索</button>
+                data-lasso-shape="${LASSO_SHAPES.RECT}">${t('ink.lassoRect')}</button>
       </div>
-      <div class="ink-card-label">选中方式</div>
+      <div class="ink-card-label">${t('ink.selectMode')}</div>
       <div class="ink-seg">
         <button type="button" class="ink-seg-btn${state.lassoMode === LASSO_MODES.TOUCH ? ' is-selected' : ''}"
-                data-lasso-mode="${LASSO_MODES.TOUCH}">接触即选</button>
+                data-lasso-mode="${LASSO_MODES.TOUCH}">${t('ink.lassoTouch')}</button>
         <button type="button" class="ink-seg-btn${state.lassoMode === LASSO_MODES.INSIDE ? ' is-selected' : ''}"
-                data-lasso-mode="${LASSO_MODES.INSIDE}">完全包含</button>
+                data-lasso-mode="${LASSO_MODES.INSIDE}">${t('ink.lassoInside')}</button>
       </div>
-      <p class="ink-note">圈中后可拖动移动，拖右下角的圆点可同时旋转和缩放。</p>`;
+      <p class="ink-note">${t('ink.lassoNote')}</p>`;
   }
 
   _colorCardHtml() {
@@ -1006,26 +1022,26 @@ export class InkToolbar {
       '#0d9488', '#0891b2', '#2563eb', '#4f46e5', '#7c3aed', '#c026d3',
     ];
     return `
-      <div class="ink-card-title">颜色</div>
+      <div class="ink-card-title">${t('ink.colour')}</div>
       <div class="ink-palette">
         ${palette.map(c => `<button type="button" class="ink-palette-dot${sameColor(c, state.color) ? ' is-selected' : ''}"
           data-swatch="${escapeAttr(c)}" style="background:${escapeAttr(c)}" aria-label="${escapeAttr(c)}"></button>`).join('')}
       </div>
       <label class="ink-field">
-        <span>不透明度 <b data-role="opacity-readout">${Math.round(state.opacity * 100)}</b>%</span>
+        <span>${t('ink.opacity')} <b data-role="opacity-readout">${Math.round(state.opacity * 100)}</b>%</span>
         <input type="range" min="0" max="100" step="1" value="${Math.round(state.opacity * 100)}" data-role="opacity">
       </label>
-      <p class="ink-note">颜色与不透明度是笔迹属性，不会改变 PDF 本身。</p>`;
+      <p class="ink-note">${t('ink.colourNote')}</p>`;
   }
 
   _overflowCardHtml() {
     return `
-      <div class="ink-card-title">工具栏设置</div>
+      <div class="ink-card-title">${t('ink.toolbarSettings')}</div>
       <label class="ink-check">
         <input type="checkbox" data-role="auto-minimize" ${this.state.autoMinimize ? 'checked' : ''}>
-        <span>自动最小化</span>
+        <span>${t('ink.autoMinimise')}</span>
       </label>
-      <p class="ink-note">拖动手柄可将工具栏移动到任意一边。</p>`;
+      <p class="ink-note">${t('ink.dragNote')}</p>`;
   }
 
   _bindCard(card) {

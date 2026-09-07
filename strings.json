@@ -1,0 +1,977 @@
+{
+ "rows": [
+  {
+   "file": "src/pdf/answer-index.js",
+   "line": 434,
+   "text": "OCR 未返回任何文本",
+   "ctx": ": (pagesRecognised === 0 ? 'OCR 未返回任何文本' : `OCR 结果仍不可用：${assessment.reason}`),"
+  },
+  {
+   "file": "src/pdf/answer-index.js",
+   "line": 434,
+   "text": "OCR 结果仍不可用：${assessment.reason}",
+   "ctx": ": (pagesRecognised === 0 ? 'OCR 未返回任何文本' : `OCR 结果仍不可用：${assessment.reason}`),"
+  },
+  {
+   "file": "src/pdf/answer-index.js",
+   "line": 541,
+   "text": "文本层不可用",
+   "ctx": "? { status: MATCH.UNUSABLE_TEXT, reason: index.reason ?? '文本层不可用' }"
+  },
+  {
+   "file": "src/pdf/answer-index.js",
+   "line": 560,
+   "text": "答案册中有 ${hits.length} 个第 ${wanted} 题，无法确定",
+   "ctx": "reason: `答案册中有 ${hits.length} 个第 ${wanted} 题，无法确定`,"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 17,
+   "text": "匹配可靠",
+   "ctx": "[CONFIDENCE.HIGH]: { label: '匹配可靠', className: 'is-high' },"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 18,
+   "text": "较可能匹配",
+   "ctx": "[CONFIDENCE.MEDIUM]: { label: '较可能匹配', className: 'is-medium' },"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 19,
+   "text": "匹配不确定，请自行核对",
+   "ctx": "[CONFIDENCE.LOW]: { label: '匹配不确定，请自行核对', className: 'is-low' },"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 20,
+   "text": "无法确定",
+   "ctx": "[CONFIDENCE.NONE]: { label: '无法确定', className: 'is-none' },"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 35,
+   "text": "匹配可靠",
+   "ctx": "[RUNG.AUTO_MATCH]: { label: '匹配可靠', className: 'is-high', showAnswer: true },"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 36,
+   "text": "请核对后使用",
+   "ctx": "[RUNG.REVIEW]: { label: '请核对后使用', className: 'is-medium', showAnswer: true },"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 37,
+   "text": "已定位，未确认",
+   "ctx": "[RUNG.LOCATED]: { label: '已定位，未确认', className: 'is-low', showAnswer: false },"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 38,
+   "text": "无法确定",
+   "ctx": "[RUNG.REFUSED]: { label: '无法确定', className: 'is-none', showAnswer: false },"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 39,
+   "text": "已阻止",
+   "ctx": "[RUNG.BLOCKED]: { label: '已阻止', className: 'is-none', showAnswer: false },"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 44,
+   "text": "尚未确认这两本书是配套的",
+   "ctx": "PAIR_IDENTITY_UNKNOWN: '尚未确认这两本书是配套的',"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 45,
+   "text": "这两本书看起来不是一对",
+   "ctx": "PAIR_IDENTITY_MISMATCH: '这两本书看起来不是一对',"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 46,
+   "text": "文本层不可读，需要先识别",
+   "ctx": "OCR_REQUIRED: '文本层不可读，需要先识别',"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 47,
+   "text": "文本层无法解码",
+   "ctx": "TEXT_OPAQUE: '文本层无法解码',"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 80,
+   "text": "第 ${escapeHtml(page)} 页",
+   "ctx": "<span>${page ? `第 ${escapeHtml(page)} 页` : ''} 正在匹配答案…</span>"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 88,
+   "text": "收起",
+   "ctx": "function closeButtonHtml(title = '收起') {"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 118,
+   "text": "关闭",
+   "ctx": "<div class=\"answer-notice-head\">${closeButtonHtml('关闭')}</div>"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 148,
+   "text": "已按目录章节对齐",
+   "ctx": "<span class=\"answer-stage\">${aligned ? '已按目录章节对齐' : '未使用目录对齐'}</span>"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 148,
+   "text": "未使用目录对齐",
+   "ctx": "<span class=\"answer-stage\">${aligned ? '已按目录章节对齐' : '未使用目录对齐'}</span>"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 149,
+   "text": "完成，收起答案",
+   "ctx": "${closeButtonHtml('完成，收起答案')}"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 166,
+   "text": "第 ${escapeHtml(match.question.label)} 题",
+   "ctx": "const label = match.question.label ? `第 ${escapeHtml(match.question.label)} 题` : '未编号';"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 166,
+   "text": "未编号",
+   "ctx": "const label = match.question.label ? `第 ${escapeHtml(match.question.label)} 题` : '未编号';"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 183,
+   "text": "第 ${escapeHtml(c.label)} 题 · 答案册第 ${escapeHtml(c.page)} 页",
+   "ctx": "const where = `第 ${escapeHtml(c.label)} 题 · 答案册第 ${escapeHtml(c.page)} 页`;"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 208,
+   "text": "<span class=\"answer-empty\">此书文本层无法显示，请翻到答案册第 ${escapeHtml(match.entry.page)} 页查看</span>",
+   "ctx": ": `<span class=\"answer-empty\">此书文本层无法显示，请翻到答案册第 ${escapeHtml(match.entry.page)} 页查看</span>`}</div>"
+  },
+  {
+   "file": "src/pdf/answer-panel.js",
+   "line": 210,
+   "text": "<div class=\"answer-located\">答案在答案册第 ${escapeHtml(match.entry.page)} 页，但尚未确认，请自行核对</div>",
+   "ctx": ": `<div class=\"answer-located\">答案在答案册第 ${escapeHtml(match.entry.page)} 页，但尚未确认，请自行核对</div>`}"
+  },
+  {
+   "file": "src/pdf/pdf-pane.js",
+   "line": 1428,
+   "text": "页面渲染失败: ",
+   "ctx": "div.textContent = '页面渲染失败: ' + (error?.message || String(error));"
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 28,
+   "text": "左/上",
+   "ctx": "[SLOTS.PRIMARY]: '左/上',"
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 29,
+   "text": "右/下",
+   "ctx": "[SLOTS.SECONDARY]: '右/下',"
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 60,
+   "text": "${docs.length} 个文档 · ${formatBytes(usage)}",
+   "ctx": "if (usageEl) usageEl.textContent = `${docs.length} 个文档 · ${formatBytes(usage)}`;"
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 63,
+   "text": "<div class=\"pdf-library-empty\">还没有导入任何 PDF</div>",
+   "ctx": "list.innerHTML = '<div class=\"pdf-library-empty\">还没有导入任何 PDF</div>';"
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 70,
+   "text": "双击打开",
+   "ctx": "row.title = '双击打开';"
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 74,
+   "text": "练习",
+   "ctx": "const roleTag = doc.role === DOC_ROLES.EXERCISE ? '练习'"
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 75,
+   "text": "答案",
+   "ctx": ": doc.role === DOC_ROLES.ANSWER ? '答案' : '';"
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 78,
+   "text": "有目录",
+   "ctx": "<div class=\"pdf-library-meta\">${doc.pageCount} 页 · ${formatBytes(doc.sizeBytes)} · ${doc.hasOutline "
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 78,
+   "text": "无目录",
+   "ctx": "<div class=\"pdf-library-meta\">${doc.pageCount} 页 · ${formatBytes(doc.sizeBytes)} · ${doc.hasOutline "
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 102,
+   "text": "正在打开…",
+   "ctx": "setStatus('正在打开…');"
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 108,
+   "text": "打开失败: ",
+   "ctx": "setStatus('打开失败: ' + error.message, true);"
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 117,
+   "text": "打开",
+   "ctx": "open.textContent = '打开';"
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 118,
+   "text": "打开到空的一侧",
+   "ctx": "open.title = '打开到空的一侧';"
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 129,
+   "text": "删除",
+   "ctx": "del.textContent = '删除';"
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 220,
+   "text": "已取消导入",
+   "ctx": "if (role === null) { setStatus('已取消导入'); return; }"
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 223,
+   "text": "正在导入 ${file.name} …",
+   "ctx": "setStatus(`正在导入 ${file.name} …`);"
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 228,
+   "text": "设备存储空间不足，请先删除一些文档再导入",
+   "ctx": "? '设备存储空间不足，请先删除一些文档再导入'"
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 230,
+   "text": "导入 ${file.name} 失败: ${reason}",
+   "ctx": "setStatus(`导入 ${file.name} 失败: ${reason}`, true);"
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 234,
+   "text": "已导入 1 个文档",
+   "ctx": "setStatus('已导入 1 个文档');"
+  },
+  {
+   "file": "src/pdf/pdf-workspace-ui.js",
+   "line": 245,
+   "text": "<div class=\"pdf-runtime-missing\">PDF 运行时未加载，无法使用 PDF 工作区。</div>",
+   "ctx": "elRoot.innerHTML = '<div class=\"pdf-runtime-missing\">PDF 运行时未加载，无法使用 PDF 工作区。</div>';"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 93,
+   "text": "${what}索引失败",
+   "ctx": "if (!index) return `${what}索引失败`;"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 98,
+   "text": "${what}没有文字层（可能是扫描版），需要 OCR 后才能匹配",
+   "ctx": "return `${what}没有文字层（可能是扫描版），需要 OCR 后才能匹配`;"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 100,
+   "text": "${what}的文字层是空白的",
+   "ctx": "return `${what}的文字层是空白的`;"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 102,
+   "text": "${what}的字库映射已损坏，且没有可用的书签目录",
+   "ctx": "return `${what}的字库映射已损坏，且没有可用的书签目录`;"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 104,
+   "text": "${what}中没有识别到编号题目",
+   "ctx": "return `${what}中没有识别到编号题目`;"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 157,
+   "text": "调整分栏",
+   "ctx": "aria-orientation=\"vertical\" tabindex=\"0\" aria-label=\"调整分栏\">"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 159,
+   "text": "左右互换两个文档",
+   "ctx": "aria-label=\"左右互换两个文档\" title=\"拖动或点击以左右互换\">"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 159,
+   "text": "拖动或点击以左右互换",
+   "ctx": "aria-label=\"左右互换两个文档\" title=\"拖动或点击以左右互换\">"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1027,
+   "text": "已保存",
+   "ctx": "label.textContent = '已保存';"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1030,
+   "text": "保存",
+   "ctx": "this._saveLabelTimer[slot] = setTimeout(() => { label.textContent = '保存'; }, 1600);"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1093,
+   "text": "退出专注",
+   "ctx": "n.title = this.state.focusedSlot === slot ? '退出专注' : '专注此文档';"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1093,
+   "text": "专注此文档",
+   "ctx": "n.title = this.state.focusedSlot === slot ? '退出专注' : '专注此文档';"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1101,
+   "text": "保存本页批注",
+   "ctx": "n.title = this._inkDirty[slot] ? '保存本页批注' : '批注已保存';"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1101,
+   "text": "批注已保存",
+   "ctx": "n.title = this._inkDirty[slot] ? '保存本页批注' : '批注已保存';"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1182,
+   "text": "<div class=\"pdf-outline-empty\">正在加载目录…</div>",
+   "ctx": "panel.innerHTML = '<div class=\"pdf-outline-empty\">正在加载目录…</div>';"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1189,
+   "text": "<div class=\"pdf-outline-empty\" data-i18n=\"pdf.noOutline\">此文档没有目录</div>",
+   "ctx": "panel.innerHTML = '<div class=\"pdf-outline-empty\" data-i18n=\"pdf.noOutline\">此文档没有目录</div>';"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1213,
+   "text": "(未命名)",
+   "ctx": "label.textContent = item.title || '(未命名)';"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1222,
+   "text": "该目录项没有可解析的目标页",
+   "ctx": "label.title = '该目录项没有可解析的目标页';"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1358,
+   "text": "请在另一侧打开答案册",
+   "ctx": "notice('请在另一侧打开答案册');"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1362,
+   "text": "另一侧的文档没有标记为答案册",
+   "ctx": "notice('另一侧的文档没有标记为答案册');"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1378,
+   "text": "习题册",
+   "ctx": "const blocked = describeUnusable(pane.questionIndex, '习题册')"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1379,
+   "text": "答案册",
+   "ctx": "|| describeUnusable(other.answerIndex, '答案册');"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1384,
+   "text": "请检查答案是否上传正确",
+   "ctx": "notice(blocked, '请检查答案是否上传正确');"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1399,
+   "text": "第 ${page} 页没有识别到编号题目",
+   "ctx": "notice(`第 ${page} 页没有识别到编号题目`, '请检查答案是否上传正确');"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1399,
+   "text": "请检查答案是否上传正确",
+   "ctx": "notice(`第 ${page} 页没有识别到编号题目`, '请检查答案是否上传正确');"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1430,
+   "text": "这两本书看起来不是一对：${pane.pairVerdict.reasonCodes?.join('、') || '文档身份不匹配'}",
+   "ctx": "notice(`这两本书看起来不是一对：${pane.pairVerdict.reasonCodes?.join('、') || '文档身份不匹配'}`);"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1461,
+   "text": "匹配答案失败: ",
+   "ctx": "notice('匹配答案失败: ' + (error?.message || ''));"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1527,
+   "text": "目录",
+   "ctx": "<button type=\"button\" class=\"pdf-slot-btn\" data-role=\"outline\" title=\"目录\">☰</button>"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1528,
+   "text": "上一页",
+   "ctx": "<button type=\"button\" class=\"pdf-slot-btn\" data-role=\"prev\" title=\"上一页\">‹</button>"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1529,
+   "text": "页码",
+   "ctx": "<input type=\"number\" class=\"pdf-slot-page\" data-role=\"page-input\" min=\"1\" step=\"1\" value=\"1\" aria-la"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1531,
+   "text": "下一页",
+   "ctx": "<button type=\"button\" class=\"pdf-slot-btn\" data-role=\"next\" title=\"下一页\">›</button>"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1532,
+   "text": "缩小",
+   "ctx": "<button type=\"button\" class=\"pdf-slot-btn\" data-role=\"zoom-out\" title=\"缩小\">−</button>"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1534,
+   "text": "放大",
+   "ctx": "<button type=\"button\" class=\"pdf-slot-btn\" data-role=\"zoom-in\" title=\"放大\">+</button>"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1535,
+   "text": "适合宽度",
+   "ctx": "<button type=\"button\" class=\"pdf-slot-btn\" data-role=\"fit-width\" title=\"适合宽度\">↔</button>"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1536,
+   "text": "整页",
+   "ctx": "<button type=\"button\" class=\"pdf-slot-btn\" data-role=\"fit-page\" title=\"整页\">⤢</button>"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1538,
+   "text": "保存本页批注",
+   "ctx": "<button type=\"button\" class=\"pdf-slot-btn is-save-action\" data-role=\"save-ink\" title=\"保存本页批注\">"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1546,
+   "text": "撤销",
+   "ctx": "<button type=\"button\" class=\"pdf-slot-btn\" data-role=\"ink-undo\" title=\"撤销\">↶</button>"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1547,
+   "text": "重做",
+   "ctx": "<button type=\"button\" class=\"pdf-slot-btn\" data-role=\"ink-redo\" title=\"重做\">↷</button>"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1548,
+   "text": "题号",
+   "ctx": "<input type=\"text\" class=\"pdf-slot-label\" data-role=\"exercise-label\" placeholder=\"题号\" aria-label=\"题号"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1548,
+   "text": "题号",
+   "ctx": "<input type=\"text\" class=\"pdf-slot-label\" data-role=\"exercise-label\" placeholder=\"题号\" aria-label=\"题号"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1549,
+   "text": "对照本页答案",
+   "ctx": "<button type=\"button\" class=\"pdf-slot-btn is-answer-action\" data-role=\"answers\" title=\"对照本页答案\">"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1560,
+   "text": "专注此文档",
+   "ctx": "<button type=\"button\" class=\"pdf-slot-btn\" data-role=\"focus\" title=\"专注此文档\">⛶</button>"
+  },
+  {
+   "file": "src/pdf/pdf-workspace.js",
+   "line": 1561,
+   "text": "关闭",
+   "ctx": "<button type=\"button\" class=\"pdf-slot-btn\" data-role=\"close\" title=\"关闭\">✕</button>"
+  },
+  {
+   "file": "src/pdf/question-matcher.js",
+   "line": 453,
+   "text": "答案册中没有可比对的条目",
+   "ctx": "return { matched: false, confidence: CONFIDENCE.NONE, reason: '答案册中没有可比对的条目' };"
+  },
+  {
+   "file": "src/pdf/question-matcher.js",
+   "line": 466,
+   "text": "书签题号唯一对应",
+   "ctx": "reason: exactReason ?? '书签题号唯一对应',"
+  },
+  {
+   "file": "src/pdf/question-matcher.js",
+   "line": 490,
+   "text": "题号与题目内容一致，且章节已对齐",
+   "ctx": "sectionAligned ? '题号与题目内容一致，且章节已对齐' : '题号与题目内容一致');"
+  },
+  {
+   "file": "src/pdf/question-matcher.js",
+   "line": 490,
+   "text": "题号与题目内容一致",
+   "ctx": "sectionAligned ? '题号与题目内容一致，且章节已对齐' : '题号与题目内容一致');"
+  },
+  {
+   "file": "src/pdf/question-matcher.js",
+   "line": 493,
+   "text": "章节内题号唯一",
+   "ctx": "sectionAligned ? '章节内题号唯一' : '题号匹配，但未按章节对齐');"
+  },
+  {
+   "file": "src/pdf/question-matcher.js",
+   "line": 493,
+   "text": "题号匹配，但未按章节对齐",
+   "ctx": "sectionAligned ? '章节内题号唯一' : '题号匹配，但未按章节对齐');"
+  },
+  {
+   "file": "src/pdf/question-matcher.js",
+   "line": 503,
+   "text": "题号重复，由题目内容确定",
+   "ctx": "return result(ranked[0], CONFIDENCE.MEDIUM, '题号重复，由题目内容确定');"
+  },
+  {
+   "file": "src/pdf/question-matcher.js",
+   "line": 507,
+   "text": "答案册中有 ${labelHits.length} 个第 ${wanted} 题，无法确定",
+   "ctx": "`答案册中有 ${labelHits.length} 个第 ${wanted} 题，无法确定`,"
+  },
+  {
+   "file": "src/pdf/question-matcher.js",
+   "line": 514,
+   "text": "题号不匹配，且文本层不可用，无法用内容比对",
+   "ctx": "return refuse('题号不匹配，且文本层不可用，无法用内容比对', candidates);"
+  },
+  {
+   "file": "src/pdf/question-matcher.js",
+   "line": 517,
+   "text": "题号不匹配，文本层质量不足以单独支撑匹配",
+   "ctx": "return refuse('题号不匹配，文本层质量不足以单独支撑匹配', candidates);"
+  },
+  {
+   "file": "src/pdf/question-matcher.js",
+   "line": 525,
+   "text": "题目内容高度相似",
+   "ctx": "return result(best, CONFIDENCE.MEDIUM, '题目内容高度相似');"
+  },
+  {
+   "file": "src/pdf/question-matcher.js",
+   "line": 527,
+   "text": "题目内容相似，但有其他相近条目",
+   "ctx": "return result(best, CONFIDENCE.LOW, '题目内容相似，但有其他相近条目');"
+  },
+  {
+   "file": "src/pdf/question-matcher.js",
+   "line": 530,
+   "text": "没有找到足够相似的题目",
+   "ctx": "return refuse('没有找到足够相似的题目', []);"
+  },
+  {
+   "file": "src/pdf/question-matcher.js",
+   "line": 702,
+   "text": "${m.reason}；前后题目匹配可靠，按顺序推定",
+   "ctx": "return { ...m, confidence: CONFIDENCE.MEDIUM, reason: `${m.reason}；前后题目匹配可靠，按顺序推定` };"
+  },
+  {
+   "file": "src/pdf/question-matcher.js",
+   "line": 880,
+   "text": "题号在答案册目录中唯一定位，且与正文一致",
+   "ctx": "exactReason: '题号在答案册目录中唯一定位，且与正文一致',"
+  },
+  {
+   "file": "src/pdf/question-matcher.js",
+   "line": 936,
+   "text": "匹配超时，已中止而不是返回不完整的结果",
+   "ctx": "...refuse('匹配超时，已中止而不是返回不完整的结果', []),"
+  },
+  {
+   "file": "src/pdf/question-matcher.js",
+   "line": 979,
+   "text": "题号在答案册中出现 ${hits.length} 次，由书中位置区分",
+   "ctx": "reason: `题号在答案册中出现 ${hits.length} 次，由书中位置区分`,"
+  },
+  {
+   "file": "src/pdf/region-locator.js",
+   "line": 136,
+   "text": "答案册第 ${region.from} 页",
+   "ctx": "? `答案册第 ${region.from} 页`"
+  },
+  {
+   "file": "src/pdf/region-locator.js",
+   "line": 137,
+   "text": "答案册第 ${region.from}–${region.to} 页",
+   "ctx": ": `答案册第 ${region.from}–${region.to} 页`;"
+  },
+  {
+   "file": "src/pdf/text-quality.js",
+   "line": 145,
+   "text": "没有文本层，可能是扫描件",
+   "ctx": "return report(TEXT_QUALITY.SCANNED, 0, 0, 0, 0, '没有文本层，可能是扫描件', 0);"
+  },
+  {
+   "file": "src/pdf/text-quality.js",
+   "line": 164,
+   "text": "文本层为空白",
+   "ctx": "return report(TEXT_QUALITY.BLANK, 0, 0, 0, 0, '文本层为空白', 0);"
+  },
+  {
+   "file": "src/pdf/text-quality.js",
+   "line": 199,
+   "text": "文本层仅覆盖 ${(pageCoverage * 100).toFixed(1)}% 的页面、每页 ${charsPerPage.toFixed(1)} 字符，实为扫描件，需 OCR",
+   "ctx": "`文本层仅覆盖 ${(pageCoverage * 100).toFixed(1)}% 的页面、每页 ${charsPerPage.toFixed(1)} 字符，实为扫描件，需 OCR`);"
+  },
+  {
+   "file": "src/pdf/text-quality.js",
+   "line": 210,
+   "text": "汉字丢失（${(hanRatio * 100).toFixed(2)}%），但数式内容完整（${(structuredRatio * 100).toFixed(0)}%），可比对不可显示",
+   "ctx": "`汉字丢失（${(hanRatio * 100).toFixed(2)}%），但数式内容完整（${(structuredRatio * 100).toFixed(0)}%），可比对不可显示`)"
+  },
+  {
+   "file": "src/pdf/text-quality.js",
+   "line": 212,
+   "text": "应为中文文档，但汉字占比仅 ${(hanRatio * 100).toFixed(2)}%，字库映射已损坏",
+   "ctx": "`应为中文文档，但汉字占比仅 ${(hanRatio * 100).toFixed(2)}%，字库映射已损坏`);"
+  },
+  {
+   "file": "src/pdf/text-quality.js",
+   "line": 217,
+   "text": "异常文种字符占比 ${(oddScriptRatio * 100).toFixed(2)}%，但数式内容完整，可比对不可显示",
+   "ctx": "`异常文种字符占比 ${(oddScriptRatio * 100).toFixed(2)}%，但数式内容完整，可比对不可显示`)"
+  },
+  {
+   "file": "src/pdf/text-quality.js",
+   "line": 219,
+   "text": "异常文种字符占比 ${(oddScriptRatio * 100).toFixed(2)}%，文本层不可信",
+   "ctx": "`异常文种字符占比 ${(oddScriptRatio * 100).toFixed(2)}%，文本层不可信`);"
+  },
+  {
+   "file": "src/pdf/text-quality.js",
+   "line": 223,
+   "text": "控制字符占比 ${(controlRatio * 100).toFixed(2)}%，文本提取失败",
+   "ctx": "`控制字符占比 ${(controlRatio * 100).toFixed(2)}%，文本提取失败`);"
+  },
+  {
+   "file": "src/pdf/text-quality.js",
+   "line": 227,
+   "text": "文本层含明显噪声，仅作辅助信号",
+   "ctx": "return done(TEXT_QUALITY.DEGRADED, '文本层含明显噪声，仅作辅助信号');"
+  },
+  {
+   "file": "src/pdf/text-quality.js",
+   "line": 229,
+   "text": "文本层可用",
+   "ctx": "return done(TEXT_QUALITY.USABLE, '文本层可用');"
+  },
+  {
+   "file": "src/pdf/text-source.js",
+   "line": 136,
+   "text": "OCR 未返回文本",
+   "ctx": ": { text: '', origin: TEXT_ORIGIN.NONE, page, reason: 'OCR 未返回文本' };"
+  },
+  {
+   "file": "src/ink/ink-toolbar.js",
+   "line": 120,
+   "text": "钢笔",
+   "ctx": "{ tool: INK_TOOLS.PEN, label: '钢笔', icon: 'pen' },"
+  },
+  {
+   "file": "src/ink/ink-toolbar.js",
+   "line": 121,
+   "text": "铅笔",
+   "ctx": "{ tool: INK_TOOLS.PENCIL, label: '铅笔', icon: 'pencil' },"
+  },
+  {
+   "file": "src/ink/ink-toolbar.js",
+   "line": 122,
+   "text": "马克笔",
+   "ctx": "{ tool: INK_TOOLS.MARKER, label: '马克笔', icon: 'marker' },"
+  },
+  {
+   "file": "src/ink/ink-toolbar.js",
+   "line": 123,
+   "text": "荧光笔",
+   "ctx": "{ tool: INK_TOOLS.HIGHLIGHTER, label: '荧光笔', icon: 'highlighter' },"
+  },
+  {
+   "file": "src/ink/ink-toolbar.js",
+   "line": 124,
+   "text": "橡皮",
+   "ctx": "{ tool: ERASER_TOOL, label: '橡皮', icon: 'eraser' },"
+  },
+  {
+   "file": "src/ink/ink-toolbar.js",
+   "line": 125,
+   "text": "套索",
+   "ctx": "{ tool: LASSO_TOOL, label: '套索', icon: 'lasso' },"
+  },
+  {
+   "file": "src/ink/ink-toolbar.js",
+   "line": 168,
+   "text": "笔迹工具栏",
+   "ctx": "this.root.setAttribute('aria-label', '笔迹工具栏');"
+  },
+  {
+   "file": "src/ink/ink-toolbar.js",
+   "line": 369,
+   "text": "移动工具栏",
+   "ctx": "aria-label=\"移动工具栏\" title=\"拖动以移动\">${icon('grip', 20)}</button>"
+  },
+  {
+   "file": "src/ink/ink-toolbar.js",
+   "line": 369,
+   "text": "拖动以移动",
+   "ctx": "aria-label=\"移动工具栏\" title=\"拖动以移动\">${icon('grip', 20)}</button>"
+  },
+  {
+   "file": "src/ink/ink-toolbar.js",
+   "line": 371,
+   "text": "笔迹工具",
+   "ctx": "<div class=\"ink-tools\" role=\"group\" aria-label=\"笔迹工具\">"
+  },
+  {
+   "file": "src/ink/ink-toolbar.js",
+   "line": 380,
+   "text": "墨水颜色",
+   "ctx": "<div class=\"ink-swatches\" role=\"group\" aria-label=\"墨水颜色\">"
+  },
+  {
+   "file": "src/ink/ink-toolbar.js",
+   "line": 384,
+   "text": "颜色 ${escapeAttr(color)}",
+   "ctx": "title=\"${escapeAttr(color)}\" aria-label=\"颜色 ${escapeAttr(color)}\""
+  },
+  {
+   "file": "src/ink/ink-toolbar.js",
+   "line": 389,
+   "text": "更多颜色",
+   "ctx": "title=\"更多颜色\" aria-label=\"更多颜色\">${icon('plus', 18)}</button>"
+  },
+  {
+   "file": "src/ink/ink-toolbar.js",
+   "line": 389,
+   "text": "更多颜色",
+   "ctx": "title=\"更多颜色\" aria-label=\"更多颜色\">${icon('plus', 18)}</button>"
+  },
+  {
+   "file": "src/ink/ink-toolbar.js",
+   "line": 393,
+   "text": "更多设置",
+   "ctx": "aria-label=\"更多设置\" title=\"更多设置\">${icon('more', 20)}</button>"
+  },
+  {
+   "file": "src/ink/ink-toolbar.js",
+   "line": 393,
+   "text": "更多设置",
+   "ctx": "aria-label=\"更多设置\" title=\"更多设置\">${icon('more', 20)}</button>"
+  },
+  {
+   "file": "src/ink/ink-toolbar.js",
+   "line": 445,
+   "text": "展开笔迹工具栏",
+   "ctx": "token.setAttribute('aria-label', '展开笔迹工具栏');"
+  },
+  {
+   "file": "src/ink/ink-toolbar.js",
+   "line": 446,
+   "text": "点按展开 · 拖动可移动",
+   "ctx": "token.setAttribute('title', '点按展开 · 拖动可移动');"
+  }
+ ],
+ "unique": [
+  "OCR 未返回任何文本",
+  "OCR 结果仍不可用：${assessment.reason}",
+  "文本层不可用",
+  "答案册中有 ${hits.length} 个第 ${wanted} 题，无法确定",
+  "匹配可靠",
+  "较可能匹配",
+  "匹配不确定，请自行核对",
+  "无法确定",
+  "请核对后使用",
+  "已定位，未确认",
+  "已阻止",
+  "尚未确认这两本书是配套的",
+  "这两本书看起来不是一对",
+  "文本层不可读，需要先识别",
+  "文本层无法解码",
+  "第 ${escapeHtml(page)} 页",
+  "收起",
+  "关闭",
+  "已按目录章节对齐",
+  "未使用目录对齐",
+  "完成，收起答案",
+  "第 ${escapeHtml(match.question.label)} 题",
+  "未编号",
+  "第 ${escapeHtml(c.label)} 题 · 答案册第 ${escapeHtml(c.page)} 页",
+  "<span class=\"answer-empty\">此书文本层无法显示，请翻到答案册第 ${escapeHtml(match.entry.page)} 页查看</span>",
+  "<div class=\"answer-located\">答案在答案册第 ${escapeHtml(match.entry.page)} 页，但尚未确认，请自行核对</div>",
+  "页面渲染失败: ",
+  "左/上",
+  "右/下",
+  "${docs.length} 个文档 · ${formatBytes(usage)}",
+  "<div class=\"pdf-library-empty\">还没有导入任何 PDF</div>",
+  "双击打开",
+  "练习",
+  "答案",
+  "有目录",
+  "无目录",
+  "正在打开…",
+  "打开失败: ",
+  "打开",
+  "打开到空的一侧",
+  "删除",
+  "已取消导入",
+  "正在导入 ${file.name} …",
+  "设备存储空间不足，请先删除一些文档再导入",
+  "导入 ${file.name} 失败: ${reason}",
+  "已导入 1 个文档",
+  "<div class=\"pdf-runtime-missing\">PDF 运行时未加载，无法使用 PDF 工作区。</div>",
+  "${what}索引失败",
+  "${what}没有文字层（可能是扫描版），需要 OCR 后才能匹配",
+  "${what}的文字层是空白的",
+  "${what}的字库映射已损坏，且没有可用的书签目录",
+  "${what}中没有识别到编号题目",
+  "调整分栏",
+  "左右互换两个文档",
+  "拖动或点击以左右互换",
+  "已保存",
+  "保存",
+  "退出专注",
+  "专注此文档",
+  "保存本页批注",
+  "批注已保存",
+  "<div class=\"pdf-outline-empty\">正在加载目录…</div>",
+  "<div class=\"pdf-outline-empty\" data-i18n=\"pdf.noOutline\">此文档没有目录</div>",
+  "(未命名)",
+  "该目录项没有可解析的目标页",
+  "请在另一侧打开答案册",
+  "另一侧的文档没有标记为答案册",
+  "习题册",
+  "答案册",
+  "请检查答案是否上传正确",
+  "第 ${page} 页没有识别到编号题目",
+  "这两本书看起来不是一对：${pane.pairVerdict.reasonCodes?.join('、') || '文档身份不匹配'}",
+  "匹配答案失败: ",
+  "目录",
+  "上一页",
+  "页码",
+  "下一页",
+  "缩小",
+  "放大",
+  "适合宽度",
+  "整页",
+  "撤销",
+  "重做",
+  "题号",
+  "对照本页答案",
+  "答案册中没有可比对的条目",
+  "书签题号唯一对应",
+  "题号与题目内容一致，且章节已对齐",
+  "题号与题目内容一致",
+  "章节内题号唯一",
+  "题号匹配，但未按章节对齐",
+  "题号重复，由题目内容确定",
+  "答案册中有 ${labelHits.length} 个第 ${wanted} 题，无法确定",
+  "题号不匹配，且文本层不可用，无法用内容比对",
+  "题号不匹配，文本层质量不足以单独支撑匹配",
+  "题目内容高度相似",
+  "题目内容相似，但有其他相近条目",
+  "没有找到足够相似的题目",
+  "${m.reason}；前后题目匹配可靠，按顺序推定",
+  "题号在答案册目录中唯一定位，且与正文一致",
+  "匹配超时，已中止而不是返回不完整的结果",
+  "题号在答案册中出现 ${hits.length} 次，由书中位置区分",
+  "答案册第 ${region.from} 页",
+  "答案册第 ${region.from}–${region.to} 页",
+  "没有文本层，可能是扫描件",
+  "文本层为空白",
+  "文本层仅覆盖 ${(pageCoverage * 100).toFixed(1)}% 的页面、每页 ${charsPerPage.toFixed(1)} 字符，实为扫描件，需 OCR",
+  "汉字丢失（${(hanRatio * 100).toFixed(2)}%），但数式内容完整（${(structuredRatio * 100).toFixed(0)}%），可比对不可显示",
+  "应为中文文档，但汉字占比仅 ${(hanRatio * 100).toFixed(2)}%，字库映射已损坏",
+  "异常文种字符占比 ${(oddScriptRatio * 100).toFixed(2)}%，但数式内容完整，可比对不可显示",
+  "异常文种字符占比 ${(oddScriptRatio * 100).toFixed(2)}%，文本层不可信",
+  "控制字符占比 ${(controlRatio * 100).toFixed(2)}%，文本提取失败",
+  "文本层含明显噪声，仅作辅助信号",
+  "文本层可用",
+  "OCR 未返回文本",
+  "钢笔",
+  "铅笔",
+  "马克笔",
+  "荧光笔",
+  "橡皮",
+  "套索",
+  "笔迹工具栏",
+  "移动工具栏",
+  "拖动以移动",
+  "笔迹工具",
+  "墨水颜色",
+  "颜色 ${escapeAttr(color)}",
+  "更多颜色",
+  "更多设置",
+  "展开笔迹工具栏",
+  "点按展开 · 拖动可移动"
+ ]
+}

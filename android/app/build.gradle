@@ -15,6 +15,20 @@ if (keystorePropsFile.exists()) {
     keystoreProperties['keyPassword'] = System.getenv('KEY_PASSWORD') ?: System.getenv('KEYSTORE_PASSWORD')
 }
 
+// 版本号从 package.json 读，而不是在这里另抄一份。
+//
+// 这两处本来各写各的：package.json 与「关于」页里是 1.3.0，而这里一直停在 1.0。
+// 也就是说至今装出去的每一个 APK，向 Android 报告的版本都是 1.0——而系统正是用
+// 这个数字判断一次安装是升级还是降级，所以它错了，覆盖安装也就无从谈起。
+//
+// versionCode 必须是递增的整数，按 主*10000 + 次*100 + 修订 折算：1.3.0 → 10300。
+// 这个式子对任何合理的版本号都单调递增，也就不会再出现装不上去的情况。
+def appVersion = new groovy.json.JsonSlurper()
+        .parse(file("$rootDir/../package.json")).version as String
+def semver = appVersion.tokenize('.').collect { (it =~ /^\d+/)[0] as int }
+def appVersionCode = semver[0] * 10000 + (semver.size() > 1 ? semver[1] : 0) * 100 +
+        (semver.size() > 2 ? semver[2] : 0)
+
 android {
     namespace = "com.latexsnipper.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -22,8 +36,8 @@ android {
         applicationId "com.latexsnipper.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode appVersionCode
+        versionName appVersion
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'

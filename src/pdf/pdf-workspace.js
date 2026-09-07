@@ -678,8 +678,16 @@ export class PdfWorkspace {
       travelled = Math.abs(d);
       // The control follows the finger a little, and resists — it is a switch
       // being thrown, not something being dragged to a destination.
+      //
+      // The pull has to be COMPOSED with the centring, not written over it.
+      // This button is centred on the divider by `transform: translateX(-50%)`
+      // in the stylesheet, and an inline transform replaces that property whole:
+      // the moment a finger landed, the button jumped half its own width to the
+      // right, then snapped back on release. That jump is the drift.
       const pull = Math.sign(d) * Math.min(14, travelled * 0.5);
-      this.elSwap.style.transform = column ? `translateY(${pull}px)` : `translateX(${pull}px)`;
+      this.elSwap.style.transform = column
+        ? `translateY(calc(-50% + ${pull}px))`
+        : `translateX(calc(-50% + ${pull}px))`;
       this.root.classList.toggle('is-swap-armed', travelled >= SWAP_THRESHOLD);
     });
 
@@ -1063,6 +1071,7 @@ export class PdfWorkspace {
       const panel = el.querySelector('[data-role="outline-panel"]');
       panel.hidden = !panel.hidden;
       if (!panel.hidden) this._renderOutline(slot, this._outlines[slot]);
+      this._syncOverlayState();
     });
 
     // Tool selection lives in the floating toolbar (spec chapter 5); per-pane
@@ -1193,6 +1202,29 @@ export class PdfWorkspace {
       panel.hidden = true;
     }
     if (button) button.disabled = true;
+    this._syncOverlayState();
+  }
+
+  /**
+   * 目录展开时把浮动笔迹栏收起来。
+   *
+   * 笔迹栏挂在工作区上、z-index 36，而目录面板是分栏内部的一块，怎么排都在它下面。
+   * 于是一打开目录，六个工具图标就压在条目上，两边都读不成——而这一刻本来也没人
+   * 在写字：目录是用来跳转的，点完就关。
+   *
+   * 文档库早就是这么做的（见 pdf.css 里的 body.is-library-open），这里用同一个
+   * 办法，而不是去调 z-index：面板在分栏里面，把它抬到 36 以上就会连带盖住另一
+   * 侧的分栏，那是另一个更难看的问题。
+   */
+  _syncOverlayState() {
+    // _resetOutline 会在文档卸载和构造中途被调用，那时 root 与 elSlots 可能还不
+    // 存在——这里只是同步一个装饰性的类名，够不着就什么都不做。
+    if (!this.root || !this.elSlots) return;
+    const open = [SLOTS.PRIMARY, SLOTS.SECONDARY].some((slot) => {
+      const panel = this.elSlots[slot]?.querySelector('[data-role="outline-panel"]');
+      return panel && !panel.hidden;
+    });
+    this.root.classList.toggle('is-outline-open', open);
   }
 
   _renderOutline(slot, outline) {

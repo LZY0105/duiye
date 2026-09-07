@@ -146,6 +146,139 @@ function traceStroke(ctx, pts) {
 }
 
 /**
+ * 纸的纹理。
+ *
+ * 铅笔不是流体。石墨是被刮到纸的纹理上去的粉末，所以一道铅笔线不是均匀的一条，
+ * 而是密密的一片颗粒：纹理凸起处着色深，凹陷处根本没碰到。这一点没法靠改变笔画
+ * 的宽度做出来——上一次就是那么试的，无论怎么调，出来的仍是一条边缘起伏的实线。
+ * 要的是真正的纹理。
+ *
+ * 做法：生成一张噪点贴图，把它当作橡皮，从已经画好的实心笔画上"抠掉"一部分。
+ * 抠出来的孔就是纸没有吃到石墨的地方。
+ *
+ * 贴图只生成一次，且由固定种子生成——每次重绘、每台设备都必须是同一张，否则页面
+ * 一平移一缩放，笔迹上的颗粒就会重新洗牌，整篇字会在纸上爬。
+ */
+const GRAIN_TILE = 96;
+let grainTile = null;
+
+/** 一个固定种子的伪随机数发生器。刻意不用 Math.random。 */
+function seeded(seed) {
+  let x = seed >>> 0;
+  return () => {
+    x ^= x << 13; x >>>= 0;
+    x ^= x >> 17;
+    x ^= x << 5; x >>>= 0;
+    return x / 4294967296;
+  };
+}
+
+function buildGrainTile() {
+  if (typeof document === 'undefined') return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = GRAIN_TILE;
+  const ctx = canvas.getContext('2d', { willReadFrequently: false });
+  if (!ctx) return null;
+
+  const img = ctx.createImageData(GRAIN_TILE, GRAIN_TILE);
+  const rnd = seeded(0x9e3779b9);
+  for (let i = 0; i < img.data.length; i += 4) {
+    // 只有 alpha 有意义：这张图是拿来打孔的，颜色无关。
+    // 偏置成"多数地方少抠、少数地方抠得狠"，纸的纹理就是这个分布：
+    // 大部分是吃到石墨的凸起，其间散着没吃到的凹陷。
+    const n = rnd();
+    img.data[i + 3] = Math.round(255 * Math.pow(n, 2.1) * 0.85);
+  }
+  ctx.putImageData(img, 0, 0);
+  return canvas;
+}
+
+/** 供打孔用的图案，并让颗粒随页面缩放——它属于纸，不属于屏幕。 */
+function grainPattern(ctx, scale) {
+  if (grainTile === null) grainTile = buildGrainTile() || false;
+  if (!grainTile) return null;
+  const pattern = ctx.createPattern(grainTile, 'repeat');
+  if (pattern && typeof DOMMatrix === 'function' && pattern.setTransform) {
+    const k = Math.max(0.35, Math.min(4, scale));
+    try { pattern.setTransform(new DOMMatrix([k, 0, 0, k, 0, 0])); } catch (_) { /* 旧引擎 */ }
+  }
+  return pattern;
+}
+
+/** 画笔画时借用的一块暂存画布，按视口大小复用，不逐笔新建。 */
+let scratch = null;
+function scratchFor(width, height) {
+  if (typeof document === 'undefined') return null;
+  if (!scratch) scratch = document.createElement('canvas');
+  if (scratch.width !== width || scratch.height !== height) {
+    scratch.width = width;
+    scratch.height = height;
+  }
+  return scratch;
+}
+
+/** 笔画在屏幕上的包围盒，外扩一点以容下最外层的柔边。 */
+function boundsOf(pts, pad) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of pts) {
+    x0 = Math.min(x0, p.x - p.r); y0 = Math.min(y0, p.y - p.r);
+    x1 = Math.max(x1, p.x + p.r); y1 = Math.max(y1, p.y + p.r);
+  }
+  return { x: x0 - pad, y: y0 - pad, w: (x1 - x0) + pad * 2, h: (y1 - y0) + pad * 2 };
+}
+
+/**
+ * 一道铅笔痕。
+ *
+ * 两遍实心，再打一次孔：
+ *   · 外圈，更宽更淡——石墨散到线两侧的那一点，也就是铅笔边缘发毛的来源；
+ *   · 内芯，标称宽度，重一些；
+ *   · 然后用噪点图案整体抠一遍，纸没吃到的地方就空出来。
+ *
+ * 全程在一块暂存画布上完成，最后整块贴回来。必须如此：打孔用的是
+ * destination-out，若直接画在笔迹层上，它会把这道笔画底下已经画好的所有东西
+ * 一起抠掉。
+ *
+ * 环境不支持时（Node 里的测试、老引擎）退回普通的实心描边——宁可画得朴素，
+ * 不可画不出来。
+ */
+function drawPencil(ctx, stroke, pts, alpha, scale) {
+  const target = ctx.canvas;
+  const pad = 2;
+  const box = boundsOf(pts, pad);
+  const pane = scratchFor(target ? target.width : 0, target ? target.height : 0);
+  const pattern = pane && pane.getContext ? grainPattern(pane.getContext('2d'), scale) : null;
+  if (!pane || !pattern) {                    // 画不了纹理就老老实实画实心
+    ctx.globalAlpha = alpha;
+    traceStroke(ctx, pts);
+    return;
+  }
+
+  const s = pane.getContext('2d');
+  s.save();
+  s.clearRect(box.x, box.y, box.w, box.h);
+  s.fillStyle = stroke.color;
+
+  // 外圈：宽而淡
+  s.globalAlpha = alpha * 0.30;
+  traceStroke(s, pts.map(p => ({ ...p, r: p.r * 1.45 })));
+
+  // 内芯
+  s.globalAlpha = alpha * 0.95;
+  traceStroke(s, pts);
+
+  // 抠孔。alpha 恒为 1——深浅由图案自己的 alpha 决定。
+  s.globalCompositeOperation = 'destination-out';
+  s.globalAlpha = 1;
+  s.fillStyle = pattern;
+  s.fillRect(box.x, box.y, box.w, box.h);
+  s.restore();
+
+  ctx.globalAlpha = 1;
+  ctx.drawImage(pane, box.x, box.y, box.w, box.h, box.x, box.y, box.w, box.h);
+}
+
+/**
  * Paints one stroke.
  *
  * A constant-width tool is one stroked path. A pressure-varying one is a union
@@ -218,7 +351,8 @@ export function drawStroke(ctx, stroke, transform) {
     ctx.restore();
     return;
   }
-  traceStroke(ctx, pts);
+  if (defaults.grain) drawPencil(ctx, stroke, pts, stroke.opacity, transform.scale);
+  else traceStroke(ctx, pts);
   ctx.restore();
 }
 
