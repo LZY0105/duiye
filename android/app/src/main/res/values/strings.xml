@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">对页</string>
     <string name="title_activity_main">对页</string>
-    <string name="package_name">com.latexsnipper.app</string>
-    <string name="custom_url_scheme">com.latexsnipper.app</string>
+    <string name="package_name">io.github.lzy0105.duiye</string>
+    <string name="custom_url_scheme">io.github.lzy0105.duiye</string>
 </resources>

@@ -283,7 +283,7 @@ await test('构建真的会编它，而且三个架构都带上', async () => {
 });
 
 await test('插件在建桥之前登记，否则网页那边找不到它', async () => {
-  const main = $read('android/app/src/main/java/com/latexsnipper/app/MainActivity.java');
+  const main = $read('android/app/src/main/java/io/github/lzy0105/duiye/MainActivity.java');
   const at = main.indexOf('registerPlugin(NativeProxyPlugin.class)');
   // 带括号的那个才是调用；不带的那个是注释里在讲这件事。
   const superAt = main.indexOf('super.onCreate(');
@@ -292,12 +292,12 @@ await test('插件在建桥之前登记，否则网页那边找不到它', async
 });
 
 await test('JNI 两头对得上名字', async () => {
-  const java = $read('android/app/src/main/java/com/latexsnipper/app/proxy/NativeProxy.java');
+  const java = $read('android/app/src/main/java/io/github/lzy0105/duiye/proxy/NativeProxy.java');
   const cpp = $read('android/app/src/main/cpp/jni_bridge.cpp');
   assert.ok(/public static void onNativeEvent\(String requestId, String kind, String json\)/.test(java));
   assert.ok(/"onNativeEvent"/.test(cpp) && /Ljava\/lang\/String;Ljava\/lang\/String;Ljava\/lang\/String;\)V/.test(cpp),
     'C++ 是按字符串找这个方法的，改名必须两边一起改');
-  assert.ok(/com\/latexsnipper\/app\/proxy\/NativeProxy/.test(cpp), '类名也是按字符串找的');
+  assert.ok(/io\/github\/lzy0105\/duiye\/proxy\/NativeProxy/.test(cpp), '类名也是按字符串找的');
 });
 
 await test('发布版里那个回调必须被 keep 住', async () => {
@@ -306,7 +306,7 @@ await test('发布版里那个回调必须被 keep 住', async () => {
   // System.loadLibrary 抛 UnsatisfiedLinkError，整层安静地消失。而类名反倒还在，
   // 看起来像「库装上了却不动」。debug 构建不混淆，所以只在发布版发作。
   const rules = $read('android/app/proguard-rules.pro');
-  assert.ok(/-keep class com\.latexsnipper\.app\.proxy\.NativeProxy\s*\{[^}]*\*;[^}]*\}/.test(rules),
+  assert.ok(/-keep class io\.github\.lzy0105\.duiye\.proxy\.NativeProxy\s*\{[^}]*\*;[^}]*\}/.test(rules),
     'C++ 按字符串找 onNativeEvent，它的名字必须留住');
 });
 
@@ -347,15 +347,15 @@ await test('没有把语言特性关掉——这层是留给别人插东西的',
 });
 
 await test('一个编号只能有一件活在飞', async () => {
-  const java = $read('android/app/src/main/java/com/latexsnipper/app/proxy/NativeProxy.java');
+  const java = $read('android/app/src/main/java/io/github/lzy0105/duiye/proxy/NativeProxy.java');
   assert.ok(/putIfAbsent/.test(java),
     '重号会让后来的 sink 顶掉前一个，于是前一件活的回音落到后一件手里');
-  const plugin = $read('android/app/src/main/java/com/latexsnipper/app/proxy/NativeProxyPlugin.java');
+  const plugin = $read('android/app/src/main/java/io/github/lzy0105/duiye/proxy/NativeProxyPlugin.java');
   assert.ok(/already in flight/.test(plugin), '收不下就说清楚，不要默默丢掉');
 });
 
 await test('库加载不上不算错误，只是「还没接」', async () => {
-  const java = $read('android/app/src/main/java/com/latexsnipper/app/proxy/NativeProxy.java');
+  const java = $read('android/app/src/main/java/io/github/lzy0105/duiye/proxy/NativeProxy.java');
   assert.ok(/catch \(UnsatisfiedLinkError/.test(java),
     '设备架构对不上不该让整个 app 起不来——代理层是留着以后接东西的，不是读书必需的');
 });

@@ -1,4 +1,4 @@
-package com.latexsnipper.app.proxy;
+package io.github.lzy0105.duiye.proxy;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;

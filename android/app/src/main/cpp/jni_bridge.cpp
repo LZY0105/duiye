@@ -111,7 +111,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
   JNIEnv* env = nullptr;
   if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
 
-  jclass local = env->FindClass("com/latexsnipper/app/proxy/NativeProxy");
+  jclass local = env->FindClass("io/github/lzy0105/duiye/proxy/NativeProxy");
   if (!local) {
     // 找不到类会留下一个待处理的异常。带着它返回，接下来这条线程上的每一次
     // JNI 调用都会在它上面绊倒。
@@ -133,12 +133,12 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_latexsnipper_app_proxy_NativeProxy_nativeDescribe(JNIEnv* env, jclass) {
+Java_io_github_lzy0105_duiye_proxy_NativeProxy_nativeDescribe(JNIEnv* env, jclass) {
   return env->NewStringUTF(duiye::describeAll().c_str());
 }
 
 JNIEXPORT void JNICALL
-Java_com_latexsnipper_app_proxy_NativeProxy_nativeSubmit(
+Java_io_github_lzy0105_duiye_proxy_NativeProxy_nativeSubmit(
     JNIEnv* env, jclass, jstring jService, jstring jOp, jstring jPayload, jstring jRequestId) {
   duiye::Request request;
   request.service = toStd(env, jService);
@@ -164,7 +164,7 @@ Java_com_latexsnipper_app_proxy_NativeProxy_nativeSubmit(
 }
 
 JNIEXPORT void JNICALL
-Java_com_latexsnipper_app_proxy_NativeProxy_nativeCancel(
+Java_io_github_lzy0105_duiye_proxy_NativeProxy_nativeCancel(
     JNIEnv* env, jclass, jstring jService, jstring jRequestId) {
   auto service = duiye::findService(toStd(env, jService));
   if (service) service->cancel(toStd(env, jRequestId));

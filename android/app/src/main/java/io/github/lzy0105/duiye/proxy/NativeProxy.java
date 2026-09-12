@@ -1,4 +1,4 @@
-package com.latexsnipper.app.proxy;
+package io.github.lzy0105.duiye.proxy;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;

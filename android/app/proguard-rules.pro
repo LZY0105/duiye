@@ -6,7 +6,7 @@
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
 # ── Capacitor plugin bridge ──
--keep class com.latexsnipper.app.MainActivity { *; }
+-keep class io.github.lzy0105.duiye.MainActivity { *; }
 
 # ── Keep JNI / native methods ──
 -keepclasseswithmembernames class * {
@@ -27,6 +27,6 @@
 #
 # 而且是安静地。类名反而保住了（上面那条 native 规则顺带保的），所以看起来
 # 「类在、库在、就是不工作」。debug 构建不混淆，这件事只在发布版里发生。
--keep class com.latexsnipper.app.proxy.NativeProxy {
+-keep class io.github.lzy0105.duiye.proxy.NativeProxy {
     *;
 }

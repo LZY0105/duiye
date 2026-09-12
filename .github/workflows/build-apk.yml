@@ -68,7 +68,7 @@ jobs:
             keytool -genkey -v -keystore release.keystore \
               -storepass duiye -alias duiye -keypass duiye \
               -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=LaTeXSnipper,O=LaTeXSnipper,C=CN"
+              -dname "CN=duiye,O=duiye,C=CN"
             echo "storeFile=release.keystore" > keystore.properties
             echo "storePassword=duiye" >> keystore.properties
             echo "keyAlias=duiye" >> keystore.properties

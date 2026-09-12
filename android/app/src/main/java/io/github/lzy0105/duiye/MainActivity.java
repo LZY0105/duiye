@@ -1,9 +1,9 @@
-package com.latexsnipper.app;
+package io.github.lzy0105.duiye;
 
 import android.os.Bundle;
 
 import com.getcapacitor.BridgeActivity;
-import com.latexsnipper.app.proxy.NativeProxyPlugin;
+import io.github.lzy0105.duiye.proxy.NativeProxyPlugin;
 
 /**
  * The app is the Capacitor WebView and nothing else.

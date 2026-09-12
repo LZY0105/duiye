@@ -30,10 +30,10 @@ def appVersionCode = semver[0] * 10000 + (semver.size() > 1 ? semver[1] : 0) * 1
         (semver.size() > 2 ? semver[2] : 0)
 
 android {
-    namespace = "com.latexsnipper.app"
+    namespace = "io.github.lzy0105.duiye"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.latexsnipper.app"
+        applicationId "io.github.lzy0105.duiye"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode appVersionCode
