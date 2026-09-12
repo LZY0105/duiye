@@ -1461,3 +1461,74 @@ a:hover { color: var(--accent-hover); }
   padding: 0 4px;
   line-height: 1;
 }
+
+
+/* ── 设置页与加载状态的几件共用控件 ─────────────────────────────────────
+ *
+ * 这些原来住在 ocr.css 里。那个文件是上游留下的识别界面样式表——拍照、裁切、
+ * 导出、识别结果、PDF 页码选择——那几套界面早就不在了，57 个类里只有下面这 8 个
+ * 还有人用，而且它们跟 OCR 一点关系都没有：设置页的按钮、转圈、进度条、状态条。
+ *
+ * 所以把这几条搬过来，那个文件整个删掉。一个叫 ocr.css 的文件里装着设置页按钮的
+ * 样式，本身就是误导；它留到今天只是因为删掉会把按钮一起带走。
+ */
+
+.status-bar {
+  display: flex; align-items: center; justify-content: center; gap: 0.75rem;
+  margin-bottom: 1.5rem; padding: 0.85rem 1.25rem;
+  background: var(--glass-bg); border-radius: var(--pill-radius);
+  border: var(--glass-border);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-shadow);
+  font-size: 0.9rem; font-weight: 500; color: var(--muted);
+  transition: all var(--transition-fast);
+}
+
+.spinner {
+  width: 22px; height: 22px;
+  border: 2.5px solid var(--border-color); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.7s linear infinite;
+  display: none; flex-shrink: 0;
+}
+
+.spinner.show { display: block; }
+
+.progress-wrap { width: 100%; max-width: 420px; margin: 0 auto 1.5rem; display: none; }
+
+.progress-wrap.show { display: block; }
+
+.progress-label { display: flex; justify-content: space-between; font-size: 0.82rem; font-weight: 500; color: var(--muted); margin-bottom: 0.4rem; }
+
+.progress-track { width: 100%; height: 8px; background: var(--glass-bg-subtle); border-radius: var(--pill-radius); overflow: hidden; border: 0.5px solid var(--border-color); }
+
+.progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), #5856D6); border-radius: var(--pill-radius); transition: width 0.3s var(--spring-ease); width: 0%; }
+
+
+.ocr-btn {
+  flex: 1; text-align: center;
+  background: var(--glass-bg-subtle); color: var(--accent);
+  border: var(--glass-border-subtle); padding: 10px 16px; border-radius: var(--pill-radius);
+  cursor: pointer; font-size: 0.88rem; font-weight: 600;
+  transition: all var(--transition-fast); font-family: inherit;
+}
+
+.ocr-btn:hover { background: var(--card-bg); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+
+.ocr-btn:active { transform: scale(0.95); }
+
+.ocr-btn.copied { background: #34C759; color: #fff; border-color: #34C759; box-shadow: 0 4px 12px rgba(52, 199, 89, 0.3); }
+
+.ocr-btn.secondary {
+  border-color: var(--border-color); color: var(--muted);
+}
+
+.pdf-thumb {
+  flex-shrink: 0; width: 60px; height: 86px; border-radius: 8px;
+  border: 2px solid var(--border-color); cursor: pointer;
+  object-fit: cover; opacity: 0.6; transition: opacity 0.2s, border-color 0.2s, transform 0.2s;
+}
+
+.pdf-thumb.active { border-color: var(--accent); opacity: 1; transform: scale(1.04); box-shadow: 0 4px 12px rgba(15, 23, 42, 0.113); }
+
+.pdf-thumb:hover { opacity: 0.9; }

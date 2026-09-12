@@ -449,7 +449,7 @@ export function initLiquidGlass() {
   bindObserver.observe(document.body, { childList: true, subtree: true });
 
   const onResize = () => {
-    document.querySelectorAll('.bottom-nav, .recog-tabs, .mode-tabs, .settings-tabs, .cam-mode-bar')
+    document.querySelectorAll('.bottom-nav, .settings-tabs')
       .forEach(c => c._relayoutLens?.());
   };
   window.addEventListener('resize', onResize, { passive: true });

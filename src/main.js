@@ -2,12 +2,6 @@
 // bootstrap() → createApp() → start()
 
 import './styles/base.css';
-// ocr.css stays: the shared control vocabulary (.ocr-btn, .set-group,
-// .result-card, the status bar) was defined there and is used across the
-// settings page and the workspace. The recognition-specific rules inside it are
-// dead now and are worth a separate cleanup pass; deleting the file wholesale
-// would take the buttons with it.
-import './styles/ocr.css';
 import './styles/pdf.css';
 // After pdf.css: a scratchpad shares the slot chrome and then takes away the
 // page boundaries the PDF pane draws — see the note at the top of the file.

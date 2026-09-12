@@ -11,7 +11,7 @@
 // OS, which the previous two-state implementation could not express.
 
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -373,10 +373,15 @@ group('7. The app is light-only');
 
 ok(!existsSync(join(ROOT, 'src/ui/theme.js')), 'the theme module is gone');
 
-for (const f of [
-  'src/styles/base.css', 'src/styles/ocr.css', 'src/styles/pdf.css',
-  'src/styles/ink-toolbar.css', 'src/styles/mobile.css', 'src/styles/material.css',
-]) {
+// 样式表是数出来的，不是列出来的。写死一份清单有两个毛病：删掉一个文件测试就
+// 崩（而不是少查一项），新加一个文件它悄悄躲过检查。这份清单原来就漏了
+// deck.css 和 scratch.css。
+const sheets = readdirSync(join(ROOT, 'src/styles'))
+  .filter((f) => f.endsWith('.css'))
+  .map((f) => `src/styles/${f}`);
+ok(sheets.length >= 5, `found ${sheets.length} stylesheets to check`);
+
+for (const f of sheets) {
   const css = $read(f);
   // The word may still appear in prose; a selector may not.
   const selectors = css.replace(/\/\*[\s\S]*?\*\//g, '');
