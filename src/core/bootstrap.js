@@ -1,95 +1,107 @@
-// bootstrap.js — Platform setup: PWA, Service Worker, tab navigation.
-// Runs before any feature modules are loaded.
+// bootstrap.js — 开机前要先摆好的那几样。
+//
+// 这一层在任何功能模块加载之前跑，所以它只能依赖平台本身：崩溃捕获、Service
+// Worker、两个标签页的切换、以及「装到桌面」那条横幅。功能模块的初始化在
+// app.js 里，那时候 DOM 和词表都已经就位。
 
 import { installCrashGuard } from './crash-guard.js';
 
+/** 首屏是练习。设定页没有东西要预热，进来就落在能干活的那一页上。 */
+const LANDING = 'pdf';
+
 export async function bootstrap() {
-  // First, before anything else can fail: capture errors and unhandled
-  // rejections into the native log, so a fault on a tablet is retrievable
-  // through the existing log export instead of vanishing into a WebView
-  // console nobody is attached to.
+  // 第一件事，在任何东西有机会出错之前：把异常和未处理的 rejection 接进原生日
+  // 志。平板上出的错，要能从「导出日志」里捞出来，而不是消失在一个没人连着的
+  // WebView 控制台里。
   installCrashGuard();
 
-  // Service Worker
+  // 离线靠它。注册失败不该拦住启动——拿不到缓存，无非是每次都走网络。
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   }
 
-  // The app is light-only. There is no theme to initialise, no preference to
-  // restore and no OS media query to follow: `data-theme` is never set, and
-  // the stylesheets carry a single palette.
-
-  // Tab navigation. 课本 is the landing surface now that 识别 is retired.
-  setupTabs();
-  document.getElementById('page-pdf')?.classList.add('active');
-  syncBackgroundToPage('pdf');
-
-  // PWA install prompt
-  setupInstallPrompt();
+  bindTabs();
+  showPage(LANDING);
+  bindInstallBanner();
 }
 
 /**
- * Tab navigation across the three surfaces this version ships.
+ * 两个标签页：练习和设定。
  *
- * 识别 (OCR) and 编辑器 are retired for now: their tabs are gone, their pages
- * carry `hidden` and `data-retired`, and app.js does not initialise them. The
- * markup and modules are still here rather than deleted, because the removal is
- * temporary — the full version, with both features working, is preserved on the
- * `feature/ocr-and-editor-preserved` branch.
+ * 以前这里还要绕过「退役」的页面——识别和编辑器那两套被摘掉时，标记留在 DOM 里
+ * 没删。现在 index.html 里一个 is-retired 都没有了，那套绕行连同它守着的那个从
+ * 未被读过的 pages 变量一起去掉。
+ *
+ * 切页这件事只有一份实现（showPage），点击和开机都走它：两份的话，开机那一份
+ * 迟早会漏掉后来加进点击那一份里的事情——背景的开关就是这么来的。
  */
-function setupTabs() {
-  const tabs = document.querySelectorAll('.bottom-nav button');
-  const pages = document.querySelectorAll('.page:not(.is-retired)');
-  tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      tabs.forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-      const page = document.getElementById('page-' + tab.dataset.page);
-      if (page && !page.classList.contains('is-retired')) page.classList.add('active');
-      syncBackgroundToPage(tab.dataset.page);
-    });
-  });
+function bindTabs() {
+  for (const tab of document.querySelectorAll('.bottom-nav button')) {
+    tab.addEventListener('click', () => showPage(tab.dataset.page));
+  }
+}
+
+/** 让某一页成为当前页；标签的高亮和背景跟着走。 */
+function showPage(name) {
+  for (const tab of document.querySelectorAll('.bottom-nav button')) {
+    tab.classList.toggle('active', tab.dataset.page === name);
+  }
+  for (const page of document.querySelectorAll('.page')) {
+    page.classList.toggle('active', page.id === `page-${name}`);
+  }
+  syncBackgroundToPage(name);
 }
 
 /**
- * Runs the decorative background only where it can actually be seen.
+ * 那层装饰性背景只在看得见它的地方跑。
  *
- * `#mathBg` is a full-viewport canvas — 1.6 megapixels on this tablet — cleared
- * and repainted on a permanent animation loop. The workspace is opaque and
- * full-bleed, so on 课本 every one of those frames was drawn underneath it and
- * thrown away, competing for the main thread with the stylus pipeline that has
- * to keep up with a 120Hz pen.
+ * `#mathBg` 是一张铺满视口的画布——在这台平板上一百六十万像素——挂在一个永不停
+ * 的动画循环上，每帧清空重画。练习那一页的工作区是不透明且满幅的，于是每一帧都
+ * 画在它下面然后被丢掉，同时还在和那条要跟上 120Hz 触控笔的管线抢主线程。
  *
- * It is not a small saving and it costs nothing visible: the only surface the
- * background shows through is 设定.
+ * 省下的不是一点点，而且什么都不损失：这层背景唯一能透出来的地方是设定页。
  */
 function syncBackgroundToPage(page) {
   const wanted = page !== 'pdf';
   import('../ui/particles.js').then(({ initParticles, stopParticles }) => {
     if (wanted) initParticles('mathBg');
     else stopParticles();
-  }).catch(() => { /* decoration is optional */ });
+  }).catch(() => { /* 装饰而已，加载不上就算了 */ });
 }
 
-function setupInstallPrompt() {
-  let deferredPrompt = null;
+/**
+ * 「装到桌面，离线也能用」那条横幅。
+ *
+ * 浏览器认为这个站点够格被安装时会抛 beforeinstallprompt，并允许把它拦下来留到
+ * 合适的时机再用。所以这里拦住它、把事件存起来、亮出横幅，等人真的点了再
+ * prompt()。不拦的话，浏览器会按自己的时机和自己的样子去问，而那一下往往正落在
+ * 人读得好好的时候。
+ *
+ * 已经装过的（display-mode: standalone）不该再被问一次。
+ */
+function bindInstallBanner() {
+  const banner = document.getElementById('installBanner');
+  if (!banner) return;
+
+  let pending = null;
+  const hide = () => banner.classList.remove('show');
+
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
-    deferredPrompt = e;
-    document.getElementById('installBanner')?.classList.add('show');
+    pending = e;
+    banner.classList.add('show');
   });
+
   document.getElementById('installBtn')?.addEventListener('click', async () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    await deferredPrompt.userChoice;
-    deferredPrompt = null;
-    document.getElementById('installBanner')?.classList.remove('show');
+    if (!pending) return;
+    pending.prompt();
+    // 装没装成不影响这条横幅的去留：问过了就该收起来。
+    await pending.userChoice;
+    pending = null;
+    hide();
   });
-  document.getElementById('dismissInstall')?.addEventListener('click', () => {
-    document.getElementById('installBanner')?.classList.remove('show');
-  });
-  if (window.matchMedia('(display-mode: standalone)').matches) {
-    document.getElementById('installBanner')?.classList.remove('show');
-  }
+
+  document.getElementById('dismissInstall')?.addEventListener('click', hide);
+
+  if (window.matchMedia('(display-mode: standalone)').matches) hide();
 }

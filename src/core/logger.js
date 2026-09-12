@@ -164,9 +164,9 @@ const Logger = {
   getExportText() {
     restore();
     return [
-      '=== 对页 诊断日志 ===',
-      `导出时间: ${new Date().toLocaleString('zh-CN')}`,
-      `用户代理: ${navigator.userAgent}`,
+      '对页 · 诊断日志',
+      `导出于 ${new Date().toLocaleString('zh-CN')}`,
+      `运行环境 ${navigator.userAgent}`,
       '',
       ...lines.slice(-MAX_LINES),
     ].join('\n');
