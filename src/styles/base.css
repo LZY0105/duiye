@@ -163,52 +163,40 @@
   --font-math: "KaTeX_Math", "Latin Modern Math", "STIX Two Math", serif;
 }
 
+/* 纸这套皮肤靠明度差和一条切边分层，不靠透光。所以按钮是一条墨线加一片空白，
+   没有底色可言——而那条线得是墨的低透明度，不能是灰：这块屏幕上其余一切都是
+   墨，一条中性灰会被读成印刷线而不是控件。 */
 [data-skin="minimal"] .ocr-btn {
-  border: 1px solid var(--fg);
+  border: 1px solid rgba(28, 28, 30, 0.55);
   background: transparent;
-  color: var(--fg); font-weight: 400;
-  font-size: 0.82rem;
+  color: var(--fg);
+  font-size: 0.84rem;
+  font-weight: 450;
 }
+/* 按下去是反白，不是变淡：纸上没有「压暗」这回事，翻面才是。 */
 [data-skin="minimal"] .ocr-btn:active {
-  background: var(--fg); color: #fff;
+  background: var(--fg);
+  color: #fff;
 }
 [data-skin="minimal"] .ocr-btn.secondary {
-  border-color: #ccc; color: var(--muted);
-}
-[data-skin="minimal"] .result-card {
-  border: none;
-  border-top: 1px solid var(--border-color);
-  background: transparent;
-  box-shadow: none;
-}
-[data-skin="minimal"] .mode-tab.active,
-[data-skin="minimal"] .recog-tabs .mode-tab.active {
-  background: var(--fg); color: #fff; border-color: var(--fg);
+  border-color: rgba(28, 28, 30, 0.22);
+  color: var(--muted);
 }
 [data-skin="minimal"] .bottom-nav {
-  border-top: 1px solid var(--border-color);
+  border-top: 1px solid rgba(28, 28, 30, 0.14);
 }
+/* 选中靠墨色和字重，不靠底色：给一格加底色，那一格就变成了一枚贴纸。 */
 [data-skin="minimal"] .bottom-nav button.active {
-  color: var(--fg); font-weight: 600;
+  color: var(--fg);
+  font-weight: 650;
 }
 [data-skin="minimal"] .bottom-nav button {
-  font-size: 0.65rem;
-}
-[data-skin="minimal"] .top-nav {
-  border-bottom: 1px solid var(--border-color);
-}
-[data-skin="minimal"] .theme-toggle {
-  border-color: var(--border-color);
+  font-size: 0.68rem;
 }
 /* :focus-visible，不是 :focus。用手指点过之后 :focus 会一直留在那颗按钮上，于是
    两个下拉框一深一浅——看起来像其中一个坏了。键盘走到它上面时仍然要有这圈边。 */
 [data-skin="minimal"] .set-select-btn:focus-visible {
   border-color: var(--fg);
-}
-/* Minimal: hi-tag background uses card-bg instead of accent tint */
-[data-skin="minimal"] .history-item .hi-tag {
-  background: rgba(0,0,0,0.04); color: var(--muted);
-  border: 1px solid var(--border-color);
 }
 /* ══════════════════════════════════════════════════════════════
    Skin: Math Liquid Glass (自然物理真玻璃 · Apple Studio Architecture)
@@ -777,7 +765,7 @@
   }
 }
 
-/* ── End skin blocks ── */
+/* ── 皮肤覆盖到此为止，下面是两套皮肤共用的 ─────────────────────── */
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -828,22 +816,11 @@ a:hover { color: var(--accent-hover); }
    than deleted, so a device that really does put content under a notch has
    somewhere to say so. */
 .spacer-top { height: 0; }
-.top-nav {
-  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
-  background: var(--hdr-bg);
-  backdrop-filter: var(--nav-blur); -webkit-backdrop-filter: var(--nav-blur);
-  border-bottom: var(--nav-border);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.4), 0 4px 20px -2px rgba(0, 0, 0, 0.04);
-  padding-top: var(--safe-t);
-  transition: background 0.3s, border-color 0.3s;
-}
 .top-nav .inner {
   max-width: var(--max-w); margin: 0 auto;
   padding: 0 1.5rem; height: 50px;
   display: flex; align-items: center; gap: 1.25rem;
 }
-.top-nav a { color: var(--fg); text-decoration: none; font-size: 0.92rem; font-weight: 500; }
-.top-nav a:hover { color: var(--accent); }
 .top-nav .brand-link { font-weight: 700; font-size: 1.05rem; letter-spacing: -0.02em; display: flex; align-items: center; gap: 8px; }
 
 .brand-math-symbol {
@@ -862,21 +839,6 @@ a:hover { color: var(--accent-hover); }
   box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04), inset 0 1px 0.5px #fff;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-}
-
-.top-nav-actions {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  /* Never shrink, never wrap.
-     As flex items these controls were shrinkable by default, so on a 360-390px
-     phone the skin toggle was squeezed until its five-character label broke
-     across three lines. The button then grew to 97px inside a 48px bar and,
-     being centred, escaped 13px above it and overlapped the page beneath.
-     Width is the thing that has to give here, and the media query in
-     mobile.css gives it by dropping to icons — not by letting text reflow. */
-  flex: 0 0 auto;
 }
 
 .skin-quick-toggle,
@@ -915,46 +877,6 @@ a:hover { color: var(--accent-hover); }
 .skin-quick-toggle:active { transform: scale(0.94); }
 .skin-quick-toggle .skin-badge-icon { font-size: 0.85rem; }
 
-.theme-toggle {
-  background: var(--glass-bg-subtle);
-  border: var(--glass-border-subtle);
-  border-radius: var(--pill-radius);
-  padding: 5px 12px; cursor: pointer; font-size: 0.8rem; font-weight: 500;
-  display: flex; align-items: center; gap: 6px;
-  color: var(--fg);
-  transition: all var(--transition-fast);
-  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.5);
-}
-.theme-toggle:hover {
-  background: var(--glass-bg);
-  border-color: var(--accent);
-  transform: translateY(-1px);
-  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.081);
-}
-.theme-toggle:active { transform: scale(0.94); }
-.theme-icon { flex-shrink: 0; display: block; }
-.theme-label { line-height: 1; white-space: nowrap; }
-
-/* ── Liquid Math Top Nav Island ── */
-[data-skin="liquid-math"] .top-nav {
-  position: fixed;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: calc(100% - 28px);
-  max-width: var(--max-w);
-  border-radius: 18px;
-  border: var(--glass-border);
-  background: var(--glass-bg);
-  backdrop-filter: var(--nav-blur);
-  -webkit-backdrop-filter: var(--nav-blur);
-  box-shadow:
-    0 1px 2px rgba(15, 23, 42, 0.03),
-    0 8px 24px -4px rgba(15, 23, 42, 0.06),
-    inset 0 1px 0.5px rgba(255, 255, 255, 0.95);
-  padding-top: 0;
-}
 [data-skin="liquid-math"] .top-nav .inner {
   height: 48px;
   padding: 0 1.1rem;
@@ -969,7 +891,7 @@ a:hover { color: var(--accent-hover); }
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), inset 0 1px 0.5px #fff;
   color: var(--fg);
 }
-/* ── Page layout ── */
+/* ── 页面骨架：一屏一页，同时只有一页在场 ───────────────────────── */
 #app { max-width: var(--max-w); margin: 0 auto; }
 /* Top and bottom are set against what is actually there, rather than a round
    number: 12px of air above the import row, and below, just enough to clear the
@@ -1023,7 +945,10 @@ a:hover { color: var(--accent-hover); }
     radial-gradient(ellipse at 15% 15%, rgba(0, 122, 255, 0.04) 0%, transparent 50%),
     radial-gradient(ellipse at 85% 85%, rgba(88, 86, 214, 0.04) 0%, transparent 50%);
 }
-/* ── Skeleton loading ── */
+/* ── 骨架屏 ──────────────────────────────────────────────────────────
+ *
+ * 内容还没到时先摆一块和它同形的灰。比转圈好：转圈只说「在等」，骨架屏还顺带
+ * 说了「等来的东西有多大、在哪」，所以内容落位时不会跳。 */
 .skeleton {
   background: linear-gradient(90deg, var(--border-color) 25%, rgba(255,255,255,0.4) 50%, var(--border-color) 75%);
   background-size: 200% 100%;
@@ -1053,8 +978,6 @@ a:hover { color: var(--accent-hover); }
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
   font-weight: 600;
 }
-.set-label { display: block; font-size: 0.8rem; font-weight: 500; color: var(--muted); margin: 0.85rem 0 0.35rem; }
-.set-label:first-child { margin-top: 0; }
 .set-input, .set-select {
   width: 100%; padding: 0.65rem 0.85rem; border: var(--glass-border-subtle);
   border-radius: 10px; background: var(--bg); color: var(--fg);
@@ -1148,19 +1071,10 @@ a:hover { color: var(--accent-hover); }
 .set-section { margin-bottom: 1rem; }
 .set-section:last-child { margin-bottom: 0; }
 .set-section-title { font-size: 0.82rem; font-weight: 500; color: var(--muted); margin-bottom: 0.5rem; }
-.set-radio-group { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-.set-radio {
-  display: inline-flex; align-items: center; justify-content: center;
-  padding: 0.5rem 0.95rem; border: var(--glass-border-subtle);
-  border-radius: 10px; font-size: 0.85rem; font-weight: 500; cursor: pointer; color: var(--fg);
-  background: var(--glass-bg-subtle); transition: all var(--transition-fast); user-select: none;
-}
-.set-radio input { display: none; }
 .set-radio.active {
   background: var(--accent); color: #fff; border-color: var(--accent);
   box-shadow: 0 2px 8px rgba(15, 23, 42, 0.135); font-weight: 600;
 }
-.set-radio:active { transform: scale(0.96); }
 
 /* ── Settings toggle switch (iOS Switch) ── */
 .set-toggle {
@@ -1214,207 +1128,198 @@ a:hover { color: var(--accent-hover); }
   to   { opacity: 1; transform: translate(-50%,-50%) scale(1); }
 }
 
-/* ── Model Management UI ── */
-.model-section { margin-bottom: 1rem; padding: 0.6rem; border: 1px solid var(--border-color); border-radius: 8px; }
-.model-section h4 { margin: 0 0 0.5rem; font-size: 0.85rem; }
-.source-item { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0; border-bottom: 1px solid var(--border-color); font-size: 0.82rem; }
-.source-item:last-child { border-bottom: none; }
-.model-category { margin-bottom: 0.8rem; }
-.cat-header { display: flex; justify-content: space-between; align-items: center; font-weight: 600; font-size: 0.82rem; }
-.cat-status { display: inline-flex; align-items: center; }
-.cat-status.installed { color: #22c55e; }
-.cat-status.not-installed { color: #ef4444; }
-.variant-item { display: flex; justify-content: space-between; align-items: center; padding: 0.3rem 0 0.3rem 1rem; font-size: 0.8rem; }
-.variant-item.active { background: var(--accent-color-light, rgba(0,120,255,0.1)); border-radius: 4px; }
-.variant-item label { display: flex; align-items: center; gap: 0.4rem; cursor: pointer; flex: 1; min-width: 0; }
-.variant-item label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.btn-download-variant, .btn-delete-variant, .btn-remove-source { font-size: 0.72rem; padding: 0.25rem 0.6rem; min-width: 3.2em; text-align: center; border: 1px solid var(--border-color); border-radius: 4px; background: var(--card-bg); color: var(--fg); cursor: pointer; flex-shrink: 0; }
-.btn-download-variant { background: var(--accent); color: #fff; border-color: var(--accent); }
-.btn-download-variant:active { opacity: 0.8; }
-.btn-delete-variant { border-color: #ef4444; color: #ef4444; }
-.btn-delete-variant:active { background: #ef4444; color: #fff; }
-.add-source-form { display: flex; gap: 0.4rem; margin-top: 0.5rem; }
-.add-source-form input { flex: 1; font-size: 0.82rem; }
-#btn-import-zip, #btn-import-file, #btn-refresh-manifests { width: 100%; margin-top: 0.3rem; font-size: 0.82rem; padding: 0.5rem; border: 1px solid var(--border-color); border-radius: 6px; background: var(--card-bg); color: var(--fg); cursor: pointer; }
-#btn-import-zip:hover, #btn-import-file:hover, #btn-refresh-manifests:hover { background: var(--accent); color: #fff; }
-
-/* ── Welcome Dialog ── */
-.welcome-overlay {
-  position: fixed; inset: 0; z-index: 1000;
-  display: flex; justify-content: center; align-items: center;
-  background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(4px);
-}
-.welcome-dialog {
-  background: var(--card-bg); border-radius: 16px; padding: 2rem 1.5rem;
-  max-width: 360px; width: 90%; text-align: center;
-  box-shadow: 0 16px 48px rgba(0,0,0,0.2);
-}
-.welcome-icon { color: var(--accent); margin-bottom: 1rem; }
-.welcome-dialog h2 { margin: 0 0 0.8rem; font-size: 1.2rem; color: var(--fg); }
-.welcome-desc { margin: 0.3rem 0; font-size: 0.85rem; color: var(--muted); line-height: 1.5; }
-.welcome-list { text-align: left; margin: 0.8rem auto; max-width: 280px; font-size: 0.82rem; color: var(--fg); }
-.welcome-list li { margin: 0.3rem 0; }
-.welcome-actions { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 1.2rem; }
-.welcome-btn {
-  width: 100%; padding: 0.7rem; border-radius: 10px; border: none;
-  font-size: 0.9rem; font-weight: 500; cursor: pointer; transition: all 0.15s;
-}
-.welcome-btn.primary { background: var(--accent); color: #fff; }
-.welcome-btn.primary:active { transform: scale(0.97); }
-.welcome-btn.secondary { background: var(--card-bg); color: var(--fg); border: 1px solid var(--border-color); }
-.welcome-btn.ghost { background: transparent; color: var(--muted); }
-.welcome-progress { margin-top: 1rem; }
-.welcome-progress-bar {
-  height: 6px; border-radius: 3px; background: var(--border-color);
-  overflow: hidden; margin-bottom: 0.4rem;
-}
-.welcome-progress-fill {
-  height: 100%; width: 0%; border-radius: 3px; background: var(--accent);
-  transition: width 0.3s ease;
-}
-.welcome-progress-text { font-size: 0.78rem; color: var(--muted); }
-
-/* ── Modal overlay (import/progress dialogs) ── */
-.modal-overlay {
-  position: fixed; inset: 0; z-index: 2000;
-  display: flex; justify-content: center; align-items: center;
-  background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(4px);
-}
-.modal-content {
-  background: var(--card-bg); border-radius: 14px; padding: 1.5rem;
-  max-width: 340px; width: 85%; text-align: center;
-  box-shadow: 0 12px 40px rgba(0,0,0,0.25);
-}
-.modal-content h3 { margin: 0 0 0.8rem; font-size: 1rem; color: var(--fg); }
-.modal-content p { margin: 0.5rem 0; font-size: 0.85rem; color: var(--muted); }
-.modal-content label { display: block; font-size: 0.78rem; color: var(--muted); margin: 0.6rem 0 0.2rem; text-align: left; }
-.modal-content input, .modal-content select {
-  width: 100%; padding: 0.55rem 0.7rem; border: 1px solid var(--border-color);
-  border-radius: 8px; background: var(--bg); color: var(--fg); font-size: 0.85rem;
-}
-.modal-content .modal-actions { display: flex; gap: 0.5rem; margin-top: 1rem; }
-.modal-content .modal-actions button { flex: 1; }
-.modal-status { font-size: 0.85rem; color: var(--muted); margin: 0.5rem 0; }
-.modal-status.success { color: #22c55e; }
-.modal-status.error { color: #ef4444; }
-.modal-progress { margin: 0.8rem 0; }
-.modal-progress-bar { height: 5px; border-radius: 3px; background: var(--border-color); overflow: hidden; }
-.modal-progress-fill { height: 100%; width: 0%; border-radius: 3px; background: var(--accent); transition: width 0.3s; }
-
-/* ── Save success toast (bottom popup) ── */
+/* ── 存好了的那一句 ─────────────────────────────────────────────── */
+/* 保存提示。
+ *
+ * 一句「存好了」，不该盖住任何东西，也不该接受点击——所以它是胶囊形、贴着底栏
+ * 上方、pointer-events 关掉的。进场从下往上推一小段，退场往上抽：方向不同，人
+ * 一眼能分出是来了还是走了。 */
 .save-toast {
-  position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
-  z-index: 10001; background: var(--accent); color: #fff;
-  border-radius: 10px; padding: 12px 24px; font-size: 0.9rem;
-  white-space: nowrap; box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-  opacity: 0; transition: opacity 0.3s ease, transform 0.3s ease;
-  transform: translateX(-50%) translateY(12px);
+  position: fixed;
+  left: 50%;
+  bottom: calc(88px + var(--safe-b));
+  z-index: 10001;
+  padding: 0.7rem 1.4rem;
+  border-radius: var(--pill-radius);
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.88rem;
+  font-weight: 500;
+  white-space: nowrap;
+  box-shadow: var(--card-shadow);
   pointer-events: none;
-}
-.save-toast.save-toast-show {
-  opacity: 1; transform: translateX(-50%) translateY(0);
-}
-.save-toast.save-toast-hide {
-  opacity: 0; transform: translateX(-50%) translateY(-8px);
+  opacity: 0;
+  transform: translate(-50%, 10px);
+  transition: opacity var(--transition-normal), transform var(--transition-normal);
 }
 
-/* ── Update modal ── */
-.update-overlay {
-  position: fixed; inset: 0; z-index: 10000;
-  background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center;
-  padding: 16px; animation: overlayIn 0.2s ease;
+.save-toast.save-toast-show {
+  opacity: 1;
+  transform: translate(-50%, 0);
 }
+
+.save-toast.save-toast-hide {
+  opacity: 0;
+  transform: translate(-50%, -6px);
+}
+
+/* ── 更新对话框 ─────────────────────────────────────────────────── */
+/* 更新对话框。
+ *
+ * 这是整个 app 里唯一一个会挡住全部内容的东西，所以它的遮罩比别处的深一档——
+ * 浅一点会让人以为下面还点得动。 */
+.update-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(28, 28, 30, 0.42);
+  animation: overlayIn 0.2s var(--spring-ease);
+}
+/* 卡片是不透明的白，不是玻璃：底下压着的是整屏内容，透出来就读不成字了。 */
 .update-dialog {
-  background: var(--card-bg); border: 1px solid var(--border-color);
-  border-radius: 16px; max-width: 440px; width: 100%; max-height: 80vh;
-  display: flex; flex-direction: column;
-  box-shadow: 0 12px 48px rgba(0,0,0,0.22);
-  animation: dialogIn 0.25s ease;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 27rem;
+  max-height: 80vh;
+  border-radius: var(--card-radius);
+  border: var(--glass-border-subtle);
+  background: #fff;
+  box-shadow: 0 16px 48px -8px rgba(0, 0, 0, 0.22), var(--card-shadow);
+  animation: dialogIn 0.26s var(--spring-ease);
 }
 .update-dialog-header {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 20px 24px 0; flex-shrink: 0;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.25rem 1.5rem 0;
 }
-.update-dialog-header h3 { margin: 0; font-size: 1.05rem; color: var(--fg); }
+.update-dialog-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+/* 关闭是一个字符，不是一枚按钮：给它 44px 的触达面积，但不给它边框和底色——
+   这一屏里唯一要人点的是「现在更新」。 */
 .update-dialog-close {
-  background: none; border: none; font-size: 1.4rem; cursor: pointer;
-  color: var(--muted); line-height: 1; padding: 0 4px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
 }
+/* 更新日志是别人写好的纯文本，换行有意义，所以 pre-wrap。 */
 .update-dialog-body {
-  padding: 16px 24px; overflow-y: auto; flex: 1;
-  font-size: 0.85rem; color: var(--muted); line-height: 1.6;
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem 1.5rem;
+  color: var(--muted);
+  font-size: 0.87rem;
+  line-height: 1.62;
   white-space: pre-wrap;
 }
 .update-dialog-footer {
-  display: flex; gap: 10px; justify-content: flex-end;
-  padding: 16px 24px 20px; flex-shrink: 0;
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.6rem;
+  justify-content: flex-end;
+  padding: 1rem 1.5rem 1.25rem;
 }
-.update-dialog-footer .ocr-btn { min-width: 90px; }
+.update-dialog-footer .ocr-btn { min-width: 5.5rem; }
 @keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes dialogIn { from { opacity: 0; transform: scale(0.93) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+@keyframes dialogIn {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
 
-/* ═══════════════════════════════════════════
-   Splash / Loading Screen
-   ═══════════════════════════════════════════ */
+/* ── 启动图 ──────────────────────────────────────────────────────────
+ *
+ * 原生那张启动屏（values-v31/styles.xml）交接到这里。两边同底色、同一个记号，
+ * 所以交接的那一下人看不出来——改这里的底色时，那边也要跟着改。 */
 .splash {
   position: fixed; inset: 0; z-index: 10000;
   display: flex; align-items: center; justify-content: center;
   background: var(--bg);
-  transition: opacity 0.5s ease, visibility 0.5s ease;
+  transition: opacity 0.32s ease, visibility 0.32s ease;
 }
-.splash--hidden {
-  opacity: 0; visibility: hidden; pointer-events: none;
+
+/* 收场。
+ *
+ * 类名得和 app.js 里加的那个对上。原来对不上——样式表写的是 .splash--hidden，
+ * 而 app.js 加的是 is-gone，于是这条过渡一次都没跑过：启动图不是淡出的，是在
+ * 400ms 后凭空消失的。改成按它真正用的名字来，时长压到 0.32s，比 app.js 里那个
+ * 400ms 的移除短一点——先淡完再移除，不会在半路被摘掉。 */
+.splash.is-gone {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 .splash-inner {
-  text-align: center; max-width: 360px; width: 90vw;
+  width: min(90vw, 22rem);
+  text-align: center;
 }
+/* 图标不动。
+ *
+ * 原来它两秒一次地放大缩小。现在原生启动屏交接过来的是一个静止的图标，接上之后
+ * 它突然开始呼吸，那道接缝看得见；而旁边就有一条真正的进度条和百分比——一个不
+ * 提供信息的动画在和提供信息的那个抢注意力。 */
 .splash-icon {
-  margin-bottom: 1.2rem;
-  animation: splashPulse 2s ease-in-out infinite;
-}
-@keyframes splashPulse {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.06); }
+  margin-bottom: 1.15rem;
 }
 .splash-title {
-  font-size: 1.8rem; font-weight: 700; color: var(--fg);
-  letter-spacing: -0.02em; margin-bottom: 0.2rem;
-}
-.splash-subtitle {
-  font-size: 0.95rem; color: var(--muted); margin-bottom: 2rem;
+  margin-bottom: 0.2rem;
+  color: var(--fg);
+  font-size: 1.75rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
 }
 .splash-progress-wrap {
-  margin-bottom: 1.2rem;
+  margin-bottom: 1.15rem;
 }
+
+/* 轨道原来用的是 --border-color，那是一条发丝线的颜色，撑到 4px 高就几乎看不见
+   ——进度走到一半，人分不出剩下那半在哪结束。 */
 .splash-progress-track {
-  width: 100%; height: 4px; border-radius: 2px;
-  background: var(--border-color); overflow: hidden; margin-bottom: 0.6rem;
+  overflow: hidden;
+  width: 100%;
+  height: 4px;
+  margin-bottom: 0.55rem;
+  border-radius: var(--pill-radius);
+  background: rgba(60, 60, 67, 0.14);
 }
+
 .splash-progress-fill {
-  height: 100%; width: 0%; border-radius: 2px;
+  width: 0;
+  height: 100%;
+  border-radius: var(--pill-radius);
   background: var(--accent);
-  transition: width 0.3s ease;
+  transition: width var(--transition-normal);
 }
+
+/* 留出一行的高度：这句话在「正在准备…」和后面几句之间换，没有预留的话整组会
+   跟着上下跳。 */
 .splash-progress-label {
-  font-size: 0.8rem; color: var(--muted); min-height: 1.2em;
+  min-height: 1.2em;
+  color: var(--muted);
+  font-size: 0.82rem;
 }
+
 .splash-progress-pct {
-  font-size: 0.75rem; color: var(--muted); margin-top: 0.15rem;
-}
-.splash-models {
-  display: flex; flex-wrap: wrap; gap: 0.35rem; justify-content: center;
-  margin-top: 0.8rem;
-}
-.splash-model-tag {
-  font-size: 0.7rem; padding: 0.25rem 0.6rem; border-radius: 10px;
-  background: var(--border-color); color: var(--muted);
-  transition: background 0.3s, color 0.3s;
-}
-.splash-model-tag--loaded {
-  background: var(--accent); color: #fff;
-}
-.splash-model-tag--error {
-  background: #fecaca; color: #dc2626;
+  margin-top: 0.15rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
 }
 /* ── Install Banner (Top-Right Floating Toast) ── */
 .install-banner {
@@ -1462,7 +1367,6 @@ a:hover { color: var(--accent-hover); }
   line-height: 1;
 }
 
-
 /* ── 设置页与加载状态的几件共用控件 ─────────────────────────────────────
  *
  * 这些原来住在 ocr.css 里。那个文件是上游留下的识别界面样式表——拍照、裁切、
@@ -1503,7 +1407,6 @@ a:hover { color: var(--accent-hover); }
 .progress-track { width: 100%; height: 8px; background: var(--glass-bg-subtle); border-radius: var(--pill-radius); overflow: hidden; border: 0.5px solid var(--border-color); }
 
 .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), #5856D6); border-radius: var(--pill-radius); transition: width 0.3s var(--spring-ease); width: 0%; }
-
 
 .ocr-btn {
   flex: 1; text-align: center;

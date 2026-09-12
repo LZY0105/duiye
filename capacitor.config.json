@@ -2,6 +2,7 @@
   "appId": "com.latexsnipper.app",
   "appName": "LaTeXSnipper",
   "webDir": "dist",
+  "backgroundColor": "#f2f3f7",
   "server": {
     "androidScheme": "http",
     "iosScheme": "http",
