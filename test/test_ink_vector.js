@@ -21,6 +21,7 @@ import {
   createStroke,
   deserializeStroke,
   isDrawable,
+  nearPolygon,
   pointInPolygon,
   recomputeBounds,
   serializeStroke,
@@ -1203,7 +1204,50 @@ check('the surface keeps the loop and draws it, rather than a box', () => {
   ok(code.includes('selectionLoop'), 'the loop is kept after it closes');
   ok(!/strokeRect/.test(code), 'no bounding-box marquee survives');
   ok(code.includes('transformPolygon'), 'the outline is transformed with the ink');
-  ok(code.includes('pointInPolygon'), 'a press inside is tested against the loop');
+  ok(code.includes('nearPolygon'), 'a press is tested against the loop, not a box');
+});
+
+check('the page that turns away takes its handwriting with it', () => {
+  // The turn photographs the page into a sheet and folds the photograph. It
+  // used to photograph the PDF canvas alone, and the ink is a separate surface
+  // — so a worked page turned away blank of every stroke on it, for the whole
+  // length of the animation. Both canvases go onto the sheet now.
+  const code = $code('src/pdf/pdf-pane.js');
+  const leaf = code.slice(code.indexOf('_makeLeaf('), code.indexOf('_grabAnchor('));
+  ok(/drawImage\(source, 0, 0\)/.test(leaf), 'the printed page is photographed');
+  ok(/drawImage\(\s*ink,/.test(leaf), 'and the ink surface with it');
+  ok(/ink\.width \/ box\.width/.test(leaf),
+    'the page-sized region of a viewport-sized ink surface is what gets cut out');
+  ok(/drawImage\(source[\s\S]*drawImage\(\s*ink/.test(leaf),
+    'the ink goes on top of the printed page, not under it');
+});
+
+check('a finished lasso can be grabbed from just outside its line', () => {
+  // A freehand loop is drawn tight against the ink, so the region strictly
+  // inside it is a sliver. Without a margin a stylus landing a few pixels
+  // proud of the line throws the selection away and starts a new one.
+  const ring = [
+    { x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 40 }, { x: 0, y: 40 },
+  ];
+  assert.equal(nearPolygon(20, 20, ring, 6), true, 'the middle is still a grab');
+  assert.equal(nearPolygon(43, 20, ring, 6), true, 'and so is three units outside the edge');
+  assert.equal(nearPolygon(43, 20, ring, 0), false, 'with no margin it is a miss, as before');
+  assert.equal(nearPolygon(60, 20, ring, 6), false, 'well clear of it starts a new lasso');
+
+  // The margin must not turn the loop into its bounding box: the empty corner
+  // of an L is far from every edge and still belongs to the page.
+  const L = [
+    { x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 80 },
+    { x: 80, y: 80 }, { x: 80, y: 100 }, { x: 0, y: 100 },
+  ];
+  assert.equal(nearPolygon(10, 50, L, 12), true, 'the upright of the L is inside');
+  assert.equal(nearPolygon(70, 20, L, 12), false,
+    'the empty corner of the box is still NOT a grab');
+  assert.equal(nearPolygon(28, 40, L, 12), true,
+    'but just off the upright, where the ink is, still is');
+
+  assert.equal(nearPolygon(1, 1, [{ x: 0, y: 0 }, { x: 1, y: 1 }], 50), false,
+    'two points are a line, not a loop, at any margin');
 });
 
 console.log('\n═══════════════════════════════════════════════════════════════');

@@ -13,10 +13,12 @@ import { FIT_MODES } from './pdf-view-state.js';
 import {
   ORIENTATIONS,
   SLOTS,
-  assignDocument,
+  activeEntryIn,
   clearFocus,
   closeSlot,
   createWorkspaceState,
+  deckFor,
+  openInSlot,
   orientationForViewport,
   otherSlot,
   paneFractions,
@@ -29,7 +31,75 @@ import {
   MAX_RATIO,
   CLOSE_THRESHOLD,
 } from './workspace-state.js';
-import { restoreSession, saveSession } from './document-session.js';
+import {
+  ENTRY_KINDS,
+  activeEntry,
+  deckLength,
+  entryAtOffset,
+  findByResource,
+  findEntry,
+} from './deck-state.js';
+import {
+  activateInSlot,
+  collapseSlot,
+  cycleInSlot,
+  isCollapsed,
+  moveEntryBetweenSlots,
+  removeFromSlot,
+  restoreCollapsed,
+  slotsWithResource,
+} from './workspace-state.js';
+import { DeckStrip, deckStripHtml } from './deck-strip.js';
+import { PagePanel } from './page-panel.js';
+import {
+  LABEL_MAX, hasBookmark, renameBookmark, toggleBookmark,
+} from './bookmark-state.js';
+import { forgetBookmarks, loadBookmarks, saveBookmarks } from './bookmark-store.js';
+import {
+  createPanelState,
+  selectTab as panelSelectTab,
+  serializePanelState,
+  setHeight as panelSetHeight,
+} from './panel-state.js';
+
+/** 面板偏好：显示哪一面、占这一栏多高。 */
+const PANEL_PREFS_KEY = 'ls_pdf_panel';
+
+function readPanelPrefs() {
+  try {
+    return JSON.parse(localStorage.getItem(PANEL_PREFS_KEY) || '{}');
+  } catch (_) {
+    return {};
+  }
+}
+import { openOrganizer } from './deck-organizer.js';
+import { answerFor, forgetPairsFor, rememberPair } from './answer-association.js';
+import {
+  chooseDestination,
+  confirmDestructive,
+  createScratchpadDialog,
+  explainRefusal,
+  moveEntryDialog,
+  promptText,
+} from './deck-dialogs.js';
+import { ScratchPane, SAVE_STATES } from '../scratch/scratch-pane.js';
+import {
+  createScratchpad,
+  deleteScratchpad,
+  getScratchpad,
+  nextScratchpadName,
+  readNewPadStyle,
+} from '../scratch/scratch-store.js';
+import { openScratchStylePanel } from '../scratch/scratch-style-panel.js';
+import { t } from '../core/i18n.js';
+import {
+  recallDocView,
+  rememberEntryView,
+  rememberDocView,
+  restoreSession,
+  saveSession,
+  viewForEntry,
+} from './document-session.js';
 import { DOC_ROLES, getDocumentMeta, openStoredDocument } from './pdf-library.js';
 import {
   indexAnswerDocument,
@@ -42,7 +112,8 @@ import { alignOutlines, matchPage } from './question-matcher.js';
 import { verifyPair } from './pair-verifier.js';
 import { PAIR_STATUS } from './decision.js';
 import { renderAnswerMatches, renderAnswerNotice, renderAnswerLoading } from './answer-panel.js';
-import { InkToolbar } from '../ink/ink-toolbar.js';
+import { InkToolbar, overlaps } from '../ink/ink-toolbar.js';
+import { CORNERS } from '../ink/toolbar-state.js';
 import Logger from '../core/logger.js';
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -56,6 +127,24 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
  */
 const HEADER_LADDER = ['is-snug', 'is-snugger'];
 
+/** The transitions that change how much room the slot toolbar's content needs. */
+const WIDTH_IN_FLIGHT = new Set([
+  'max-width', 'width',
+  'margin-inline-start', 'margin-inline-end', 'margin-left', 'margin-right',
+]);
+
+/**
+ * Is anything inside this bar still changing width?
+ *
+ * Where getAnimations is missing there are no CSS transitions to be mid-flight
+ * either, so "no" is the true answer rather than a stand-in for one.
+ */
+function barIsSettling(bar) {
+  const running = bar.getAnimations?.({ subtree: true }) || [];
+  return running.some((a) => a.playState === 'running'
+    && WIDTH_IN_FLIGHT.has(a.transitionProperty));
+}
+
 /**
  * How far a press on the divider may wander and still count as a tap.
  *
@@ -68,6 +157,15 @@ const GRIP_REACH = 22;
 
 /** How far the swap control travels before a release commits the swap. */
 const SWAP_THRESHOLD = 34;
+
+/**
+ * How long the reader must be still before their place in each book is filed.
+ *
+ * Long enough that a pan or a pinch writes it once at the end rather than on
+ * every frame; short enough that anything short of pulling the battery out has
+ * already been recorded. Closing a document does not wait for it.
+ */
+const DOC_VIEW_SETTLE = 400;
 
 /** Honour the OS reduced-motion setting for the swap choreography. */
 function prefersReducedMotion() {
@@ -114,10 +212,52 @@ export class PdfWorkspace {
     this._pdfLibrary = {
       getDocumentMeta: services.getDocumentMeta || getDocumentMeta,
       openStoredDocument: services.openStoredDocument || openStoredDocument,
+      // The scratch store goes through the same door, so the pad half of a
+      // switch — including its failure paths — can be driven without a
+      // database.
+      getScratchpad: services.getScratchpad || getScratchpad,
     };
     this.state = createWorkspaceState();
     this.panes = {};
+    /**
+     * The scratch pane for each slot, built the first time a pad is shown there.
+     *
+     * A slot holds a PdfPane and, once it needs one, a ScratchPane; only one is
+     * ever loaded. An unloaded pane holds no document, no ink layer and two
+     * 1x1 canvases, so this does not put a third renderer on the budget — the
+     * limit is two LOADED views, and that is what `_showEntry` enforces.
+     */
+    this.scratchPanes = {};
+    this.strips = {};
+    /** Pad records currently on screen, by slot — for the strip and the menus. */
+    this.pads = {};
     this.restoredViews = {};
+    /**
+     * The slot mid-handoff, if any.
+     *
+     * One transaction per pane, and a later request replaces the pending target
+     * rather than queueing behind it: rapid taps on Next must land on the entry
+     * the user last asked for, not run an animation chain through every one they
+     * passed.
+     */
+    this._switching = { [SLOTS.PRIMARY]: null, [SLOTS.SECONDARY]: null };
+    /**
+     * 这一栏的窗格正在换内容。
+     *
+     * 换一本书是这么走的：先记下走掉的那一份停在哪、再把新的装进窗格、最后才
+     * 提交「这一栏现在显示的是新的这一份」。中间那一段里，窗格装的已经是新书，
+     * 而 _shown 还指着旧的——于是那一刻任何人来问「这一栏在显示谁」，得到的都
+     * 是旧的那一份的名字，配上新书的页码。
+     *
+     * 而那一刻真的有人在问：pdf.js 装载途中会发出状态变化，那条链上挂着落盘。
+     * 真机上量到的后果是新书的页码被写进旧书名下，旧书从此每次打开都落在别人
+     * 的页上；下一轮再换回来，又把这个错抄给第三本。
+     *
+     * 正确答案不是「算哪一份」，而是「这一刻不算」：窗格里装的既不是走的那一
+     * 份，也还不算来的那一份，没有任何一个条目该为它背这个页码。
+     */
+    this._paneInFlux = { [SLOTS.PRIMARY]: false, [SLOTS.SECONDARY]: false };
+    this._pending = { [SLOTS.PRIMARY]: null, [SLOTS.SECONDARY]: null };
     /** Which pane the shared toolbar currently applies to (spec §11.2). */
     this.activeSlot = SLOTS.PRIMARY;
     /** The document and page captured when the Agent dialog was opened. */
@@ -125,28 +265,49 @@ export class PdfWorkspace {
     // Per slot, the width the slot toolbar wanted at each rung of HEADER_LADDER,
     // so _syncPaneHeaderFit knows how much room it takes to put a rung back.
     this._headerWanted = {};
-    /** Per-pane "has annotations that are not written yet". */
-    this._inkDirty = { [SLOTS.PRIMARY]: false, [SLOTS.SECONDARY]: false };
     /** Per-slot open tokens; a superseded open must not overwrite a newer one. */
     this._openTokens = { [SLOTS.PRIMARY]: 0, [SLOTS.SECONDARY]: 0 };
     /** Resolved bookmark data; DOM nodes are built only when the panel opens. */
     this._outlines = { [SLOTS.PRIMARY]: null, [SLOTS.SECONDARY]: null };
+    /** 目录 / 缩略图面板，每栏一个；两栏共用一份「显示哪一面、占多高」的偏好。 */
+    this.panels = {};
+    this._pageShape = { [SLOTS.PRIMARY]: null, [SLOTS.SECONDARY]: null };
+    this._panelState = createPanelState(readPanelPrefs());
+    this._panelSave = 0;
     this._buildDom();
     this._bindDivider();
     this._bindSwap();
     this._bindOrientation();
 
+    // A press anywhere else puts an open ⋯ menu away. One listener for both
+    // slots, in the capture phase so it is seen before the press reaches
+    // whatever it landed on, and taken off again in destroy().
+    this._onDocumentPointerDown = (e) => {
+      const t = e.target;
+      if (t?.closest?.('[data-role="slot-menu"], [data-role="slot-more"]')) return;
+      this._closeSlotMenus();
+    };
+    document.addEventListener('pointerdown', this._onDocumentPointerDown, true);
+
     // One shared floating toolbar, applied to the explicitly active Ink
     // surface. It is mounted on the workspace root, so it floats over both
     // panes without belonging to either one's layout.
     this.toolbar = new InkToolbar(this.root, {
-      getSurface: () => this.panes[this.activeSlot]?.ink || null,
+      // Whichever surface is actually ON SCREEN in the active slot — a book's
+      // or a pad's.
+      //
+      // This used to be `this.panes[slot].ink`, which is only ever the PDF
+      // pane's. On a scratchpad every tool, colour and width the reader chose
+      // was pushed to a surface nobody was drawing on, while the pad kept the
+      // one tool its constructor gave it — so on paper the toolbar did nothing
+      // at all and every stroke came out the same.
+      getSurface: () => this._loadedViewIn(this.activeSlot)?.ink || null,
       // Moving or docking the bar can carry it over the other column, and the
       // column it lands on is what it now has to fit inside.
       onChange: () => this._syncToolbarSize(paneFractions(this.state)),
       onClearInk: () => {
-        // Scoped to the active pane's ink only — never the PDF (§6.2).
-        this.panes[this.activeSlot]?.ink.clear();
+        // Scoped to the surface on screen — never the PDF underneath it (§6.2).
+        this._loadedViewIn(this.activeSlot)?.ink.clear();
         this._syncSlotChrome(this.activeSlot);
       },
     });
@@ -192,9 +353,14 @@ export class PdfWorkspace {
           </div>
         </div>
       </div>
+      <!-- A collapsed pane keeps a way back that is worth aiming at, and says
+           how much is waiting behind it. Collapse is not close: the deck is
+           untouched and every entry is still in it. -->
+      <button type="button" class="pdf-ws-restore" data-role="restore" hidden></button>
     `;
 
     this.elDivider = this.root.querySelector('[data-role="divider"]');
+    this.elRestore = this.root.querySelector('[data-role="restore"]');
     this.elSwap = this.root.querySelector('[data-role="swap"]');
     this.elGrip = this.root.querySelector('[data-role="grip"]');
     this.elRatioBadge = this.root.querySelector('[data-role="ratio-badge"]');
@@ -215,19 +381,102 @@ export class PdfWorkspace {
       document.querySelector('[data-role="file-answer"]')?.click();
     });
 
+    this.elRestore?.addEventListener('click', () => this.restorePane());
+
     for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
       const host = this.elSlots[slot].querySelector('[data-role="pane"]');
       this.panes[slot] = new PdfPane(host, {
         onStateChange: () => { this._syncSlotChrome(slot); this._persist(); },
         onFocus: () => this._markActive(slot),
         onInkHistoryChange: () => this._syncSlotChrome(slot),
-        onDirtyChange: (dirty) => {
-          this._inkDirty[slot] = dirty;
+      });
+      this.strips[slot] = new DeckStrip(this.elSlots[slot], {
+        getDeck: () => deckFor(this.state, slot),
+        describe: (entry) => this.describeEntry(slot, entry),
+        getPaper: () => this._paperOf(slot),
+        isBusy: () => !!this._switching[slot],
+        onCycle: (step) => this.cycleSlot(slot, step),
+        onActivate: (entryId) => this.showEntry(slot, entryId),
+        onRemove: (entryId) => this.removeEntry(slot, entryId),
+        onOrganize: (entryId) => this.organize(slot, entryId),
+        onListOverlay: () => this._reviewToolbarConflict(),
+      });
+      this.panels[slot] = new PagePanel(this.elSlots[slot], {
+        getState: () => this._panelState,
+        onState: (change, { persist = false } = {}) => {
+          this._panelState = change({
+            selectTab: (tab) => panelSelectTab(this._panelState, tab),
+            setHeight: (h) => panelSetHeight(this._panelState, h),
+          });
+          if (persist) this._persistPanel();
+          else this._persistPanelSoon();
+        },
+        getDoc: () => this.panes[slot]?.doc || null,
+        getPageCount: () => this.panes[slot]?.doc?.numPages || 0,
+        getCurrentPage: () => this.panes[slot]?.state?.pageNumber || 1,
+        getPageSize: () => this._pageShape?.[slot] || null,
+        // Ink is filed under the resource, and the resource on screen is not
+        // always the one the deck names — see _entryOnScreen.
+        getBookmarks: () => this._bookmarksIn(slot),
+        onToggleBookmark: (page) => this._toggleBookmark(slot, page),
+        onNameBookmark: (mark) => this._nameBookmark(slot, mark),
+        getInkDocId: () => {
+          const entry = this._entryOnScreen(slot);
+          return entry?.kind === ENTRY_KINDS.PDF ? entry.resourceId : null;
+        },
+        onGoToPage: (n) => {
+          this.panes[slot].goToPage(n);
           this._syncSlotChrome(slot);
         },
+        onOpenChange: () => this._syncOverlayState(),
+        onResize: () => this._reviewToolbarConflict(),
       });
       this._bindSlotChrome(slot);
     }
+    this._watchSlotSizes();
+  }
+
+  /**
+   * Gets the floating ink bar off an open deck list — by folding it into the
+   * puck and sending it to that column's bottom corner, not by blanking it.
+   *
+   * It used to be `display: none`, and the bar simply ceased to exist for as
+   * long as the list was up. That reads as a glitch rather than as a thing
+   * moving: nothing travelled, so there was nothing to follow, and when the
+   * list closed the bar reappeared out of nowhere.
+   *
+   * Only when the two ACTUALLY overlap. The bar lives on one edge of one
+   * column; a list opening in the other column is nowhere near it, and moving
+   * it then would be the app fidgeting at the reader for no reason. So the
+   * collision is measured, not assumed.
+   *
+   * The corner is the bottom of the column the list belongs to: a conflict on
+   * the left folds into the bottom left, one on the right into the bottom
+   * right. There is deliberately no second choice. Offering the far corner as
+   * a fallback for a list long enough to reach the floor sounds thorough and
+   * is worse — it carries the bar across the divider into the column it was
+   * not serving, which is both a surprise and further to travel back from. A
+   * puck is 48px and sits above the panel; on the rare list that reaches the
+   * floor, it resting on that corner costs one row and stays predictable.
+   */
+  _yieldToolbarAround(listEl) {
+    const bar = this.toolbar;
+    if (!bar) return;
+    if (!listEl) { bar.restoreFromYield(); return; }
+    // Already stepped aside — for this list or the other column's. Either way
+    // it is small and in a corner, and moving it again would be noise.
+    if (bar.isYielded()) return;
+
+    const list = listEl.getBoundingClientRect();
+    if (!overlaps(bar.rect(), list)) return;
+
+    // Which column the panel belongs to, asked of the column itself. Guessing
+    // from the panel's own midpoint breaks the moment the divider is nowhere
+    // near the middle — and this reader keeps it at 0.37. Asking the slot also
+    // survives the two panes being swapped, where the left column is slot b.
+    const column = listEl.closest?.('.pdf-ws-slot')?.getBoundingClientRect() || list;
+    const host = this.root.getBoundingClientRect();
+    bar.yieldTo(this._cornerFor(column, host, bar.rect()));
   }
 
   // ── divider ───────────────────────────────────────────────────────────────
@@ -286,6 +535,10 @@ export class PdfWorkspace {
       // click handler above needs to tell them apart.
       this._dividerTravelled = 0;
       this._dividerFrom = { x: e.clientX, y: e.clientY };
+      // The split BEFORE the drag. By the time a drag reaches an edge the
+      // ratio is 0 or 1 — the position that MEANS collapse — and restoring to
+      // it would collapse the pane again the moment it came back.
+      this._ratioBeforeDrag = this.state.dividerRatio;
       pointerId = e.pointerId;
       // Widths at the start of the gesture, so the live preview knows what it
       // is scaling from. Recorded BEFORE the capture, and the capture is allowed
@@ -377,18 +630,21 @@ export class PdfWorkspace {
         return;
       }
 
-      // Released at an end: that side is being closed, not resized to nothing.
+      // Released at an end: that side is being COLLAPSED, not closed.
+      //
+      // This used to close the slot, which threw away the deck with it. Dragging
+      // a pane out of the way is a statement about the layout, not about the
+      // documents in it — so the deck is untouched, every entry stays where it
+      // was, and a restore control takes its place saying how many are waiting.
       const r = this.state.dividerRatio;
-      const closing = r <= CLOSE_THRESHOLD ? (this.state.swapped ? SLOTS.SECONDARY : SLOTS.PRIMARY)
+      const collapsing = r <= CLOSE_THRESHOLD ? (this.state.swapped ? SLOTS.SECONDARY : SLOTS.PRIMARY)
         : r >= 1 - CLOSE_THRESHOLD ? (this.state.swapped ? SLOTS.PRIMARY : SLOTS.SECONDARY)
           : null;
-      if (closing) {
+      if (collapsing) {
+        const restoreTo = this._ratioBeforeDrag ?? 0.5;
         this._clearPaneFitPreviews();
-        this._absorbPane(closing, () => {
-          // Put the divider back to centre first, so the surviving document
-          // does not inherit a ratio that means "closed".
-          this._setState(setDividerRatio(this.state, 0.5));
-          this.closeSlot(closing);
+        this._absorbPane(collapsing, () => {
+          this.collapsePane(collapsing, restoreTo);
         });
         return;
       }
@@ -522,6 +778,17 @@ export class PdfWorkspace {
     const until = Date.now() + duration;
     const step = () => {
       this._previewPaneFits(base);
+      // 横杠也是随栏变的，所以它也得每帧重新量。
+      //
+      // 原来整段动画里都不碰它——等动画停了再一次性排好。于是一栏从整屏收回一
+      // 半的这 380ms 里，横杠一直是溢出的：按钮被挤扁，尾部那几个顶在栏外；动
+      // 画结束的那一帧才「啪」地归位，尾部一次跳 45px。用户看到的「按钮在展开
+      // 和关闭时跳」就是这一下。
+      //
+      // 这里的宽度不是猜的：此刻栏真的就这么宽，量得准。每帧只降一级，跟拖分隔
+      // 线那条路一样便宜，而 380ms 有二十多帧，两级梯子绰绰有余。动画收尾时
+      // _layout() 仍会整梯子核一遍，所以这里量偏了也有人兜底。
+      this._syncPaneHeaderFit();
       this._trackFrame = Date.now() < until ? requestAnimationFrame(step) : 0;
     };
     this._trackFrame = requestAnimationFrame(step);
@@ -540,6 +807,8 @@ export class PdfWorkspace {
     clearTimeout(this._animTimer);
     this._animTimer = setTimeout(() => {
       this.root.classList.remove('is-animating');
+      this._layout();
+      this._settleHeaderFit();
       this._stopTrackingPaneFits();
       this._resizePanes();
       this._persist();
@@ -554,6 +823,8 @@ export class PdfWorkspace {
     clearTimeout(this._animTimer);
     this._animTimer = setTimeout(() => {
       this.root.classList.remove('is-animating');
+      // Now that nothing is transitioning, a pane at zero may leave the flow.
+      this._layout();
       this._stopTrackingPaneFits();
       this._resizePanes();
       this._persist();
@@ -782,15 +1053,78 @@ export class PdfWorkspace {
     // that has been torn down — or a stand-in supplied by a test — has nothing
     // to resize. A refit is an optimisation of what is on screen, never a
     // precondition for the state change that triggered it.
-    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) this.panes[slot]?.resize?.();
+    //
+    // BOTH kinds of pane. This only ever refitted the book panes, so a pad
+    // whose column changed size was never told: entering focus took the column
+    // from half the workspace to all of it and the pad went on drawing itself
+    // at the old width, leaving paper that stopped halfway and a blank strip
+    // beside it. It came right the moment you panned — because panning is the
+    // one thing that made the pad re-read its own size — which is why it looked
+    // like the pad "needed to be moved once to load".
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+      this.panes[slot]?.resize?.();
+      this.scratchPanes[slot]?.resize?.();
+    }
+  }
+
+  /**
+   * Keeps both panes fitted to their column, for the whole of every change.
+   *
+   * A one-shot refit after a state change measures the column before it has
+   * finished becoming its new size: `flex-basis` is transitioned over 360ms,
+   * so the value read on the frame of the change is the OLD one. Every source
+   * of a size change has the same problem — focus, collapse, the divider being
+   * dragged, the window rotating — and an observer answers all of them without
+   * anyone having to remember to.
+   */
+  _watchSlotSizes() {
+    if (typeof ResizeObserver !== 'function') return;
+    this._sizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const slot = entry.target.dataset.slot;
+        if (!slot) continue;
+        this.panes[slot]?.resize?.();
+        this.scratchPanes[slot]?.resize?.();
+      }
+      // The bar is sized against its column too, and a column can change size
+      // without any state change at all — a rotation, the window resizing.
+      if (!this.root.classList.contains('is-animating') && !this._dividerDragging) {
+        this._settleHeaderFit();
+        // A column can change size with no state change at all — a rotation,
+        // the window resizing — and that moves what covers what.
+        this._reviewToolbarConflict();
+      }
+    });
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+      const el = this.elSlots[slot];
+      if (el) this._sizeObserver.observe(el);
+    }
   }
 
   // ── state → DOM ───────────────────────────────────────────────────────────
 
   _setState(next) {
     if (next === this.state) return;
+    const wasEmpty = this.isEmpty();
     this.state = next;
     this._layout();
+    // 桌上空了就该回到书架。
+    //
+    // 关掉最后一份文件之后留在原地，人看到的是两块空白和一行「还没有打开任何
+    // 文档」——而他接下来必然要做的那件事（挑下一本）的入口，藏在横杠上一个叫
+    // 「文档库」的按钮里。空工作区没有别的用途，所以它直接让位。
+    //
+    // 只在「从有到无」这一次叫，不是每次状态变化都叫：否则空着的时候每动一下
+    // 都会把书架再开一遍，人连关都关不掉。
+    if (!wasEmpty && this.isEmpty()) {
+      try { this.onEmpty?.(); } catch (_) { /* 这只是一个提议，出错不该带垮换页 */ }
+    }
+  }
+
+  /** 两边都没有东西——不是「没显示」，是这一摞里一件都不剩。 */
+  isEmpty() {
+    return !deckLength(deckFor(this.state, SLOTS.PRIMARY))
+      && !deckLength(deckFor(this.state, SLOTS.SECONDARY));
   }
 
   _layout() {
@@ -807,7 +1141,19 @@ export class PdfWorkspace {
       // during a drag would delete the element the pointer is captured on and
       // strand the gesture. While the divider is being dragged the pane stays
       // in the tree at zero width; `end()` decides whether that means closed.
-      el.hidden = fraction === 0 && !this._dividerDragging;
+      // Hidden only once it has finished shrinking.
+      //
+      // Taking it out of the flow the instant its share reaches zero deletes
+      // its width in one frame, so the surviving column snaps to the far edge
+      // and then grows back across the screen — the right-hand pane expanding
+      // left-to-right, which is the wrong way round for a pane on the right and
+      // reads as the animation belonging to the other side.
+      //
+      // Left in the tree at zero width, it transitions its share away over the
+      // same 360ms, the survivor's near edge travels as the other retreats, and
+      // each pane grows out of its own side.
+      el.hidden = fraction === 0 && !this._dividerDragging
+        && !this.root.classList.contains('is-animating');
       el.classList.toggle('is-focused', this.state.focusedSlot === slot);
       this._syncSlotChrome(slot);
     }
@@ -847,6 +1193,32 @@ export class PdfWorkspace {
 
     const noneVisible = fractions[SLOTS.PRIMARY] === 0 && fractions[SLOTS.SECONDARY] === 0;
     if (this.elEmpty) this.elEmpty.hidden = !noneVisible;
+
+    this._syncRestoreControl();
+  }
+
+  /**
+   * The way back to a collapsed pane.
+   *
+   * It carries the COUNT, because that is the difference the control has to
+   * make visible: a collapsed pane still holds its whole deck, and a bare
+   * chevron would look exactly like a pane that had been closed. It sits on the
+   * side the pane went, so it points at where its content actually is.
+   */
+  _syncRestoreControl() {
+    if (!this.elRestore) return;
+    const slot = this.state.collapsedSlot;
+    if (!slot || this.focusSlot) {
+      this.elRestore.hidden = true;
+      return;
+    }
+    const count = deckLength(deckFor(this.state, slot));
+    this.elRestore.hidden = false;
+    this.elRestore.textContent = t('deck.restorePane', { count });
+    // Which physical side it collapsed to, which is the swapped question again.
+    const onLeft = (slot === SLOTS.PRIMARY) !== !!this.state.swapped;
+    this.elRestore.classList.toggle('is-left', onLeft);
+    this.elRestore.classList.toggle('is-right', !onLeft);
   }
 
   /**
@@ -875,8 +1247,132 @@ export class PdfWorkspace {
       el.classList.toggle('is-narrow', px >= 220 && px < 380);
     }
 
-    this._syncPaneHeaderFit();
+    // Mid-animation the bar is being measured against a width its column is
+    // only passing through: everything gets shed on the way past, and the bar
+    // sits empty while the pane it belongs to is already full size. The widths
+    // are settled at the end of the animation instead, where they are true.
+    //
+    // During a divider drag they ARE true, frame by frame, and one rung per
+    // frame is what keeps that drag cheap — so that path is left as it was.
+    if (!this.root.classList.contains('is-animating')) {
+      if (this._dividerDragging) this._syncPaneHeaderFit();
+      else this._settleHeaderFit();
+      // And ask again whether the bar is in anyone's way. Until now only
+      // opening or closing a panel asked that — but the panel can hold still
+      // while the LAYOUT moves out from under it: focusing the other pane
+      // takes the column holding an open table of contents off the screen, and
+      // the bar was left folded in a corner with nothing left to be folded
+      // out of the way of, and nothing on screen to close.
+      this._reviewToolbarConflict();
+    }
     this._syncToolbarSize(fractions);
+  }
+
+  /**
+   * Climbs or descends the WHOLE ladder, not one rung per layout.
+   *
+   * `_syncPaneHeaderFit` deliberately makes at most one change per call, which
+   * is right while a divider is being dragged and wrong everywhere else: a
+   * column that goes from half the screen to all of it needs every rung back,
+   * and got one. The bar then kept its narrow arrangement — the same handful of
+   * controls squeezed to the left — under a pane twice the width, which is what
+   * "the column changed but the bar did not" looks like.
+   *
+   * Bounded by the ladder itself, and stops as soon as a pass changes nothing.
+   */
+  _settleHeaderFit() {
+    for (let i = 0; i <= HEADER_LADDER.length; i++) {
+      const before = this._headerRungs();
+      this._syncPaneHeaderFit();
+      if (this._headerRungs() === before) return;
+    }
+  }
+
+  /**
+   * 一栏里真正放页面的那一块，屏幕坐标。
+   *
+   * 不是整栏：整栏上面还顶着横杠和切换条，而从书架飞过来的那本书是落在页面
+   * 上的，不是落在横杠上。落错了这一下会在最后一帧跳一格。
+   *
+   * 栏在动画中途或者被收起来时量出来是 0，那时候没有「那一页」可言，交给
+   * 调用方去退到整个工作区。
+   */
+  slotRect(slot) {
+    const pane = this.elSlots?.[slot]?.querySelector('.pdf-slot-pane');
+    const rect = pane?.getBoundingClientRect();
+    return rect && rect.width > 1 && rect.height > 1 ? rect : null;
+  }
+
+  /**
+   * 工具栏不能进的那两条带子：顶上的分栏横杠，底下那条悬浮菜单栏。
+   *
+   * 顶边问的是每一栏里看得见的横杠，不是「当前那一栏」——当前那一栏不一定是看得
+   * 见的那一栏。在左栏是活动栏时点右栏的专注，走掉的正是左栏，而安全区原来是拿
+   * 它量的：它一被移出文档流，横杠量到 0，工具栏就被告知顶上空出了 40px，真机上
+   * 一帧之内往上弹了 76px。工具栏浮在整个工作区上，任何一条看得见的横杠都是它
+   * 要躲开的东西，所以取最大的那个。
+   *
+   * 底边是这次新加的。它一直是 0——也就是说底下那条悬浮菜单栏从来不算数，而它是
+   * fixed 的，就压在工作区上。菜单栏一升起来，工具栏就被它盖住半截。
+   *
+   * 量的是「此刻」菜单栏的上沿，不是它的最终位置：拖的过程中它的矩形每一帧都在
+   * 变，手停下它也停下。所以工具栏是被顶上去的，而不是等它到位之后才跳一下。
+   */
+  _toolbarSafeArea(rect) {
+    const top = [SLOTS.PRIMARY, SLOTS.SECONDARY].reduce((most, s) => {
+      const el = this.elSlots[s];
+      if (!el || el.hidden || !el.offsetWidth) return most;
+      const header = el.querySelector('.pdf-slot-toolbar');
+      const strip = el.querySelector('.deck-strip');
+      return Math.max(most, (header && !header.hidden ? header.offsetHeight : 0)
+        + (strip && !strip.hidden ? strip.offsetHeight : 0));
+    }, 0);
+
+    const dock = typeof document !== 'undefined'
+      ? document.querySelector('.bottom-nav') : null;
+    const box = dock?.getBoundingClientRect?.();
+    // 只有真挡在路上的菜单栏才算数。
+    //
+    // 那条菜单栏是居中的一颗胶囊——真机上量到它横跨 360–840，而工具栏靠在最左边
+    // 的 10–63。两者横向根本不相交，可安全区是按整条底边算的，于是菜单栏一升起来
+    // 工具栏就被顶上去、还缩短了一截，而它从头到尾都没被挡住过一个像素。
+    //
+    // 拿横向是否相交来判，而不是纵向：被顶上去之后纵向就不相交了，再拿纵向去判
+    // 会来回摆——顶上去、不冲突了、落回来、又冲突。横向不随这个动作改变，所以它
+    // 是稳的。
+    const bar = this.toolbar?.rect?.();
+    const inTheWay = !!box && box.height > 0 && !!bar
+      && box.right > bar.left && box.left < bar.right;
+    // 收起来的时候它被挪到屏幕外面，上沿落在工作区底边以下，相减是负的——那就是
+    // 0，没有盖住任何东西。
+    const bottom = inTheWay ? Math.max(0, rect.bottom - box.top) : 0;
+    return { top, bottom };
+  }
+
+  /**
+   * 菜单栏动了一下，工具栏重新安顿一次。
+   *
+   * 走的是整条 _syncToolbarSize，不是只更新那两条带子。
+   *
+   * 一开始这里只调 setSafeArea，理由是「菜单栏上下滑的时候列宽没变」——列宽确实
+   * 没变，可**可用高度**变了，而那正是 fitTo 的输入之一。于是真机上量到：菜单栏
+   * 升起来之后，工具栏整条往上挪了，但它自己还是原来那么长，比让出来的带子还长
+   * 25px——夹取只好让它两头均匀溢出，看起来就是最下面那个工具压在菜单栏底下。
+   * 「紧贴在菜单栏外面」要成立，它得先能装得下。
+   *
+   * fitTo 里那句「缩放没变到 0.01 就直接返回」让这条路在多数帧上是廉价的。
+   */
+  syncToolbarSafeArea() {
+    if (!this.toolbar?.fitTo || !this.root) return;
+    this._syncToolbarSize(paneFractions(this.state));
+  }
+
+  /** Which rungs are applied, as one comparable string. */
+  _headerRungs() {
+    return [SLOTS.PRIMARY, SLOTS.SECONDARY]
+      .map(slot => HEADER_LADDER
+        .filter(cls => this.elSlots?.[slot]?.classList.contains(cls)).join(','))
+      .join('|');
   }
 
   /**
@@ -908,6 +1404,19 @@ export class PdfWorkspace {
       // A hidden or not-yet-laid-out pane measures zero, and zero is not a
       // reason to strip its toolbar.
       if (!have) continue;
+
+      // What the bar wants is a lie while the last rung is still closing.
+      //
+      // Shedding a rung collapses its widths over a quarter second, so for
+      // that quarter second the bar still measures as though nothing had gone
+      // — and the next frame would shed the rung below it, and the one below
+      // that, until the bar was stripped bare and had to climb back. Worse, it
+      // would record what it "wanted" from a width caught mid-flight, and that
+      // number is what decides whether the chrome ever comes back.
+      //
+      // So: one change, then wait for it to land. Only the transitions that
+      // move width count; the background fades and the hover tints do not.
+      if (barIsSettling(bar)) continue;
 
       // How many rungs are already applied. They go on in order, so the first
       // missing one is the next to add.
@@ -963,11 +1472,16 @@ export class PdfWorkspace {
     const rect = this.root.getBoundingClientRect();
     if (!rect.height) return;
 
-    // The pane toolbar runs across the top of the workspace and holds controls.
-    // Measured rather than assumed, because it is exactly the thing that grows
-    // a row when a pane gets narrow.
-    const header = this.elSlots[this.activeSlot]?.querySelector('.pdf-slot-toolbar');
-    this.toolbar.setSafeArea?.(header ? header.offsetHeight : 0, 0);
+    // The chrome running across the top of the pane, which the floating ink
+    // toolbar must not park on top of. Measured rather than assumed, because
+    // it is exactly the thing that grows a row when a pane gets narrow.
+    //
+    // BOTH bars, not just the first. The switching strip is a second 52dp row
+    // under the slot toolbar, and leaving it out of the safe area put the
+    // floating bar over the strip's Previous arrow — two controls in one place,
+    // which is the overlap the visual acceptance list rules out.
+    const safe = this._toolbarSafeArea(rect);
+    this.toolbar.setSafeArea?.(safe.top, safe.bottom);
 
     const column = this.state.orientation === ORIENTATIONS.COLUMN;
     // In column layout the panes are full width, so width is never the
@@ -986,8 +1500,10 @@ export class PdfWorkspace {
    * honest answer for it.
    */
   _toolbarColumnWidth(fractions, rect) {
+    // Same trap: the active column can be the one at zero share, and a bar
+    // fitted to a column of width 0 has no width at all.
     const share = fractions?.[this.activeSlot];
-    const fallback = Number.isFinite(share) ? rect.width * share : rect.width;
+    const fallback = share > 0 ? rect.width * share : rect.width;
 
     const bar = this.toolbar?.root?.getBoundingClientRect?.();
     if (!bar || !bar.width) return fallback;
@@ -1045,49 +1561,61 @@ export class PdfWorkspace {
 
     on('prev', () => pane.previous());
     on('next', () => pane.next());
-    on('zoom-out', () => pane.zoomOut());
-    on('zoom-in', () => pane.zoomIn());
+    // Zoom belongs to whichever surface is on screen. A pad's zoom is its
+    // camera; a book's is its fit — the same two buttons, two different things
+    // underneath, and the slot knows which it is showing.
+    on('zoom-out', () => this.viewFor(slot)?.zoomOut());
+    on('zoom-in', () => this.viewFor(slot)?.zoomIn());
     on('fit-width', () => pane.fitWidth());
     on('fit-page', () => pane.fitPage());
-    on('save-ink', async () => {
-      const el = this.elSlots[slot];
-      const label = el.querySelector('[data-role="save-ink-text"]');
-      await this.panes[slot].saveNow();
-      // Say it happened. An autosave that reports nothing is indistinguishable
-      // from one that failed, which is the whole reason this button exists.
-      if (label) {
-        label.textContent = '已保存';
-        clearTimeout(this._saveLabelTimer?.[slot]);
-        this._saveLabelTimer = this._saveLabelTimer || {};
-        this._saveLabelTimer[slot] = setTimeout(() => { label.textContent = '保存'; }, 1600);
-      }
-      this._syncSlotChrome(slot);
+
+    on('scratch-origin', () => this.scratchPanes[slot]?.returnToOrigin());
+    on('scratch-fit', () => {
+      const result = this.scratchPanes[slot]?.fitAllInk();
+      // Ink spread wider than the minimum zoom can show is REPORTED, not
+      // cropped: the reader is told they can pan through the rest.
+      if (result && !result.fitted) this._setStatus(slot, t('scratch.tooLarge'));
     });
-    on('close', () => this.closeSlot(slot));
+    // The save readout is also the retry. A failure that can only be read is a
+    // failure the reader can do nothing about.
+    on('scratch-save', () => {
+      const scratch = this.scratchPanes[slot];
+      if (!scratch) return;
+      if (scratch.saveState === SAVE_STATES.FAILED) scratch.retrySave();
+      else scratch.flush();
+    });
+
+    // Removing lives inside the ⋯ menu, not on the bar.
+    //
+    // It was the last control on the right-hand pane's toolbar, a stylus-width
+    // target against the edge of the screen, and it threw away the reading
+    // position of a book someone was working in. Two deliberate taps for
+    // something irreversible-looking is the right price; every other control on
+    // the bar is one tap and undoable.
+    on('close', () => {
+      this._closeSlotMenus();
+      const entry = activeEntryIn(this.state, slot);
+      if (entry) this.removeEntry(slot, entry.id);
+    });
+    on('organize', () => { this._closeSlotMenus(); this.organize(slot, null); });
+    on('scratch-style', () => { this._closeSlotMenus(); this.openStylePanel(slot); });
+    on('focus-scratch', () => { this._closeSlotMenus(); this.enterFocus(slot); });
+    on('focus-exit', () => this.exitFocus());
+    on('bookmark', () => this._toggleBookmark(slot));
+    on('delete-pad', () => { this._closeSlotMenus(); this.deletePad(slot); });
+    on('slot-more', () => this._toggleSlotMenu(slot));
     on('focus', () => {
       this.animateToFocus(slot);
     });
-    on('outline', () => {
-      const panel = el.querySelector('[data-role="outline-panel"]');
-      panel.hidden = !panel.hidden;
-      if (!panel.hidden) this._renderOutline(slot, this._outlines[slot]);
-      this._syncOverlayState();
-    });
+    // 目录与缩略图是同一个面板的两面，同一个按钮开合——它们回答同一个问题，
+    // 目录空手而归的那一刻，人想要的正是缩略图，不该再去找第二个按钮。
+    on('outline', () => this.panels?.[slot]?.toggle());
 
     // Tool selection lives in the floating toolbar (spec chapter 5); per-pane
     // undo/redo stays here because history belongs to a pane, not to a tool.
     on('ink-undo', () => pane.ink.undo());
     on('ink-redo', () => pane.ink.redo());
     on('answers', () => this.toggleAnswers(slot));
-
-    // The exercise label drives answer lookup, so it lives on the pane rather
-    // than in the grading panel — it belongs to the page being solved.
-    const labelInput = el.querySelector('[data-role="exercise-label"]');
-    if (labelInput) {
-      labelInput.addEventListener('input', () => {
-        pane.exerciseLabel = labelInput.value.trim();
-      });
-    }
 
     const pageInput = el.querySelector('[data-role="page-input"]');
     if (pageInput) {
@@ -1098,7 +1626,49 @@ export class PdfWorkspace {
     }
   }
 
+  /**
+   * Opens this slot's ⋯ menu, closing the other one.
+   *
+   * Only ever one open: two menus at once on a split screen is two claims on
+   * the next tap, and the second one is always a mistake.
+   */
+  _toggleSlotMenu(slot) {
+    const menu = this.elSlots[slot]?.querySelector('[data-role="slot-menu"]');
+    if (!menu) return;
+    const open = menu.hidden;
+    this._closeSlotMenus();
+    if (open) this._setSlotMenu(slot, true);
+  }
+
+  _setSlotMenu(slot, open) {
+    const el = this.elSlots[slot];
+    const menu = el?.querySelector('[data-role="slot-menu"]');
+    const button = el?.querySelector('[data-role="slot-more"]');
+    if (!menu) return;
+    if (open) {
+      // Under the bar, measured rather than assumed: the toolbar sheds rows as
+      // the pane narrows, so its height is not a number this can hard-code.
+      //
+      // offsetTop as well as offsetHeight — both are in the slot's coordinates,
+      // which is what `top` is resolved against, and the bar does not start at
+      // the slot's own top: the slot carries a border and the skins add to it.
+      // Height alone put the menu over the bottom edge of the bar it hangs off.
+      const bar = el.querySelector('.pdf-slot-toolbar');
+      const below = bar ? bar.offsetTop + bar.offsetHeight : 0;
+      menu.style.top = `${below + 4}px`;
+    }
+    menu.hidden = !open;
+    button?.setAttribute('aria-expanded', String(!!open));
+    button?.classList.toggle('is-active', !!open);
+  }
+
+  _closeSlotMenus() {
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) this._setSlotMenu(slot, false);
+  }
+
   _syncSlotChrome(slot) {
+    this.panels?.[slot]?.syncCurrentPage();
+    this._syncBookmarkButton(slot);
     const el = this.elSlots[slot];
     const pane = this.panes[slot];
     const set = (role, fn) => {
@@ -1106,45 +1676,83 @@ export class PdfWorkspace {
       if (node) fn(node);
     };
 
-    const loaded = pane.isLoaded();
+    const entry = activeEntryIn(this.state, slot);
+    const scratch = entry?.kind === ENTRY_KINDS.SCRATCH;
+    const scratchPane = this.scratchPanes[slot];
+    const view = scratch ? scratchPane : pane;
+    const loaded = !!view?.isLoaded?.();
+
     set('toolbar', n => { n.hidden = !loaded; });
-    set('title', n => { n.textContent = pane.meta ? pane.meta.name : ''; });
+    set('title', n => {
+      n.textContent = scratch ? (this.pads[slot]?.name || '') : (pane.meta ? pane.meta.name : '');
+    });
+    // A pad has no pages, so the controls that are about pages are not merely
+    // disabled — they are not there. A disabled Next Page on a boundless sheet
+    // invites the question of what it would have done.
+    set('pdf-controls', n => { n.hidden = scratch; });
+    set('scratch-controls', n => { n.hidden = !scratch; });
     set('prev', n => { n.disabled = !pane.canGoPrevious(); });
     set('next', n => { n.disabled = !pane.canGoNext(); });
     set('page-input', n => {
-      if (loaded && document.activeElement !== n) n.value = String(pane.state.pageNumber);
-      n.max = loaded ? String(pane.state.pageCount) : '1';
+      if (!scratch && loaded && document.activeElement !== n) n.value = String(pane.state.pageNumber);
+      n.max = !scratch && loaded ? String(pane.state.pageCount) : '1';
     });
-    set('page-total', n => { n.textContent = loaded ? `/ ${pane.state.pageCount}` : ''; });
-    set('zoom-label', n => {
-      // Counted from the whole page, not from the PDF's own 1:1 — so 100%
-      // means the page is all there, which is what a reader means by it.
-      n.textContent = loaded ? `${Math.round((pane.displayZoom?.() ?? pane.state.zoom) * 100)}%` : '';
+    set('page-total', n => {
+      n.textContent = !scratch && loaded ? `/ ${pane.state.pageCount}` : '';
+    });
+    // Counted from the whole page, not from the PDF's own 1:1 — so 100% means
+    // the page is all there, which is what a reader means by it. On a pad 100%
+    // is the world's own scale, which is the same promise.
+    //
+    // 算一次，两处用：横杠上那个小读数，和缩放时浮出来的那块牌子。算两遍的话
+    // 它们迟早会在某个边界上各说各的。
+    const zoomPercent = !loaded ? null
+      : (scratch ? scratchPane.displayZoom()
+        : Math.round((pane.displayZoom?.() ?? pane.state.zoom) * 100));
+    set('zoom-label', n => { n.textContent = zoomPercent == null ? '' : `${zoomPercent}%`; });
+    this._flashZoom(slot, zoomPercent, entry?.id || null);
+    set('scratch-origin', n => { n.textContent = t('scratch.origin'); });
+    set('scratch-fit', n => { n.textContent = t('scratch.fitAll'); });
+    set('scratch-save', n => {
+      const state = scratchPane?.saveState;
+      n.textContent = saveLabel(state);
+      n.className = `scratch-save is-${state || 'saved'}`;
+      // Only a failure is worth pressing. Everything else it says is a report.
+      n.disabled = !scratch || state === SAVE_STATES.SAVING;
     });
     set('focus', n => {
       n.classList.toggle('is-active', this.state.focusedSlot === slot);
       n.title = this.state.focusedSlot === slot ? '退出专注' : '专注此文档';
     });
-    set('save-ink', n => {
-      n.hidden = !loaded;
-      // Enabled only when there is something to write. Annotations autosave on
-      // a 400ms debounce, so a disabled button here means "already safe".
-      n.disabled = !this._inkDirty[slot];
-      n.classList.toggle('is-dirty', !!this._inkDirty[slot]);
-      n.title = this._inkDirty[slot] ? '保存本页批注' : '批注已保存';
+    set('ink-undo', n => { n.disabled = !loaded || !view.ink.canUndo(); });
+    set('ink-redo', n => { n.disabled = !loaded || !view.ink.canRedo(); });
+
+    // The menu: what it offers depends on what the pane is holding.
+    set('close', n => { n.textContent = t('deck.removeFromPane'); });
+    set('organize', n => { n.textContent = t('deck.organize'); });
+    set('scratch-style', n => { n.hidden = !scratch; n.textContent = t('scratch.style'); });
+    set('focus-scratch', n => {
+      n.hidden = !scratch || !!this.focusSlot;
+      n.textContent = t('scratch.focus');
     });
-    set('ink-undo', n => { n.disabled = !loaded || !pane.ink.canUndo(); });
-    set('ink-redo', n => { n.disabled = !loaded || !pane.ink.canRedo(); });
+    set('delete-pad', n => { n.hidden = !scratch; n.textContent = t('scratch.delete'); });
+
+    // A menu belonging to a pane with nothing in it has nothing to offer, and
+    // the bar it hangs off is hidden anyway.
+    if (!loaded) this._setSlotMenu(slot, false);
+
+    this.strips[slot]?.render();
+    this._syncFocusBar();
 
     // Answering belongs to the exercise book.
     //
     // The action asks "what are the answers to the questions on THIS page",
     // which is only a question the side holding the questions can ask. It used
     // to sit on both panes, so half the time it was pointed at the answer key
-    // and asked it to find answers to itself.
-    const isExercise = loaded && pane.meta?.role === DOC_ROLES.EXERCISE;
+    // and asked it to find answers to itself. A pad cannot ask it at all: a
+    // scratchpad takes no part in matching.
+    const isExercise = !scratch && loaded && pane.meta?.role === DOC_ROLES.EXERCISE;
     set('answers', n => { n.hidden = !isExercise; });
-    set('exercise-label', n => { n.hidden = !isExercise; });
     // And the panel follows the book, so a pane that stops being the exercise
     // book does not keep its answers on screen.
     if (!isExercise) set('answer-panel', n => { n.hidden = true; });
@@ -1172,7 +1780,7 @@ export class PdfWorkspace {
     panel.classList.add('is-dismissing');
     const anim = panel.animate(
       [{ opacity: 1, transform: 'translateY(0)' },
-      { opacity: 0, transform: 'translateY(-6px)' }],
+       { opacity: 0, transform: 'translateY(-6px)' }],
       { duration: 160, easing: 'cubic-bezier(0.4, 0, 1, 1)' },
     );
     anim.finished.then(done, done);
@@ -1194,14 +1802,24 @@ export class PdfWorkspace {
    * one to the reader.
    */
   _resetOutline(slot) {
-    const panel = this.elSlots[slot].querySelector('[data-role="outline-panel"]');
-    const button = this.elSlots[slot].querySelector('[data-role="outline"]');
+    const button = this.elSlots[slot]?.querySelector('[data-role="outline"]');
     this._outlines[slot] = null;
-    if (panel) {
-      panel.replaceChildren();
-      panel.hidden = true;
+    if (this._pageShape) this._pageShape[slot] = null;
+    const panel = this.panels?.[slot];
+    if (panel) panel.reset();
+    else {
+      // Before the panels are built — and in a partial workspace — the element
+      // must still stop showing the last document. This is the invariant, not
+      // the object that usually upholds it: a panel left open across a
+      // replacement shows the previous book's chapters over the new one.
+      const el = this.elSlots[slot]?.querySelector('[data-role="outline-panel"]');
+      if (el) { el.hidden = true; el.replaceChildren(); }
     }
-    if (button) button.disabled = true;
+    // NOT disabled any more. The button used to be switched off whenever the
+    // book had no bookmarks, which also switched off the thumbnails — the one
+    // way into a book that has no table of contents. It is disabled only when
+    // there is no book at all.
+    if (button) button.disabled = !this.panes[slot]?.doc;
     this._syncOverlayState();
   }
 
@@ -1225,65 +1843,124 @@ export class PdfWorkspace {
       return panel && !panel.hidden;
     });
     this.root.classList.toggle('is-outline-open', open);
+    this._reviewToolbarConflict();
+  }
+
+  /**
+   * 挡在笔迹栏前面的那一块，不管它是哪一块。
+   *
+   * 「本栏内容」那张单子和找页面板是同一类东西：都盖在某一栏上、都在笔迹栏
+   * 下面、都是打开来读的。所以它们对笔迹栏该有同一套规矩——真的压住了就收成
+   * 球飞到那一栏的下角，没压住就一动不动。判断压没压住、往哪个角落，全都在
+   * _yieldToolbarAround 里，这里只负责回答「现在开着的是哪一块」。
+   *
+   * 单子在前：两者同时开着时，它是后打开、也更靠上的那一块。
+   */
+  /**
+   * Which bottom corner the bar should step into.
+   *
+   * The corners are named against the WORKSPACE, so a column only owns the
+   * ones its own span reaches: the left column owns the bottom left, the right
+   * column the bottom right, and a single open file — a column that is the
+   * whole workspace — owns both.
+   *
+   * That last case is the one this got wrong. The rule used to be "which half
+   * of the workspace is the column's midpoint in", which for a column that IS
+   * the workspace compares the centre with itself: never less than, so always
+   * the bottom right. A panel conflicting on the left sent the bar across the
+   * screen to the far corner. Only the two-column case had ever been right.
+   *
+   * When a column owns both corners, the bar's own side decides — it steps
+   * aside, and stepping aside is a short move, not a journey.
+   */
+  _cornerFor(column, host, barRect) {
+    // The slot is inset from the workspace — a margin, a border, a rounded
+    // corner — so "touches the edge" cannot mean "equals it". Generous enough
+    // to cover that inset and far too small to reach across the gap between two
+    // columns, which is most of the screen.
+    const EDGE = 16;
+    const ownsLeft = column.left <= host.left + EDGE;
+    const ownsRight = column.right >= host.right - EDGE;
+    if (ownsLeft && !ownsRight) return CORNERS.BOTTOM_LEFT;
+    if (ownsRight && !ownsLeft) return CORNERS.BOTTOM_RIGHT;
+    // Both (one open file) or neither (a column touching no edge, which the
+    // layout does not produce): go to the corner on the bar's own side.
+    const barMid = barRect ? (barRect.left + barRect.right) / 2 : host.left;
+    return barMid < host.left + host.width / 2
+      ? CORNERS.BOTTOM_LEFT
+      : CORNERS.BOTTOM_RIGHT;
+  }
+
+  /**
+   * 重新判一次笔迹栏和盖上来那一块的冲突。
+   *
+   * 触发点有三个——单子开合、面板开合、面板拖完高度——每一个都要「先问现在
+   * 开着的是哪一块，再拿去判」。这两步一直是分开写的，于是第四个触发点只要
+   * 忘了前半句，就会把错的东西递进去。合成一个名字之后，这个错就没法犯了。
+   * 判断本身仍然只有 _yieldToolbarAround 一处。
+   */
+  _reviewToolbarConflict() {
+    this._yieldToolbarAround(this._openOverlay());
+  }
+
+  _openOverlay() {
+    if (!this.root) return null;
+    // Open AND on screen. A panel keeps its own open/closed flag, and its
+    // column can go out from under it — tap 专注 on the other pane and the
+    // column holding an open table of contents is taken out of the flow with
+    // the panel still marked open, measuring 0 by 0.
+    //
+    // That empty answer was enough to keep the bar folded in a corner: the
+    // conflict check sees "something is open", leaves the bar where it is, and
+    // there is nothing on screen the reader can close to get it back.
+    const shown = (el) => el && el.getBoundingClientRect().width > 0;
+    for (const role of ['deck-list', 'outline-panel']) {
+      for (const el of this.root.querySelectorAll(`[data-role="${role}"]:not([hidden])`)) {
+        if (shown(el)) return el;
+      }
+    }
+    return null;
   }
 
   _renderOutline(slot, outline) {
-    const panel = this.elSlots[slot].querySelector('[data-role="outline-panel"]');
-    const button = this.elSlots[slot].querySelector('[data-role="outline"]');
-    if (!panel) return;
+    const button = this.elSlots[slot]?.querySelector('[data-role="outline"]');
     this._outlines[slot] = outline;
+    if (button) button.disabled = !this.panes[slot]?.doc;
+    this.panels?.[slot]?.setOutline(outline);
+    this._learnPageShape(slot);
+  }
 
-    if (!outline) {
-      if (!panel.hidden) {
-        panel.innerHTML = '<div class="pdf-outline-empty">正在加载目录…</div>';
-      }
-      if (button) button.disabled = true;
-      return;
-    }
+  /** 高度是拖出来的，拖动中每一帧都写盘就太吵了——停下来再写。 */
+  _persistPanelSoon() {
+    clearTimeout(this._panelSave);
+    this._panelSave = setTimeout(() => this._persistPanel(), 400);
+  }
 
-    if (!outline.available || outline.items.length === 0) {
-      panel.innerHTML = '<div class="pdf-outline-empty" data-i18n="pdf.noOutline">此文档没有目录</div>';
-      if (button) button.disabled = true;
-      return;
-    }
-    if (button) button.disabled = false;
+  _persistPanel() {
+    clearTimeout(this._panelSave);
+    try {
+      localStorage.setItem(PANEL_PREFS_KEY, JSON.stringify(serializePanelState(this._panelState)));
+    } catch (_) { /* 无痕模式下存不了，面板照常用 */ }
+  }
 
-    // Large books can have hundreds of bookmarks. Avoid constructing every
-    // button while the panel is hidden for work the reader may never request.
-    if (panel.hidden) {
-      panel.replaceChildren();
-      return;
-    }
-
-    const list = document.createElement('ul');
-    list.className = 'pdf-outline-list';
-    const walk = (items, parent) => {
-      for (const item of items) {
-        const li = document.createElement('li');
-        li.className = 'pdf-outline-item';
-        li.style.paddingInlineStart = `${item.depth * 12}px`;
-
-        const label = document.createElement('button');
-        label.type = 'button';
-        label.className = 'pdf-outline-link';
-        label.textContent = item.title || '(未命名)';
-        if (item.pageNumber) {
-          label.addEventListener('click', () => {
-            this.panes[slot].goToPage(item.pageNumber);
-            this._syncSlotChrome(slot);
-          });
-        } else {
-          // Unresolvable destination: shown, but not pretending to navigate.
-          label.disabled = true;
-          label.title = '该目录项没有可解析的目标页';
-        }
-        li.appendChild(label);
-        parent.appendChild(li);
-        if (item.children.length) walk(item.children, parent);
-      }
-    };
-    walk(outline.items, list);
-    panel.replaceChildren(list);
+  /**
+   * The shape of page one, used to lay out every thumbnail cell.
+   *
+   * Every cell is sized before a single page is rasterised, so the scrollbar
+   * tells the truth about how long the book is from the first frame and the
+   * reader can throw it to the middle. That needs an aspect ratio up front,
+   * and asking for all 827 of them to place a grid is asking the wrong
+   * question — books are uniform, and a mixed one costs a slightly wrong box
+   * until its page is painted into it.
+   */
+  _learnPageShape(slot) {
+    const doc = this.panes[slot]?.doc;
+    if (!doc || typeof doc.pageSize !== 'function' || this._pageShape?.[slot]) return;
+    const wanted = doc;
+    doc.pageSize(1).then((size) => {
+      if (this.panes[slot]?.doc !== wanted) return;
+      if (this._pageShape) this._pageShape[slot] = size;
+    }).catch(() => { /* the A4 guess in the panel stands */ });
   }
 
   // ── documents ─────────────────────────────────────────────────────────────
@@ -1314,49 +1991,377 @@ export class PdfWorkspace {
       if (!pane) continue;
       pane.outlineAlignment = null;
       pane.answerComparability = undefined;
+      pane.pairVerdict = null;
+    }
+    // The background answer handles describe a pair too. Held across a change
+    // of book they would answer the new exercise out of the old key's index.
+    this._releaseAnswerHandles();
+  }
+
+  /**
+   * Opens a PDF into a slot, keeping what was there underneath.
+   *
+   * A thin wrapper over the deck operations now: the insert is committed first
+   * so the entry exists to be shown, and `showEntry` runs the handoff — flush,
+   * prepare, commit — rather than this doing its own. A resource already in the
+   * deck is recalled by `openInSlot` instead of opened twice.
+   */
+  async openDocument(slot, documentId, restoredView) {
+    // Two different failures, and they are not interchangeable.
+    //
+    // A document that is not in the library is an ERROR: the caller asked for
+    // something that does not exist and has to say so. An open that is
+    // SUPERSEDED — the slot was closed, or something else was opened into it
+    // while this one was still loading — is not an error at all; it is the
+    // newer request winning, and it resolves to null so the caller quietly
+    // stands down. Collapsing the two would either throw on an ordinary race or
+    // swallow a missing file.
+    const meta = await this._pdfLibrary.getDocumentMeta(documentId);
+    if (!meta) throw new Error('PDF_DOC_NOT_FOUND');
+
+    const before = this.state;
+    const { state, entry } = openInSlot(this.state, slot, {
+      kind: ENTRY_KINDS.PDF,
+      resourceId: documentId,
+    });
+    if (!entry) throw new Error('PDF_DOC_NOT_FOUND');
+    this._setState(state);
+
+    const ok = await this.showEntry(slot, entry.id, { restoredView, force: true });
+    if (!ok) {
+      // Never leave an entry in a deck for something that did not open. The
+      // deck goes back exactly as it was, which is the failure rule: the pane
+      // keeps showing what it was showing, and nothing was skipped silently.
+      this._setState(before);
+      this._layout();
+      return null;
+    }
+    return meta;
+  }
+
+  closeSlot(slot) {
+    this._openTokens[slot] = (this._openTokens[slot] || 0) + 1;
+    if (this.agentTarget?.slot === slot) this._closeAgentPanel();
+    // Before the unload: it drops the pane's view state, and that state is
+    // exactly the page this book should open on next time.
+    this._rememberSlotView(slot);
+    this.panes[slot].unload();
+    this._invalidatePairCaches();
+    this._setState(closeSlot(this.state, slot));
+    this._resetOutline(slot);
+    // Closing one document doubles the width of the other, and a fit-to-width
+    // page that is not refitted keeps the zoom it had at half the size. This is
+    // why a single open book used to sit at the wrong scale.
+    this._resizePanes();
+    this._persist();
+  }
+
+  // ── decks: showing, cycling, removing ─────────────────────────────────────
+
+  /** The pane this slot's ACTIVE entry belongs to — a book's or a pad's. */
+  viewFor(slot) {
+    const entry = activeEntryIn(this.state, slot);
+    if (entry?.kind === ENTRY_KINDS.SCRATCH) return this.scratchPanes[slot] || null;
+    return this.panes[slot] || null;
+  }
+
+  /**
+   * The pane that actually has something on screen in this slot.
+   *
+   * Not the same question as `viewFor`, and the difference is where a real
+   * defect lived. Opening commits the deck first — the entry has to exist
+   * before it can be shown — so by the time the handoff runs, the ACTIVE entry
+   * is already the incoming one. Asking `viewFor` for "the outgoing view" then
+   * returned the pane the target will land in, which was usually empty: the
+   * outgoing pad's `flush()` was never called, and a failure had nothing
+   * recorded to restore. What is loaded is a fact about the panes, so it is
+   * read from the panes.
+   */
+  _loadedViewIn(slot) {
+    if (this.scratchPanes?.[slot]?.isLoaded?.()) return this.scratchPanes[slot];
+    if (this.panes?.[slot]?.isLoaded?.()) return this.panes[slot];
+    return null;
+  }
+
+  /** The element the switching gesture moves: whichever pane is on screen. */
+  _paperOf(slot) {
+    const entry = activeEntryIn(this.state, slot);
+    const role = entry?.kind === ENTRY_KINDS.SCRATCH ? 'scratch-pane' : 'pane';
+    return this.elSlots[slot]?.querySelector(`[data-role="${role}"]`) || null;
+  }
+
+  /**
+   * The scratch pane for a slot, built the first time one is needed.
+   *
+   * Lazily, because most sessions never open a pad and an unused pane is still
+   * two canvases and a set of listeners.
+   */
+  _scratchPane(slot) {
+    if (this.scratchPanes[slot]) return this.scratchPanes[slot];
+    const host = this.elSlots[slot].querySelector('[data-role="scratch-pane"]');
+    const pane = new ScratchPane(host, {
+      onStateChange: () => { this._syncSlotChrome(slot); this._persist(); },
+      onFocus: () => this._markActive(slot),
+      onInkHistoryChange: () => this._syncSlotChrome(slot),
+      onSaveStateChange: () => this._syncSlotChrome(slot),
+    });
+    this.scratchPanes[slot] = pane;
+    return pane;
+  }
+
+  /** What the strip and the list say about one entry. */
+  describeEntry(slot, entry) {
+    if (!entry) return {};
+    const showing = activeEntryIn(this.state, slot)?.id === entry.id;
+    const cached = this._names?.[entry.resourceId];
+    if (entry.kind === ENTRY_KINDS.SCRATCH) {
+      const pad = showing ? this.pads[slot] : null;
+      const pane = showing ? this.scratchPanes[slot] : null;
+      return {
+        name: pad?.name || cached || t('deck.scratch'),
+        detail: pane?.isLoaded() ? `${pane.displayZoom()}%` : '',
+        save: pane?.isLoaded() ? saveLabel(pane.saveState) : '',
+      };
+    }
+    const pane = showing ? this.panes[slot] : null;
+    return {
+      name: (showing && pane?.meta?.name) || cached || t('deck.pdf'),
+      detail: showing && pane?.isLoaded() ? `${pane.state.pageNumber} / ${pane.state.pageCount}` : '',
+      save: '',
+    };
+  }
+
+  /**
+   * Brings one entry of a deck to the foreground — the handoff transaction.
+   *
+   * The order is the whole of it, and it is the order the specification sets
+   * out: finish and FLUSH what is on screen, prepare the target, and only then
+   * commit. A preview never touches `activeId`; a failure leaves the pane
+   * showing exactly what it was showing, with a reason and a retry. Nothing is
+   * skipped and the pane is never blanked.
+   *
+   * Latest-wins: a request arriving mid-handoff replaces the pending target
+   * rather than queueing, so a run of taps on Next lands where the user last
+   * pointed instead of playing back every entry they passed.
+   */
+  async showEntry(slot, entryId, { restoredView, force = false } = {}) {
+    // A workspace is not always built by its constructor: the performance tests
+    // stand one up from the prototype with only the fields they exercise, and
+    // this is the first thing they call. Same lesson as `_syncOverlayState` and
+    // the page cache — a method reached during setup has to cope with the half
+    // of the object that is not there yet.
+    this._switching ||= {};
+    this._paneInFlux ||= {};
+    this._pending ||= {};
+    this.scratchPanes ||= {};
+    this.strips ||= {};
+    this.pads ||= {};
+
+    const deck = deckFor(this.state, slot);
+    const entry = findEntry(deck, entryId);
+    if (!entry) return false;
+    // Already on screen? Asked of the SCREEN, not of the deck. The deck's
+    // active id is committed before the switch runs, so testing it here would
+    // report "already showing" for an entry that has not been loaded yet —
+    // leaving the pane on the previous pad under the new pad's name.
+    this._shown ||= {};
+    if (!force && this._shown[slot]?.id === entryId && this._loadedViewIn(slot)) return true;
+
+    if (this._switching[slot]) {
+      // Someone is already handing this pane over. Record where the user now
+      // wants to end up and let the running transaction finish; it will pick
+      // this up rather than starting a second one alongside it.
+      this._pending[slot] = entryId;
+      return false;
+    }
+
+    this._switching[slot] = entryId;
+    // What is on screen right now, so a failure can put it back. A PdfPane can
+    // hold one document, so preparing the target means releasing the source —
+    // and if the target then fails to open, the pane is left with nothing. The
+    // specification is explicit that a failure must never blank a pane, so the
+    // source is re-shown rather than the reader being left looking at nothing.
+    //
+    // Read from `_shown`, which records what was last COMMITTED to the screen,
+    // rather than from the deck's active id: opening commits the entry before
+    // showing it, so the active id is already the incoming one by now.
+    this._shown ||= {};
+    const wasShowing = this._shown[slot];
+    this._setStatus(slot, t('deck.savingBefore'));
+    try {
+      // 1 — commit whatever is on screen. A save that fails stops the switch:
+      //     the only unsaved copy is never released to make a transition work.
+      const outgoing = this._loadedViewIn(slot);
+      if (outgoing?.flush) {
+        const saved = await outgoing.flush();
+        if (!saved) {
+          // Nothing has been released yet, so there is nothing to restore.
+          this._setStatus(slot, t('deck.switchFailed', { reason: t('scratch.unsaved') }));
+          return false;
+        }
+      } else if (outgoing?.isLoaded?.()) {
+        this._rememberSlotView(slot);
+      }
+
+      // 2 — prepare the target. Slow files say so rather than pretending.
+      this._setStatus(slot, t('deck.opening'));
+      const prepared = entry.kind === ENTRY_KINDS.SCRATCH
+        ? await this._prepareScratch(slot, entry)
+        : await this._preparePdf(slot, entry, restoredView);
+      if (!prepared) {
+        await this._restoreAfterFailedSwitch(slot, wasShowing, entryId,
+          t('deck.switchFailed', { reason: t('deck.untitled') }));
+        return false;
+      }
+
+      // 3 — commit: the deck's active id and what is on screen change together.
+      this._setState(activateInSlot(this.state, slot, entryId));
+      this._shown[slot] = entry;
+      this._showPaneFor(slot, entry.kind);
+      this._layout();
+      this._resizePanes();
+      this._persist();
+      this._setStatus(slot, '');
+      // The deck may have gained an entry this pane has never rendered; the
+      // content list has to be able to name it.
+      this._resolveNames();
+      return true;
+    } catch (error) {
+      Logger.error('PDF', 'switch failed', error);
+      await this._restoreAfterFailedSwitch(slot, wasShowing, entryId,
+        t('deck.switchFailed', { reason: error?.message || '' }));
+      return false;
+    } finally {
+      this._paneInFlux[slot] = false;
+      this._switching[slot] = null;
+      const next = this._pending[slot];
+      this._pending[slot] = null;
+      // Only if it is still somewhere else: reaching the pending target already
+      // cancels the pending intent.
+      if (next && activeEntryIn(this.state, slot)?.id !== next) {
+        this.showEntry(slot, next);
+      } else {
+        this._syncSlotChrome(slot);
+      }
     }
   }
 
-  async openDocument(slot, documentId, restoredView) {
+  /**
+   * Puts back what the pane was showing before a switch that did not happen.
+   *
+   * Guarded against recursion: the restore is itself a preparation and can fail
+   * too — a book deleted while it was on screen, say — and two failures must
+   * not become an endless pair of attempts. The second one gives up and leaves
+   * the pane empty, which by then is the truth.
+   *
+   * The status is set LAST, because re-showing the source clears it on its way
+   * through: the reason the switch failed is what the reader needs to be left
+   * looking at.
+   */
+  async _restoreAfterFailedSwitch(slot, wasShowing, attemptedId, reason) {
+    const canRestore = wasShowing
+      && wasShowing.id !== attemptedId
+      && !this._restoring
+      && findEntry(deckFor(this.state, slot), wasShowing.id)
+      && !this._loadedViewIn(slot);
+    if (canRestore) {
+      this._restoring = true;
+      try {
+        const back = wasShowing.kind === ENTRY_KINDS.SCRATCH
+          ? await this._prepareScratch(slot, wasShowing)
+          : await this._preparePdf(slot, wasShowing, undefined);
+        if (back) {
+          this._setState(activateInSlot(this.state, slot, wasShowing.id));
+          this._shown[slot] = wasShowing;
+          this._showPaneFor(slot, wasShowing.kind);
+          this._layout();
+          this._resizePanes();
+        }
+      } catch (error) {
+        Logger.warn('PDF', `Could not restore slot ${slot}: ${error.message}`);
+      } finally {
+        this._restoring = false;
+      }
+    }
+
+    // The deck must not go on claiming to show something that is not on screen.
+    //
+    // Opening commits the entry first, so after a failure the active id names
+    // the file that would not open while the pane shows the old one. Left that
+    // way the strip names the wrong thing, and — worse — `_persist` writes it,
+    // so the next launch tries the broken file again and the reader is stuck
+    // with it. What is on screen is the truth; the active id is corrected to
+    // match.
+    const onScreen = this._shown?.[slot];
+    if (onScreen
+        && findEntry(deckFor(this.state, slot), onScreen.id)
+        && activeEntryIn(this.state, slot)?.id !== onScreen.id) {
+      this._setState(activateInSlot(this.state, slot, onScreen.id));
+      this._layout();
+      this._persist();
+    }
+    this._setStatus(slot, reason);
+  }
+
+  /** Loads a PDF entry into the slot's book pane. */
+  async _preparePdf(slot, entry, restoredView) {
     const token = (this._openTokens[slot] || 0) + 1;
     this._openTokens[slot] = token;
     const superseded = () => this._openTokens[slot] !== token;
 
-    const meta = await this._pdfLibrary.getDocumentMeta(documentId);
+    const meta = await this._pdfLibrary.getDocumentMeta(entry.resourceId);
     if (!meta) throw new Error('PDF_DOC_NOT_FOUND');
-    if (superseded()) return null;
+    if (superseded()) return false;
+
+    // Where this book should open, in order of who has the best claim.
+    //
+    // A session restore names the view it wants and wins. Otherwise this
+    // ENTRY's own recorded page is the one to come back to — which is what
+    // keeps the same PDF at two different pages in the two panes, and what
+    // carries a page across when an entry is moved. Failing both, the book
+    // opens where it was last put down anywhere. Only a document that has never
+    // been opened starts at the top of page 1, which is the one time that is
+    // the right answer.
+    const view = restoredView
+      || viewForEntry(entry.id)
+      || recallDocView(entry.resourceId)
+      || undefined;
 
     this._resetOutline(slot);
     const pane = this.panes[slot];
     if (this.agentTarget?.slot === slot) this._closeAgentPanel();
-    if (pane.isLoaded()) pane.unload();
+    if (pane.isLoaded()) {
+      this._rememberSlotView(slot);
+      pane.unload();
+    }
+    // The pad in this slot is put away too: two loaded views in one slot is the
+    // thing the renderer budget exists to prevent.
+    if (this.scratchPanes[slot]?.isLoaded()) {
+      await this.scratchPanes[slot].flush();
+      this.scratchPanes[slot].unload();
+      this.pads[slot] = null;
+    }
     this._invalidatePairCaches();
 
-    const doc = await this._pdfLibrary.openStoredDocument(documentId);
+    const doc = await this._pdfLibrary.openStoredDocument(entry.resourceId);
     if (superseded()) {
       try { doc.destroy(); } catch (_) { /* nothing further to release */ }
-      return null;
+      return false;
     }
-    const loaded = await pane.loadDocument(doc, meta, restoredView, () => !superseded());
+    // 从这一行起，这一栏的页码谁都不许记——见 _paneInFlux。
+    this._paneInFlux[slot] = true;
+    const loaded = await pane.loadDocument(doc, meta, view, () => !superseded());
     if (!loaded || superseded()) {
       if (pane.doc === doc) pane.unload();
       else {
         try { doc.destroy(); } catch (_) { /* already released */ }
       }
-      return null;
+      return false;
     }
+    this._rememberName(entry.resourceId, meta.name);
 
-    this._setState(assignDocument(this.state, slot, documentId));
-    this._layout();
-    // The other pane just lost half its width; a fit mode has to follow.
-    this._resizePanes();
-    this._persist();
-
-    // First page is already visible. Resolve the optional outline afterwards,
-    // and never let a stale document update the replacement pane.
     const outlinePromise = typeof doc.getOutline === 'function'
-      ? doc.getOutline()
-      : Promise.resolve(doc.outline);
+      ? doc.getOutline() : Promise.resolve(doc.outline);
     outlinePromise.then((outline) => {
       if (!superseded() && pane.doc === doc) this._renderOutline(slot, outline);
     }).catch((error) => {
@@ -1365,19 +2370,599 @@ export class PdfWorkspace {
         this._renderOutline(slot, { available: false, items: [] });
       }
     });
-    return meta;
+    return true;
   }
 
-  closeSlot(slot) {
-    this._openTokens[slot] = (this._openTokens[slot] || 0) + 1;
-    if (this.agentTarget?.slot === slot) this._closeAgentPanel();
-    this.panes[slot].unload();
-    this._invalidatePairCaches();
-    this._setState(closeSlot(this.state, slot));
+  /** Loads a scratchpad entry into the slot's pad pane. */
+  async _prepareScratch(slot, entry) {
+    const pad = await this._pdfLibrary.getScratchpad(entry.resourceId);
+    if (!pad) throw new Error('SCRATCH_NOT_FOUND');
+
+    // The book in this slot goes away first, for the same renderer budget.
+    if (this.panes[slot].isLoaded()) {
+      this._rememberSlotView(slot);
+      this.panes[slot].unload();
+      this._invalidatePairCaches();
+    }
     this._resetOutline(slot);
-    // Closing one document doubles the width of the other, and a fit-to-width
-    // page that is not refitted keeps the zoom it had at half the size. This is
-    // why a single open book used to sit at the wrong scale.
+
+    const pane = this._scratchPane(slot);
+    // 同上。草稿纸装载途中也会触发存盘。
+    this._paneInFlux[slot] = true;
+    const ok = await pane.loadPad(pad);
+    if (!ok) return false;
+    this.pads[slot] = pad;
+    this._rememberName(entry.resourceId, pad.name);
+    return true;
+  }
+
+  /** Names survive a pane unloading, so the list can still label an entry. */
+  _rememberName(resourceId, name) {
+    this._names ||= {};
+    if (resourceId && name) this._names[resourceId] = name;
+  }
+
+  /**
+   * Learns the name of everything in both decks, not just what is on screen.
+   *
+   * Only the active entry has a live pane to ask, so without this every entry
+   * rotated underneath showed up in the content list as a bare "PDF" or
+   * "Scratchpad" — which makes the list useless for its one job, telling two
+   * hidden books apart.
+   *
+   * Fire-and-forget: it is a handful of metadata reads, the list is already
+   * usable without them, and a failure to name something is not a reason to
+   * fail whatever operation asked.
+   */
+  async _resolveNames() {
+    this._names ||= {};
+    const wanted = [];
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+      for (const entry of deckFor(this.state, slot)?.entries || []) {
+        if (!this._names[entry.resourceId]) wanted.push(entry);
+      }
+    }
+    if (!wanted.length) return;
+    for (const entry of wanted) {
+      try {
+        const record = entry.kind === ENTRY_KINDS.SCRATCH
+          ? await this._pdfLibrary.getScratchpad(entry.resourceId)
+          : await this._pdfLibrary.getDocumentMeta(entry.resourceId);
+        this._rememberName(entry.resourceId, record?.name);
+      } catch (_) { /* an unnamed entry still lists, by type */ }
+    }
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) this.strips[slot]?.render();
+  }
+
+  /** Puts the right pane on screen for the kind of entry the slot is showing. */
+  _showPaneFor(slot, kind) {
+    const el = this.elSlots?.[slot];
+    if (!el) return;
+    const scratch = kind === ENTRY_KINDS.SCRATCH;
+    const bookHost = el.querySelector('[data-role="pane"]');
+    if (bookHost) bookHost.hidden = scratch;
+    const padHost = el.querySelector('[data-role="scratch-pane"]');
+    if (padHost) padHost.hidden = !scratch;
+    el.classList?.toggle('is-scratch', scratch);
+    // A pad takes no part in matching, so an answer panel left over from the
+    // book that was here has nothing to describe.
+    if (scratch) this.hideAnswers(slot);
+    this.scratchPanes[slot]?.resize?.();
+    // The surface under the floating toolbar has just been replaced. Its tool,
+    // colour and width have to be pushed to the new one, or the bar goes on
+    // showing a pen while the pad it is now over has never been told.
+    if (slot === this.activeSlot) this.toolbar?.syncToActiveSurface?.();
+  }
+
+  /**
+   * A short status line under the strip, for waits and refusals.
+   *
+   * Its own line, NOT the name. Writing "Opening…" over the title meant the
+   * pane stopped saying what it was showing at exactly the moment the reader
+   * most needed to know — and a failure left the error there permanently, with
+   * the name gone until the next successful switch.
+   */
+  _setStatus(slot, message) {
+    const node = this.elSlots[slot]?.querySelector('[data-role="deck-preview"]');
+    if (!node) return;
+    node.textContent = message || '';
+    node.hidden = !message;
+    node.classList.toggle('is-status', !!message);
+  }
+
+  /** One step along a slot's deck. */
+  cycleSlot(slot, step) {
+    const target = entryAtOffset(deckFor(this.state, slot), step);
+    if (target) this.showEntry(slot, target.id);
+  }
+
+  /**
+   * Detaches an entry from a pane. The resource stays in its library.
+   *
+   * Removing the last entry is confirmed, because an empty pane looks like
+   * something went wrong even when it is exactly what was asked for.
+   */
+  async removeEntry(slot, entryId) {
+    const deck = deckFor(this.state, slot);
+    const entry = findEntry(deck, entryId);
+    if (!entry) return;
+
+    // 移出本栏就只是移出本栏——草稿纸和书在这里一视同仁。
+    //
+    // 这里一度会问「保存还是删除」，选删除就把纸和笔迹一起抹掉。那把一次误触
+    // 和一份没有第二个副本的笔迹之间的距离缩短到了一个按钮，而删除本来就已经
+    // 有地方了：文档库里的「永久删除」，那里有它该有的确认框，也有让人先看清
+    // 自己要删哪一张的上下文。关闭是关闭，删除是删除。
+    if (deckLength(deck) === 1) {
+      const ok = await confirmDestructive({
+        title: t('deck.removeLastTitle'),
+        body: t('deck.removeLastBody'),
+        confirmLabel: t('deck.removeFromPane'),
+      });
+      if (!ok) return;
+    }
+
+    const showing = deck.activeId === entryId;
+    if (showing) {
+      const view = this.viewFor(slot);
+      // Save before detaching. The entry is about to lose the pane that holds
+      // its only unwritten strokes.
+      if (view?.flush) {
+        const saved = await view.flush();
+        if (!saved) { this._setStatus(slot, t('scratch.failed')); return; }
+      } else if (view?.isLoaded?.()) {
+        this._rememberSlotView(slot);
+      }
+    }
+
+    const next = showing ? entryAtOffset(deck, 1) : null;
+    this._setState(removeFromSlot(this.state, slot, entryId));
+
+
+    if (showing) {
+      const survivor = next && next.id !== entryId ? next : activeEntryIn(this.state, slot);
+      if (survivor) {
+        await this.showEntry(slot, survivor.id, { force: true });
+      } else {
+        this._unloadSlot(slot);
+      }
+    }
+    this._layout();
+    this._resizePanes();
+    this._persist();
+    this._syncSlotChrome(slot);
+  }
+
+  /** Empties a slot's panes without touching its deck. */
+  _unloadSlot(slot) {
+    this._openTokens[slot] = (this._openTokens[slot] || 0) + 1;
+    this._paneInFlux[slot] = false;
+    this.panes[slot].unload();
+    this.scratchPanes[slot]?.unload();
+    this.pads[slot] = null;
+    // Nothing is on screen here any more, so there is nothing for a later
+    // failure to restore.
+    if (this._shown) this._shown[slot] = null;
+    this._invalidatePairCaches();
+    this._resetOutline(slot);
+    this._showPaneFor(slot, ENTRY_KINDS.PDF);
+  }
+
+  // ── creating and opening (F01, F02) ───────────────────────────────────────
+
+  /**
+   * How each slot is described in a destination chooser.
+   *
+   * Where it IS and what is in it. Position is not role: the panes can be
+   * swapped, and "the answer side" would name something that has moved.
+   *
+   * 而且是按屏幕上的先后给的，不是按内部名字。
+   *
+   * 原来这份单子永远是 [PRIMARY, SECONDARY]，只有标签跟着 swapped 走。于是两栏
+   * 交换过之后，对话框里第一个按钮写着「右栏」、第二个写着「左栏」——左右两个
+   * 字说的是真话，摆的位置却是反的。这种矛盾里人信的是位置：他要开到右边，手
+   * 就往右边那个按钮去了。
+   *
+   * 所以顺序也跟着 swapped 走。竖排时同理：上在前，下在后。
+   */
+  destinationOptions() {
+    const column = this.state.orientation === ORIENTATIONS.COLUMN;
+    const first = this.state.swapped ? SLOTS.SECONDARY : SLOTS.PRIMARY;
+    return [first, otherSlot(first)].map((slot) => {
+      const isFirst = slot === first;
+      const position = column
+        ? (isFirst ? t('deck.top') : t('deck.bottom'))
+        : (isFirst ? t('deck.left') : t('deck.right'));
+      const entry = activeEntryIn(this.state, slot);
+      return {
+        slot,
+        position,
+        current: entry ? (this.describeEntry(slot, entry).name || '') : '',
+      };
+    });
+  }
+
+  /**
+   * Creates a scratchpad and opens it, keeping what was there underneath.
+   *
+   * The pad is created only AFTER the dialog is confirmed. Cancelling leaves no
+   * resource behind — an empty pad nobody asked for is worse than none, and it
+   * is what happens when creation runs first and the dialog only decides where
+   * to put it.
+   */
+  async createScratchpad() {
+    const answer = await createScratchpadDialog({
+      options: this.destinationOptions(),
+      preferred: this.activeSlot,
+      // The proposed name is in the reader's language, not the code's: a
+      // Chinese interface offering "Scratchpad 01" is the app talking to
+      // itself. The numbering still comes from what is already in the library,
+      // so deleting a pad frees its number again.
+      defaultName: await nextScratchpadName(t('deck.scratch')),
+      // Starts from the new-pad preference, so someone who set one gets it
+      // without having to choose again — and can still change their mind here.
+      defaultStyle: readNewPadStyle(),
+    });
+    if (!answer) return null;
+
+    const pad = await createScratchpad({ name: answer.name, style: answer.style });
+    this._rememberName(pad.id, pad.name);
+    const { state, entry } = openInSlot(this.state, answer.slot, {
+      kind: ENTRY_KINDS.SCRATCH,
+      resourceId: pad.id,
+    });
+    this._setState(state);
+    await this.showEntry(answer.slot, entry.id, { force: true });
+    this._markActive(answer.slot);
+    return pad;
+  }
+
+  /**
+   * Opens a library resource into a chosen pane.
+   *
+   * The destination is asked for rather than inferred: the role says what a
+   * document IS, not where it belongs, and the two panes can be swapped at any
+   * time. Reopening something already in that deck recalls it.
+   */
+  async openResource(documentId, { kind = ENTRY_KINDS.PDF, slot } = {}) {
+    let target = slot;
+    if (!target) {
+      target = await this.chooseSlotFor(documentId);
+      if (!target) return null;
+    }
+    const before = this.state;
+    const { state, entry } = openInSlot(this.state, target, { kind, resourceId: documentId });
+    this._setState(state);
+    const ok = await this.showEntry(target, entry.id, { force: true });
+    if (!ok) {
+      // An entry for something that would not open is an entry the reader will
+      // meet again on every cycle and on the next launch. The deck goes back
+      // exactly as it was — unless it was already holding this resource, in
+      // which case the entry is theirs and only the recall failed.
+      if (!findByResource(before.decks?.[target], documentId)) {
+        this._setState(before);
+        this._layout();
+      }
+      return null;
+    }
+    this._markActive(target);
+    return entry;
+  }
+
+  /**
+   * 这个对话框该长什么样——不含文案，也不碰 DOM，所以钉得住。
+   *
+   * 已经开在某一栏里，也照问。
+   *
+   * 原来是直接把人带回它已经在的那一栏，理由写的是「再问就成了一栏里放两份，而
+   * 一栏放不下」。那条理由只对**同一栏**成立：一栏里两项同一份文件会抢同一个阅
+   * 读位置（见 openInSlot）。两栏各有各的 entry、各有各的页码和缩放，互不相干
+   * ——而且那正是这本书最该被这么用的时候：478 页的习题册，题在前面答案在后面，
+   * 同一本对照着看。挡住它，人只能来回翻。
+   *
+   * 选它已经在的那一栏，openInSlot 仍然是「recall」而不是开第二份，所以这个对话
+   * 框把两件事都给了，一下一个。
+   *
+   * @returns {{options: Array, preferred: string, openIn: string|null}}
+   */
+  _destinationSpec(resourceId) {
+    const options = this.destinationOptions();
+    const here = slotsWithResource(this.state, resourceId);
+    // 两栏都已经有了，就没有「它在哪一栏」这回事了，照常问。
+    const openIn = here.length === 1 ? here[0] : null;
+    return {
+      options,
+      // 已经看得见它在那一栏了，还来点一次，多半是想两边对照。想回到它那儿的，
+      // 选那一栏也只是一下。
+      preferred: openIn ? otherSlot(openIn) : this.nextFreeSlot(),
+      openIn,
+    };
+  }
+
+  /** Asks which pane, defaulting to the one the reader is working in. */
+  chooseSlotFor(resourceId) {
+    const { options, preferred, openIn } = this._destinationSpec(resourceId);
+    const where = openIn ? options.find(o => o.slot === openIn)?.position : null;
+    return chooseDestination({
+      options,
+      preferred,
+      title: t('deck.destination'),
+      note: openIn ? t('deck.alreadyOpen', { position: where }) : t('deck.keptUnderneath'),
+      confirm: t('deck.openThere'),
+    });
+  }
+
+  // ── moving entries between panes (F09) ────────────────────────────────────
+
+  /**
+   * Moves one entry, atomically, by the click path.
+   *
+   * The insertion point is a stable entry id, never a row number: rows shift
+   * under every insert and removal, and an index captured when the dialog
+   * opened would land the entry somewhere the user did not point at.
+   */
+  async organize(slot, entryId) {
+    // No entry named: this is "Organize content", which is the whole picture —
+    // both decks side by side, with handles to drag and a Move on every row.
+    // Naming one is "Move to…", which is the same commit reached through a
+    // dialog. Neither path can produce a result the other cannot.
+    if (!entryId) {
+      await openOrganizer({
+        getDecks: () => this.state.decks,
+        describe: (side, entry) => this.describeEntry(side, entry),
+        positions: this.destinationOptions(),
+        onMove: (request) => this._applyMove(request),
+      });
+      return;
+    }
+
+    const deck = deckFor(this.state, slot);
+    const entry = findEntry(deck, entryId);
+    if (!entry) return;
+
+    const answer = await moveEntryDialog({
+      entry,
+      entryName: this.describeEntry(slot, entry).name,
+      options: this.destinationOptions(),
+      preferred: otherSlot(slot),
+      anchorsFor: (target) => deckFor(this.state, target).entries
+        .filter(e => e.id !== entry.id)
+        .map(e => ({ id: e.id, name: this.describeEntry(target, e).name })),
+    });
+    if (!answer) return;
+    await this._applyMove({
+      from: slot,
+      to: answer.to,
+      entryId: entry.id,
+      afterId: answer.afterId,
+      andShow: answer.andShow,
+    });
+  }
+
+  /**
+   * Commits one move, and brings both panes into line with the result.
+   *
+   * The single place the drag path and the click path meet, which is what makes
+   * "click and drag produce identical results" true by construction rather than
+   * by two implementations agreeing.
+   *
+   * Either both decks change or neither does — the pure move decides them
+   * together — and only after that do the panes follow whatever each deck is
+   * now showing.
+   *
+   * @returns {Promise<{ok: boolean, reason?: string}>}
+   */
+  async _applyMove({ from, to, entryId, afterId = null, andShow = false }) {
+    const result = moveEntryBetweenSlots(this.state, { from, to, entryId, afterId, andShow });
+
+    if (!result.ok) {
+      // A duplicate is refused, never merged and never duplicated. The entry
+      // that is already there is offered instead, so the reader can get to it.
+      const locate = await explainRefusal({
+        title: t('deck.duplicateTitle'),
+        body: t('deck.duplicateBody'),
+        actionLabel: result.entry ? t('deck.locateExisting') : '',
+      });
+      if (locate && result.entry) await this.showEntry(to, result.entry.id);
+      return result;
+    }
+
+    // Both decks changed together; the panes follow whatever each is now
+    // showing, and a pane that stopped showing anything is emptied.
+    const before = {
+      [from]: activeEntryIn(this.state, from)?.id,
+      [to]: activeEntryIn(this.state, to)?.id,
+    };
+    this._setState(result.state);
+    for (const side of new Set([from, to])) {
+      const now = activeEntryIn(this.state, side);
+      if (!now) { this._unloadSlot(side); continue; }
+      if (now.id !== before[side]) await this.showEntry(side, now.id, { force: true });
+    }
+    // Moving the focused pad out of its pane takes focus with it: focus names a
+    // slot AND an entry, and the pair has stopped being true.
+    if (this.focusSlot && activeEntryIn(this.state, this.focusSlot)?.id !== this.focusEntryId) {
+      this.exitFocus();
+    }
+    this._layout();
+    this._resizePanes();
+    this._persist();
+    for (const side of [SLOTS.PRIMARY, SLOTS.SECONDARY]) this._syncSlotChrome(side);
+    return { ok: true };
+  }
+
+  // ── collapse and restore (F08) ────────────────────────────────────────────
+
+  /**
+   * Hides a pane without touching its deck.
+   *
+   * `restoreTo` is the split from BEFORE the drag. By the time the divider
+   * reaches an edge the ratio is 0 or 1 — the position that means collapse —
+   * and remembering that one would collapse the pane again the moment it came
+   * back.
+   *
+   * An empty slot has nothing to collapse and no deck to protect, so it is
+   * closed outright, which is what dragging an empty pane away has always
+   * meant.
+   */
+  collapsePane(slot, restoreTo) {
+    if (!deckLength(deckFor(this.state, slot))) {
+      this._setState(setDividerRatio(this.state, 0.5));
+      this.closeSlot(slot);
+      return;
+    }
+    const ratio = Number.isFinite(restoreTo) ? restoreTo : this.state.dividerRatio;
+    this._setState(collapseSlot(setDividerRatio(this.state, ratio), slot));
+    this._layout();
+    this._resizePanes();
+    this._persist();
+  }
+
+  restorePane() {
+    if (!this.state.collapsedSlot) return;
+    this._setState(restoreCollapsed(this.state));
+    this._resizePanes();
+    this._persist();
+  }
+
+  // ── focus mode (F10) ──────────────────────────────────────────────────────
+
+  /**
+   * One pad, the whole workspace.
+   *
+   * The layout on the way in is captured so Return can restore it — but ONLY
+   * the layout. Which entry each deck is showing, its order and its ink are
+   * owned by the workspace state throughout, so leaving focus can never roll
+   * back a switch, a move or a stroke made while focused.
+   */
+  enterFocus(slot) {
+    const entry = activeEntryIn(this.state, slot);
+    if (entry?.kind !== ENTRY_KINDS.SCRATCH) return;
+    this.focusSlot = slot;
+    this.focusEntryId = entry.id;
+    this._focusLayout = {
+      dividerRatio: this.state.dividerRatio,
+      swapped: this.state.swapped,
+      collapsedSlot: this.state.collapsedSlot,
+      focusedSlot: this.state.focusedSlot,
+    };
+    document.body.classList.add('is-scratch-focus');
+    // A collapse is released on the way in and put back on the way out. Focus
+    // and collapse are two different ways of saying "one pane", and holding
+    // both leaves a state the restore control cannot express — it would offer
+    // to bring back a pane that focus is already hiding.
+    this._setState(toggleFocus(clearFocus(restoreCollapsed(this.state)), slot));
+    this._syncFocusBar();
+    this._resizePanes();
+  }
+
+  exitFocus() {
+    if (!this.focusSlot) return;
+    const slot = this.focusSlot;
+    this.focusSlot = null;
+    this.focusEntryId = null;
+    document.body.classList.remove('is-scratch-focus');
+    // The captured ratio and placement come back. The DECKS do not: whatever
+    // was switched, moved or removed while focused stands.
+    const layout = this._focusLayout || {};
+    this._focusLayout = null;
+    let next = clearFocus(this.state);
+    if (layout.dividerRatio !== undefined) next = setDividerRatio(next, layout.dividerRatio);
+    if (layout.focusedSlot) next = toggleFocus(next, layout.focusedSlot);
+    // The pane that was collapsed before focusing is collapsed again — but only
+    // if it still has something in it. A deck emptied while focused is not
+    // collapsed, it is empty, and a restore control over nothing is worse than
+    // none.
+    if (layout.collapsedSlot && deckLength(deckFor(next, layout.collapsedSlot))) {
+      next = collapseSlot(next, layout.collapsedSlot);
+    }
+    // `swapped` is deliberately NOT restored. A swap requested while focused
+    // exits focus and then swaps once; putting the captured value back here
+    // would undo the very thing the reader just asked for.
+    this._setState(next);
+    this._syncFocusBar();
+    this._resizePanes();
+    this._syncSlotChrome(slot);
+    this._persist();
+  }
+
+  /** Shows the way out on the pad that is focused, and nowhere else. */
+  _syncFocusBar() {
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+      const exit = this.elSlots?.[slot]?.querySelector('[data-role="focus-exit"]');
+      if (!exit) continue;
+      exit.hidden = this.focusSlot !== slot;
+      exit.textContent = t('scratch.exitFocus');
+    }
+  }
+
+  // ── scratchpad style (F11) ────────────────────────────────────────────────
+
+  async openStylePanel(slot) {
+    const pad = this.pads[slot];
+    const pane = this.scratchPanes[slot];
+    if (!pad || !pane) return;
+    // A stroke or a drag still in flight is finished before the panel takes the
+    // input away from the canvas.
+    await pane.flush();
+    const result = await openScratchStylePanel({
+      pad,
+      compact: this.root.clientWidth < 620,
+      onPreview: (style) => pane.previewStyle(style),
+      onApplied: (saved) => {
+        this.pads[slot] = saved;
+        pane.applyPad(saved);
+        this._syncSlotChrome(slot);
+      },
+      onNotice: (message) => this._setStatus(slot, message),
+    });
+    if (!result.applied) pane.previewStyle(pad.style);
+  }
+
+  /** Permanent deletion, which is only ever reached deliberately. */
+  async deletePad(slot) {
+    const entry = activeEntryIn(this.state, slot);
+    const pad = this.pads[slot];
+    if (entry?.kind !== ENTRY_KINDS.SCRATCH || !pad) return;
+    const ok = await confirmDestructive({
+      title: t('scratch.deleteTitle'),
+      body: t('scratch.deleteBody', { name: pad.name }),
+      confirmLabel: t('scratch.delete'),
+    });
+    if (!ok) return;
+    if (this.focusSlot === slot) this.exitFocus();
+    await this.forgetResource(pad.id);
+    await deleteScratchpad(pad.id);
+  }
+
+  /**
+   * Takes a deleted resource out of both decks.
+   *
+   * Every entry pointing at it goes, and any pane that was showing one falls to
+   * whatever was underneath — never to an empty pane while other entries are
+   * still in the deck.
+   */
+  async forgetResource(resourceId) {
+    // The marks describe pages of a document that is about to stop existing.
+    forgetBookmarks(resourceId);
+    if (this._marks) delete this._marks[resourceId];
+    // An association naming a book that no longer exists would send the next
+    // lookup after bytes that are not there.
+    forgetPairsFor(resourceId);
+    this._releaseAnswerHandles();
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+      const entry = findByResource(deckFor(this.state, slot), resourceId);
+      if (!entry) continue;
+      const showing = activeEntryIn(this.state, slot)?.id === entry.id;
+      const successor = showing ? entryAtOffset(deckFor(this.state, slot), 1) : null;
+      this._setState(removeFromSlot(this.state, slot, entry.id));
+      if (!showing) continue;
+      const survivor = successor && successor.id !== entry.id
+        ? successor : activeEntryIn(this.state, slot);
+      if (survivor) await this.showEntry(slot, survivor.id, { force: true });
+      else this._unloadSlot(slot);
+    }
+    this._layout();
     this._resizePanes();
     this._persist();
   }
@@ -1395,7 +2980,6 @@ export class PdfWorkspace {
    */
   async showAnswersForPage(slot) {
     const pane = this.panes[slot];
-    const other = this.panes[otherSlot(slot)];
     const panel = this.elSlots[slot].querySelector('[data-role="answer-panel"]');
     if (!pane?.isLoaded() || !panel) return;
 
@@ -1412,14 +2996,23 @@ export class PdfWorkspace {
       onDismiss: () => this.hideAnswers(slot),
     });
 
-    if (!other?.isLoaded()) {
-      notice('请在另一侧打开答案册');
+    // The answer book is found by ASSOCIATION, not by "whatever is open on the
+    // other side". It may be hidden underneath a scratchpad, sitting in the
+    // same pane as the exercise, or not open at all — and in none of those
+    // cases does looking it up disturb what either pane is showing.
+    let answer;
+    try {
+      answer = await this._resolveAnswerSource(slot);
+    } catch (error) {
+      Logger.error('PDF', 'answer source failed', error);
+      notice('匹配答案失败: ' + (error?.message || ''));
       return;
     }
-    if (other.meta?.role !== DOC_ROLES.ANSWER) {
-      notice('另一侧的文档没有标记为答案册');
+    if (!answer) {
+      notice('请先为这本习题册指定配套的答案册');
       return;
     }
+    const other = answer.holder;
 
     try {
       // 'han' tells the quality gate these are Chinese books. Absence of the
@@ -1505,9 +3098,11 @@ export class PdfWorkspace {
         // Suppresses display of text the reader could not read anyway.
         textQuality: other.answerIndex.quality,
         onReveal: (m) => {
-          // Jump the answer pane to where the answer actually is, so the user
-          // can verify the match against the book itself.
-          if (m.entry?.page) other.goToPage(m.entry.page);
+          // View original: recall the answer entry in the pane that OWNS it and
+          // go to the matched page. The scratchpad or book it was hidden
+          // underneath stays in that deck — recalling something is not closing
+          // what it was behind.
+          this.viewOriginal(slot, answer.resourceId, m.entry?.page);
           // And then get out of the way: the panel existed to answer "which
           // page", and it has. Leaving it up covers the page it just sent the
           // reader to, which is the one thing they now want to look at.
@@ -1518,6 +3113,132 @@ export class PdfWorkspace {
       Logger.error('PDF', 'answer lookup failed', error);
       notice('匹配答案失败: ' + (error?.message || ''));
     }
+  }
+
+  /**
+   * Finds the answer book for the exercise book in `slot`, wherever it is.
+   *
+   * Four cases, in the order the specification sets out:
+   *
+   *   - it is on screen in the other pane: use that pane, and nothing moves;
+   *   - it is in a deck but hidden: open a BACKGROUND handle and index that,
+   *     so the lookup runs without replacing whatever is in the foreground;
+   *   - it is in both decks: prefer the entry opposite the exercise;
+   *   - it is in neither: index it in the background too. Opening it into a
+   *     pane is what View original is for, and it is the reader's decision.
+   *
+   * Index access being separate from foreground rendering is the whole reason
+   * a hidden answer key still works.
+   *
+   * @returns {Promise<{resourceId: string, holder: Object}|null>}
+   */
+  async _resolveAnswerSource(slot) {
+    const exerciseId = activeEntryIn(this.state, slot)?.resourceId;
+    if (!exerciseId) return null;
+
+    // The remembered pairing first. Failing that, the only answer-role book in
+    // either deck — which is an inference, so it is recorded as the pairing the
+    // moment it is used, and never guessed at again.
+    let answerId = answerFor(exerciseId);
+    if (!answerId) {
+      answerId = await this._soleAnswerInDecks(slot);
+      if (answerId) rememberPair(exerciseId, answerId);
+    }
+    if (!answerId) return null;
+
+    // On screen in the other pane: use the live one. It already has its index,
+    // its outline and its page, and opening a second handle for the same bytes
+    // would be a second renderer for no gain.
+    const opposite = otherSlot(slot);
+    const shown = activeEntryIn(this.state, opposite);
+    if (shown?.resourceId === answerId && this.panes[opposite].isLoaded()) {
+      return { resourceId: answerId, holder: this.panes[opposite] };
+    }
+
+    return { resourceId: answerId, holder: await this._backgroundAnswer(answerId) };
+  }
+
+  /** The one answer-role book among both decks, if there is exactly one. */
+  async _soleAnswerInDecks(slot) {
+    const seen = new Set();
+    for (const side of [otherSlot(slot), slot]) {
+      for (const entry of deckFor(this.state, side).entries || []) {
+        if (entry.kind !== ENTRY_KINDS.PDF) continue;
+        seen.add(entry.resourceId);
+      }
+    }
+    const answers = [];
+    for (const id of seen) {
+      const meta = await this._pdfLibrary.getDocumentMeta(id);
+      if (meta?.role === DOC_ROLES.ANSWER) answers.push(id);
+    }
+    return answers.length === 1 ? answers[0] : null;
+  }
+
+  /**
+   * A handle on an answer book that is not being rendered.
+   *
+   * Cached by resource, because indexing a 372-page key is expensive and the
+   * lookup is per page. It holds a document and an index and NO canvas: this is
+   * not a third renderer, it is a reader.
+   */
+  async _backgroundAnswer(resourceId) {
+    this._answerHandles ||= new Map();
+    const cached = this._answerHandles.get(resourceId);
+    if (cached) return cached;
+
+    const doc = await this._pdfLibrary.openStoredDocument(resourceId);
+    // Shaped like a pane as far as the matcher is concerned: it reads `doc`,
+    // `answerIndex`, `state.pageCount` and nothing else.
+    const handle = {
+      doc,
+      answerIndex: null,
+      state: { pageCount: doc.numPages },
+      isLoaded: () => true,
+      goToPage: () => {},
+    };
+    // The outline is what the TOC alignment stage needs, and it is optional.
+    try {
+      if (typeof doc.getOutline === 'function') await doc.getOutline();
+    } catch (_) { /* a book with no resolvable outline still matches by text */ }
+    this._answerHandles.set(resourceId, handle);
+    return handle;
+  }
+
+  /** Releases every background answer handle. */
+  _releaseAnswerHandles() {
+    if (!this._answerHandles) return;
+    for (const handle of this._answerHandles.values()) {
+      try { handle.doc.destroy(); } catch (_) { /* already gone */ }
+    }
+    this._answerHandles.clear();
+  }
+
+  /**
+   * Takes the reader to the answer, in the pane that owns it.
+   *
+   * If the answer is in neither deck it is opened opposite the exercise,
+   * preserving that pane's current entry — which rotates underneath rather than
+   * being closed — and expanding the pane if it was collapsed.
+   */
+  async viewOriginal(fromSlot, resourceId, page) {
+    const opposite = otherSlot(fromSlot);
+    const holders = slotsWithResource(this.state, resourceId);
+    // Opposite the exercise if it is there; otherwise wherever it actually is.
+    const target = holders.includes(opposite) ? opposite : holders[0];
+
+    if (this.state.collapsedSlot === (target || opposite)) this.restorePane();
+
+    if (target) {
+      const entry = findByResource(deckFor(this.state, target), resourceId);
+      await this.showEntry(target, entry.id);
+    } else {
+      await this.openResource(resourceId, { slot: opposite });
+    }
+
+    const landed = holders.includes(opposite) ? opposite : (target || opposite);
+    if (page) this.panes[landed]?.goToPage(page);
+    this._syncSlotChrome(landed);
   }
 
   _activeAgentSlot() {
@@ -1596,51 +3317,294 @@ export class PdfWorkspace {
 
 
   _persist() {
-    saveSession(this.state, {
-      [SLOTS.PRIMARY]: this.panes[SLOTS.PRIMARY].state,
-      [SLOTS.SECONDARY]: this.panes[SLOTS.SECONDARY].state,
+    // By ENTRY, not by slot. Only the two live panes have anything new to say;
+    // every other entry's view is preserved by saveSession from what it is
+    // already holding, so rotating content underneath does not cost it its
+    // page.
+    const views = {};
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+      // 同上：记的是窗格里装着的那一份。换书途中落一次盘，本来会把旧书的页码
+      // 写进新书的条目里。
+      // 这一栏正在换内容就跳过它。另一栏照记——saveSession 会把没在这一轮
+      // 里出现的条目从缓存里原样带过去，所以跳过就是「这一条这次没有新话说」。
+      if (this._paneInFlux?.[slot]) continue;
+      const entry = this._entryOnScreen(slot);
+      // Only a book has a page, a zoom and a scroll to record here. A pad's
+      // place is its camera, and that belongs to the pad rather than to the
+      // session — it is filed against the resource by the scratch pane itself,
+      // so it survives being opened in the other pane just as well.
+      if (entry?.kind !== ENTRY_KINDS.PDF) continue;
+      const view = this.panes[slot]?.state;
+      if (view) views[entry.id] = view;
+    }
+    saveSession(this.state, views);
+    // And against the documents themselves, so a book reopened from the library
+    // comes back to the page it was left on rather than to page 1.
+    this._scheduleRememberDocViews();
+  }
+
+  /**
+   * Files both panes' places under the documents they are showing — later.
+   *
+   * Deliberately NOT on the same beat as saveSession(). That one stringifies a
+   * handful of scalars into one key and is cheap enough to run on every
+   * interaction, which is what it does: `_persist()` is called from
+   * `onStateChange`, and that fires on every frame of a pan. This one reads,
+   * parses, rewrites and stores a map of every book the reader has opened, once
+   * per pane — three times the storage traffic of the thing it rides on, on the
+   * main thread, under a stylus sampling at 120Hz. A reading position is worth
+   * a great deal less than that, and it does not change meaningfully inside
+   * half a second anyway.
+   */
+  _scheduleRememberDocViews() {
+    clearTimeout(this._docViewTimer);
+    this._docViewTimer = setTimeout(() => {
+      this._docViewTimer = null;
+      for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) this._rememberSlotView(slot);
+    }, DOC_VIEW_SETTLE);
+  }
+
+  /**
+   * 这一栏正在显示的那一份，而不是 deck 说的那一份。
+   *
+   * 打开是先提交 deck、再换屏幕：在这两步之间，deck 已经改口说的是新的那一份，
+   * 而窗格里装的还是旧的。谁在这段窗口里问 activeEntryIn，谁就会把旧书的页码
+   * 记到新书名下——旧书的页码从此没人记得，新书的页码被覆盖成别人的。
+   * 「换一本书再换回来，不在原来那一页」就是这么来的。
+   *
+   * _shown 记的是最后一次真正commit到屏幕上的那一份，那才是窗格的实情。
+   */
+  _entryOnScreen(slot) {
+    return this._shown?.[slot] || activeEntryIn(this.state, slot);
+  }
+
+  /** Filled when this page is marked, hollow when it is not. */
+  _syncBookmarkButton(slot) {
+    const btn = this.elSlots?.[slot]?.querySelector('[data-role="bookmark"]');
+    if (!btn) return;
+    const entry = this._entryOnScreen(slot);
+    const page = this.panes[slot]?.state?.pageNumber;
+    const on = entry?.kind === ENTRY_KINDS.PDF && page
+      && hasBookmark(this._bookmarksIn(slot), page);
+    // 形状不变，只是填不填。一个书签记没记，是它有没有被涂满，而不是它变成
+    // 了另一样东西——空心和实心是同一条丝带的两种状态。
+    const path = btn.querySelector('path');
+    if (path) path.setAttribute('fill', on ? 'currentColor' : 'none');
+    btn.classList.toggle('is-on', !!on);
+    btn.setAttribute('aria-pressed', String(!!on));
+  }
+
+  /**
+   * The marks belonging to whatever this column is showing.
+   *
+   * Read through a small cache rather than off disk each time: the thumbnail
+   * grid asks once per cell, and an 827-page book would otherwise parse the
+   * whole store 827 times to draw one screen.
+   */
+  _bookmarksIn(slot) {
+    const entry = this._entryOnScreen(slot);
+    if (entry?.kind !== ENTRY_KINDS.PDF) return [];
+    this._marks ||= {};
+    if (this._marks[entry.resourceId] === undefined) {
+      this._marks[entry.resourceId] = loadBookmarks(entry.resourceId);
+    }
+    return this._marks[entry.resourceId];
+  }
+
+  /**
+   * Marks or unmarks a page — by default the one being read.
+   *
+   * The page count is passed so a mark can never name a page the book does not
+   * have; see bookmark-state.
+   */
+  _toggleBookmark(slot, page) {
+    const entry = this._entryOnScreen(slot);
+    if (entry?.kind !== ENTRY_KINDS.PDF) return;
+    const pane = this.panes[slot];
+    const target = page || pane?.state?.pageNumber;
+    if (!target) return;
+    this._marks ||= {};
+    const next = toggleBookmark(this._bookmarksIn(slot), target, {
+      pageCount: pane?.doc?.numPages || 0,
     });
+    this._marks[entry.resourceId] = next;
+    saveBookmarks(entry.resourceId, next);
+    this._syncSlotChrome(slot);
+    this.panels?.[slot]?.refreshMarks();
+  }
+
+  /**
+   * 让读者给自己插的这一页起个名字。
+   *
+   * 「第 137 页」记不住任何东西。人真正在找的是「洛必达那节」「作业三」「卡在
+   * 这儿」——书签的用处全在这个名字上，页码只是它落在哪。
+   *
+   * 名字清掉就退回「第 N 页」，不是把书签删掉：改名的对话框里按空再确定，意思
+   * 是「不要这个名字」，不是「不要这一页」。删除是旁边那个 ×。
+   */
+  async _nameBookmark(slot, mark) {
+    const entry = this._entryOnScreen(slot);
+    if (entry?.kind !== ENTRY_KINDS.PDF || !mark) return;
+    const label = await promptText({
+      title: `第 ${mark.page} 页`,
+      label: '书签名称',
+      value: mark.label || '',
+      max: LABEL_MAX,
+      placeholder: '例如：洛必达法则',
+      confirm: '保存',
+    });
+    // 取消给的是 null，清空给的是空串——对话框把这两件事分开正是为了这里：
+    // 按取消什么都不动，清空则是「去掉这个名字」，退回「第 N 页」。
+    if (label === null) return;
+    this._marks ||= {};
+    const next = renameBookmark(this._bookmarksIn(slot), mark.page, label || '');
+    if (next === this._bookmarksIn(slot)) return;
+    this._marks[entry.resourceId] = next;
+    saveBookmarks(entry.resourceId, next);
+    this.panels?.[slot]?.refreshMarks();
+  }
+
+  /**
+   * 缩放变了就报一下，报完就走。
+   *
+   * 横杠上那个读数一直都在，但它是梯子最先收走的东西之一——两栏各 584px 时它
+   * 正好不在，而那恰恰是人捏着两根手指、最想知道自己捏到哪儿的时候。所以另有
+   * 一块牌子，浮在这一栏的页面中间，只在比例真的变了的那一刻露面。
+   *
+   * 只在「同一份东西的比例变了」时露面。翻页、落笔、撤销都会走到这里；换一本
+   * 书更会——新书有自己的比例，而那不是一次缩放，是一次打开。所以要连同「现在
+   * 显示的是哪一条」一起比，只认前后是同一条、而数变了的那一次。
+   */
+  _flashZoom(slot, percent, entryId) {
+    this._lastZoom ||= {};
+    const before = this._lastZoom[slot];
+    this._lastZoom[slot] = percent == null ? null : { percent, entryId };
+    if (percent == null || !before || before.entryId !== entryId) return;
+    if (before.percent === percent) return;
+
+    const badge = this.elSlots?.[slot]?.querySelector('[data-role="zoom-badge"]');
+    if (!badge) return;
+    badge.textContent = `${percent}%`;
+    badge.classList.add('is-visible');
+    this._zoomBadgeTimers ||= {};
+    clearTimeout(this._zoomBadgeTimers[slot]);
+    // 捏合时这里每一帧都会被叫到，所以是「最后一次变化之后再过 900ms」，而不是
+    // 每次都重新演一遍淡入淡出。
+    this._zoomBadgeTimers[slot] = setTimeout(() => {
+      badge.classList.remove('is-visible');
+    }, 900);
+  }
+
+  /** Files the pane's current place under the document it is showing, now. */
+  _rememberSlotView(slot) {
+    // 换内容的途中不记。这道门是给自动落盘的那两条路开的——翻页 500ms 之后的
+    // 延迟记账，和 pdf.js 装载过程中自己发出的状态变化——它们不知道此刻窗格里
+    // 装的是谁。换书那条路上那两次「记下走掉的这一份」都发生在装新书之前，
+    // 牌子还没立起来，所以照走不误。
+    if (this._paneInFlux?.[slot]) return;
+    const entry = this._entryOnScreen(slot);
+    if (entry?.kind !== ENTRY_KINDS.PDF) return;
+    const view = this.panes[slot]?.state;
+    if (!view) return;
+    // 两处都要记：这一条目自己的位置，和这份文件在任何地方最后被放下的位置。
+    // 只记后者的话，同一栏里换走再换回来会拿到开机那一刻的页码——条目这一层
+    // 的优先级更高，而它在两次存盘之间一直是旧的。
+    rememberEntryView(entry.id, view);
+    rememberDocView(entry.resourceId, view);
   }
 
   /** Restores the previous session; safe to call when there is none. */
   async init() {
-    const { workspace, views, dropped } = await restoreSession();
+    const { workspace, views, dropped, migrated } = await restoreSession();
     if (dropped.length) {
-      Logger.warn('PDF', `Dropped ${dropped.length} session slot(s) whose document was deleted`);
+      Logger.warn('PDF', `Dropped ${dropped.length} session entr(ies) whose resource was deleted`);
     }
+    // `info`, not `log`: the logger has no `log`. Calling one threw here on the
+    // device, on the ONE launch that matters most — the migrating one — and
+    // took the whole restore down with it before a single slot was opened.
+    if (migrated) Logger.info('PDF', 'Migrated a version 1 session into decks');
+    // The restored DECKS go in first, so the open below finds each slot's
+    // entries already in place and recalls the active one rather than
+    // inserting a second entry for the same resource.
     this._setState(setOrientation(
       workspace,
       orientationForViewport(this.root.clientWidth, this.root.clientHeight),
     ));
 
     for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
-      const id = workspace.documents[slot];
-      if (!id) continue;
-      try {
-        await this.openDocument(slot, id, views[slot]);
-      } catch (error) {
-        Logger.warn('PDF', `Could not restore slot ${slot}: ${error.message}`);
-        this._setState(closeSlot(this.state, slot));
+      // The entry is already in the deck, so this is a recall: `showEntry`
+      // prepares the resource and commits, and the REST of the deck — every
+      // entry rotated underneath — is left exactly as it was restored.
+      //
+      // If it will not open, fall to the NEXT entry rather than deleting
+      // anything. This used to call `forgetResource`, which took every entry
+      // naming that resource out of BOTH decks — so one bad launch, or one
+      // file that happened to be slow, permanently emptied a pane of something
+      // still sitting in the library. A resource that failed to open once is
+      // not a resource that is gone, and the specification asks for an
+      // unavailable ENTRY the reader can retry or remove, not a silently
+      // wiped deck.
+      const entries = [...(deckFor(this.state, slot).entries || [])];
+      const active = activeEntryIn(this.state, slot);
+      // The one it was showing first, then the rest in deck order.
+      const order = active ? [active, ...entries.filter(e => e.id !== active.id)] : entries;
+      for (const entry of order) {
+        try {
+          const ok = await this.showEntry(slot, entry.id, {
+            restoredView: views[entry.id],
+            force: true,
+          });
+          if (ok) break;
+          Logger.warn('PDF', `Could not restore ${entry.resourceId} in slot ${slot}`);
+        } catch (error) {
+          Logger.warn('PDF', `Could not restore slot ${slot}: ${error.message}`);
+        }
       }
     }
-    // Focus is restored after both documents load, so it is not cleared by a
+    // Focus is restored after both resources load, so it is not cleared by a
     // slot assignment happening later.
     this._setState(workspace.focusedSlot
       ? toggleFocus(clearFocus(this.state), workspace.focusedSlot)
       : this.state);
+    // A collapsed pane whose deck did not survive the restore is not collapsed
+    // any more — it is empty, and leaving the state saying otherwise would put
+    // a restore control on screen with nothing behind it.
+    if (this.state.collapsedSlot && !deckLength(deckFor(this.state, this.state.collapsedSlot))) {
+      this._setState(restoreCollapsed(this.state));
+    }
     this._layout();
+    // Everything rotated underneath is named too, so the content list is usable
+    // from the first moment rather than after each entry has been visited once.
+    this._resolveNames();
   }
 
   destroy() {
+    this._sizeObserver?.disconnect();
+    this._sizeObserver = null;
     window.removeEventListener('resize', this._onResize);
     window.removeEventListener('orientationchange', this._onResize);
+    document.removeEventListener('pointerdown', this._onDocumentPointerDown, true);
+    // Anything the debounce was still holding: a workspace being torn down is
+    // the last moment either book's place can be written.
+    clearTimeout(this._docViewTimer);
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) this._rememberSlotView(slot);
     clearTimeout(this._animTimer);
     if (this._trackFrame) cancelAnimationFrame(this._trackFrame);
     this._trackFrame = 0;
     this._closeAgentPanel({ notify: false });
     this.agentPanel?.destroy();
     this.toolbar?.destroy();
-    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) this.panes[slot].unload();
+    this._releaseAnswerHandles();
+    // Focus is a body class, so a workspace torn down while focused would leave
+    // the import row and the dock hidden with nothing to bring them back.
+    document.body.classList.remove('is-scratch-focus');
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+      this.strips[slot]?.destroy();
+      this.panes[slot].unload();
+      // Unload commits: a pad with unwritten strokes is written on the way out,
+      // which is the last moment it can be.
+      this.scratchPanes[slot]?.unload();
+    }
   }
 }
 
@@ -1650,32 +3614,70 @@ function escapeHtml(s) {
   ));
 }
 
+/**
+ * The save state, in words.
+ *
+ * Only a committed write earns "Saved". Saving is a state of its own and says
+ * so, and a failure stays on screen as something to press rather than as a
+ * colour that fades — an indicator that lies is worse than no indicator,
+ * because it is the thing someone checks before closing the app.
+ */
+function saveLabel(state) {
+  switch (state) {
+    case SAVE_STATES.SAVED: return t('scratch.saved');
+    case SAVE_STATES.SAVING: return t('scratch.savingState');
+    case SAVE_STATES.FAILED: return t('scratch.failed');
+    case SAVE_STATES.UNSAVED: return t('scratch.unsaved');
+    default: return '';
+  }
+}
+
 function slotChrome(slot) {
   return `
     <div class="pdf-slot-toolbar" data-role="toolbar" hidden>
+      <!-- 专注模式的出口。它原来在一条自己的横杠里，而那条横杠是工作区这个
+           row flex 的直接子元素——于是它没有横在上面，而是竖在旁边，占掉了整
+           整 296px 的宽度：草稿纸被挤到右边，左边四分之一是空的。
+           那条横杠上的另外两样东西本来就是重复的：名字和保存状态就在它右边
+           这条工具栏里，「本栏内容」就是下面切换条的标题按钮。所以只留出口，
+           放在它该在的地方。 -->
+      <button type="button" class="pdf-slot-btn is-accent" data-role="focus-exit" hidden></button>
       <span class="pdf-slot-title" data-role="title"></span>
-      <button type="button" class="pdf-slot-btn" data-role="outline" title="目录">☰</button>
-      <button type="button" class="pdf-slot-btn" data-role="prev" title="上一页">‹</button>
-      <input type="number" class="pdf-slot-page" data-role="page-input" min="1" step="1" value="1" aria-label="页码">
-      <span class="pdf-slot-total" data-role="page-total"></span>
-      <button type="button" class="pdf-slot-btn" data-role="next" title="下一页">›</button>
+      <span class="pdf-slot-group is-pdf-only" data-role="pdf-controls">
+        <button type="button" class="pdf-slot-btn" data-role="outline" title="目录">☰</button>
+        <button type="button" class="pdf-slot-btn" data-role="prev" title="上一页">‹</button>
+        <input type="number" class="pdf-slot-page" data-role="page-input" min="1" step="1" value="1" aria-label="页码">
+        <span class="pdf-slot-total" data-role="page-total"></span>
+        <button type="button" class="pdf-slot-btn" data-role="next" title="下一页">›</button>
+        <!-- 书签：这一页记不记，和翻页是同一件事的两面，所以挨着放。 -->
+        <button type="button" class="pdf-slot-btn pdf-slot-mark" data-role="bookmark"
+                aria-pressed="false" title="书签">
+          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+            <path d="M6.5 3.5h11a1 1 0 0 1 1 1v15.2a.6.6 0 0 1-.93.5L12 16.4l-5.57 3.8a.6.6 0 0 1-.93-.5V4.5a1 1 0 0 1 1-1z"
+                  fill="none" stroke="currentColor" stroke-width="1.7"
+                  stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </span>
       <button type="button" class="pdf-slot-btn" data-role="zoom-out" title="缩小">−</button>
       <span class="pdf-slot-zoom" data-role="zoom-label"></span>
       <button type="button" class="pdf-slot-btn" data-role="zoom-in" title="放大">+</button>
-      <button type="button" class="pdf-slot-btn" data-role="fit-width" title="适合宽度">↔</button>
-      <button type="button" class="pdf-slot-btn" data-role="fit-page" title="整页">⤢</button>
+      <span class="pdf-slot-group is-pdf-only">
+        <button type="button" class="pdf-slot-btn" data-role="fit-width" title="适合宽度">↔</button>
+        <button type="button" class="pdf-slot-btn" data-role="fit-page" title="整页">⤢</button>
+      </span>
+      <!-- A scratchpad has no outline, no page controls, no question label and
+           no answer lookup, because it has no pages and takes no part in
+           matching. What it has instead is a way back to the origin, a way to
+           see everything at once, and its save state. -->
+      <span class="pdf-slot-group is-scratch-only" data-role="scratch-controls" hidden>
+        <button type="button" class="pdf-slot-btn" data-role="scratch-origin"></button>
+        <button type="button" class="pdf-slot-btn" data-role="scratch-fit"></button>
+        <button type="button" class="scratch-save" data-role="scratch-save"></button>
+      </span>
       <span class="pdf-slot-sep"></span>
-      <button type="button" class="pdf-slot-btn is-save-action" data-role="save-ink" title="保存本页批注">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
-             stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true">
-          <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-          <path d="M17 21v-8H7v8M7 3v5h8"/>
-        </svg>
-        <span class="pdf-slot-btn-text" data-role="save-ink-text">保存</span>
-      </button>
       <button type="button" class="pdf-slot-btn" data-role="ink-undo" title="撤销">↶</button>
       <button type="button" class="pdf-slot-btn" data-role="ink-redo" title="重做">↷</button>
-      <input type="text" class="pdf-slot-label" data-role="exercise-label" placeholder="题号" aria-label="题号" maxlength="4">
       <button type="button" class="pdf-slot-btn is-answer-action" data-role="answers" title="对照本页答案">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
              stroke-linecap="round" stroke-linejoin="round" width="17" height="17" aria-hidden="true">
@@ -1686,12 +3688,32 @@ function slotChrome(slot) {
         </svg>
         <span class="pdf-slot-btn-text">对答案</span>
       </button>
-      <span class="pdf-slot-sep"></span>
+      <span class="pdf-slot-sep is-tail"></span>
       <button type="button" class="pdf-slot-btn" data-role="focus" title="专注此文档">⛶</button>
-      <button type="button" class="pdf-slot-btn" data-role="close" title="关闭">✕</button>
+      <button type="button" class="pdf-slot-btn" data-role="slot-more" title="更多"
+              aria-label="更多操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
+    </div>
+    ${deckStripHtml()}
+    <div class="pdf-slot-menu" data-role="slot-menu" role="menu" hidden>
+      <!-- Focus and style are only offered for a pad; the workspace hides them
+           when the slot is showing a book. -->
+      <button type="button" class="pdf-slot-menu-item" role="menuitem" data-role="focus-scratch" hidden></button>
+      <button type="button" class="pdf-slot-menu-item" role="menuitem" data-role="scratch-style" hidden></button>
+      <button type="button" class="pdf-slot-menu-item" role="menuitem" data-role="organize"></button>
+      <!-- Relabelled from 关闭文档. Removing an entry detaches it from this
+           pane; the resource stays in its library, and the pane falls to
+           whatever was underneath rather than emptying. -->
+      <button type="button" class="pdf-slot-menu-item is-danger" role="menuitem" data-role="close"></button>
+      <button type="button" class="pdf-slot-menu-item is-danger" role="menuitem" data-role="delete-pad" hidden></button>
     </div>
     <div class="pdf-outline-panel" data-role="outline-panel" hidden></div>
     <div class="pdf-answer-panel" data-role="answer-panel" hidden></div>
     <div class="pdf-slot-pane" data-role="pane" data-slot="${slot}"></div>
+    <div class="pdf-slot-pane scratch-slot-pane" data-role="scratch-pane" data-slot="${slot}" hidden></div>
+    <!-- 缩放时报一下当前比例，报完就走。
+         横杠上本来有个小小的读数，可它是梯子上最先被收走的东西之一：两栏各
+         584px 的时候它正好不在。而人捏合的时候恰恰最需要知道自己捏到了哪儿。
+         摆在最后，于是它盖在页面上而不是被页面盖住。 -->
+    <div class="pdf-zoom-badge" data-role="zoom-badge" aria-hidden="true"></div>
   `;
 }

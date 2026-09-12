@@ -52,6 +52,28 @@ export function createStroke({ tool = INK_TOOLS.PEN, color = '#111827', width, o
 }
 
 /** Half the maximum painted width, used to inflate bounds and hit tests. */
+/**
+ * 照着一条笔画再做一条，挪开一点。
+ *
+ * 新的 id，不是新的引用：复制出来的那一份必须是独立的一条，否则撤销、擦除、
+ * 再次框选都会把两条当成同一条。点也是逐个新建的——共用同一批点对象的话，搬动
+ * 其中一份会把另一份也搬走。
+ */
+export function cloneStroke(stroke, dx = 0, dy = 0) {
+  if (!stroke) return null;
+  const copy = {
+    id: nextId(),
+    tool: stroke.tool,
+    color: stroke.color,
+    width: stroke.width,
+    opacity: stroke.opacity,
+    points: stroke.points.map(pt => ({ x: pt.x + dx, y: pt.y + dy, p: pt.p })),
+    bounds: null,
+  };
+  recomputeBounds(copy);
+  return copy;
+}
+
 export function strokeRadius(stroke) {
   const defaults = TOOL_DEFAULTS[stroke.tool] || TOOL_DEFAULTS[INK_TOOLS.PEN];
   // 石墨会散到笔画两侧去，最外那一层比标称宽度还要宽。边界如果不知道这件事，
@@ -188,6 +210,29 @@ export function pointInPolygon(x, y, polygon) {
     if (intersects) inside = !inside;
   }
   return inside;
+}
+
+/**
+ * Inside the polygon, or within `margin` of its outline.
+ *
+ * A freehand lasso hugs the ink it caught, so the area strictly inside it is a
+ * sliver — a stylus landing a few pixels proud of the line would start a fresh
+ * selection instead of moving the one already there. A margin outside the
+ * boundary makes the loop itself grabbable without making its bounding box
+ * grabbable: the empty corner of a diagonal selection is far from every edge
+ * and still begins a new lasso. `margin` is in the polygon's own units.
+ */
+export function nearPolygon(x, y, polygon, margin = 0) {
+  if (!Array.isArray(polygon) || polygon.length < 3) return false;
+  if (pointInPolygon(x, y, polygon)) return true;
+  if (!(margin > 0)) return false;
+  const marginSq = margin * margin;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    if (distanceSqToSegment(x, y, polygon[j].x, polygon[j].y, polygon[i].x, polygon[i].y) <= marginSq) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Plain-JSON form for persistence. Coordinates stay in document space. */

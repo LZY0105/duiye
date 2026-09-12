@@ -14,10 +14,17 @@ import {
   INK_TOOLS,
   TOOL_DEFAULTS,
   appendPoint,
+  cloneStroke,
   createStroke,
   isDrawable,
-  pointInPolygon,
+  nearPolygon,
+  recomputeBounds,
 } from './stroke.js';
+import {
+  clipboardHasInk,
+  putOnClipboard,
+  takeFromClipboard,
+} from './ink-clipboard.js';
 import {
   ERASER_MODES,
   eraseArea,
@@ -37,9 +44,11 @@ import {
   snapshotStrokes,
   transformSelection,
 } from './ink-selection.js';
+import { SelectionBar, SELECTION_ACTIONS } from './ink-selection-bar.js';
 import {
   LASSO_STROKE,
   createTransform,
+  documentToScreen,
   drawLasso,
   drawStroke,
   renderLayer,
@@ -86,6 +95,24 @@ const HANDLE_MAX = 20;
 const HANDLE_SHARE = 0.18;
 /** The hit target may not follow the dot all the way down. */
 const HANDLE_HIT_MIN = 15;
+
+/**
+ * How far outside a finished lasso a press still counts as grabbing it, to
+ * move the selection. Screen pixels, scaled into document units at use.
+ *
+ * A freehand loop is drawn tight against the ink, so without this a press has
+ * to land in a sliver a stylus cannot reliably hit — and just missing it
+ * throws the selection away and starts a new one.
+ */
+const GRAB_MARGIN = 14;
+
+/**
+ * 复制出来的那一份挪开多远，屏幕像素。
+ *
+ * 屏幕距离而不是文档距离：600% 下复制，固定的文档距离会把两份分开半页；50% 下
+ * 则几乎重叠，看起来像什么都没发生。一指宽左右，刚好看得出是两份。
+ */
+const COPY_OFFSET = 18;
 
 /**
  * Minimum spacing between lasso samples, in document units.
@@ -151,6 +178,16 @@ export class InkSurface {
     this.lassoShape = 'free';
     this.lassoInside = false; // require strokes to fall entirely inside
     this._grab = null;        // an in-progress move/rotate/scale of the selection
+    // 选完之后浮在套索线旁的那两个动作。挂在画布的父节点上——画布自己是 canvas，
+    // 按钮不能长在它里面。
+    this._swatches = [];
+    this._bar = new SelectionBar(canvas.parentElement, (action, value) => {
+      if (action === SELECTION_ACTIONS.COPY) this.duplicateSelection();
+      else if (action === SELECTION_ACTIONS.CUT) this.cutSelection();
+      else if (action === SELECTION_ACTIONS.DELETE) this.deleteSelection();
+      else if (action === SELECTION_ACTIONS.PASTE) this.pasteClipboard();
+      else if (action === SELECTION_ACTIONS.COLOR_PICK) this.recolorSelection(value);
+    });
 
     // `erasing` and `selecting` are born here, through the same door every
     // later change uses. Declaring them separately is how they came to be set
@@ -183,6 +220,14 @@ export class InkSurface {
     if (this.selecting && mode !== 'select') this.clearSelection();
     this.erasing = mode === 'erase';
     this.selecting = mode === 'select';
+    // 那条动作小条也跟着这个模式走，而且要单独说一句。
+    //
+    // 只靠上面那句 clearSelection 是不够的：它开头就写着「没选东西也没在画就直接
+    // 返回」，而剪切之后正是这个状态——选区空了，条上却还挂着一个「粘贴」。于是
+    // 换回笔去写字，那个粘贴按钮就一直浮在页面上。真机上撞到的就是这个。
+    //
+    // 而换工具本身不会触发重画，所以也不能指望 render() 里那次摆位来收它。
+    this._placeBar();
   }
 
   setTool(tool) {
@@ -194,6 +239,11 @@ export class InkSurface {
   }
 
   /** Shape of the loop, and what counts as caught. */
+  /** 换色那一排用哪几个色。工具栏推过来的，和笔用的是同一排。 */
+  setSwatches(list) {
+    this._swatches = Array.isArray(list) ? list.filter(c => typeof c === 'string') : [];
+  }
+
   setLasso({ shape, mode } = {}) {
     if (shape === 'free' || shape === 'rect') this.lassoShape = shape;
     if (mode === 'touch' || mode === 'inside') this.lassoInside = mode === 'inside';
@@ -203,6 +253,7 @@ export class InkSurface {
     if (!this.selection.length && !this._loop) return;
     this.selection = [];
     this.selectionLoop = null;
+    this._bar?.hide();
     this._anchor = -1;
     this._loop = null;
     this._loopFrom = null;
@@ -270,6 +321,10 @@ export class InkSurface {
 
   /** Swaps in a page's ink; history starts clean for the new page. */
   loadLayer(layer) {
+    // 选区是一串 id 加一圈线，两样都只对上一层成立。翻一页而不清掉它，那圈虚线
+    // 会留在新的一页上，指着一批已经不在这里的笔画——而旁边那两个按钮会对着它们
+    // 去复制和删除，什么也不会发生，看起来就是「按了没反应」。
+    this.clearSelection();
     this.layer = layer || new InkLayer();
     this.history = new InkHistory(this.layer, {
       onChange: () => this.handlers.onHistoryChange?.(this.history),
@@ -301,6 +356,189 @@ export class InkSurface {
       });
     }
     if (this.selection.length) this._drawSelection();
+    this._placeBar();
+  }
+
+  /**
+   * 把那条小条摆到套索线旁，或者收起来。
+   *
+   * 跟着 render 走，所以缩放、平移、搬完选区之后它都在该在的地方——不必在五个
+   * 手势各自的收尾处记得叫一次。
+   *
+   * 手还在动的时候不露面：正在画的那一圈还不算选区，而正在搬的那一片，人看的是
+   * 它落到哪儿，不是旁边有什么按钮。松开手它自己回来。
+   */
+  _placeBar() {
+    if (!this._bar) return;
+    // 手还在动就什么都不露：正在画的那一圈还不算选区，正在搬的那一片人看的是
+    // 它落到哪儿。
+    if (this._grab || this._loop) { this._bar.hide(); return; }
+
+    const loop = this.selectionLoop;
+    if (!this.selection.length || !loop || loop.length < 3) {
+      // 没选东西，但手里还捏着剪下来的一片：那就只剩一个粘贴。剪下来却放不下去
+      // 的剪切，和删除没有区别。
+      if (this.selecting && clipboardHasInk() && this._viewport) {
+        const v = this._viewport;
+        this._bar.place(
+          { minX: v.width / 2, maxX: v.width / 2, minY: v.height - 96, maxY: v.height - 96 },
+          v,
+          { mode: 'paste' },
+        );
+      } else {
+        this._bar.hide();
+      }
+      return;
+    }
+    const docBox = polygonBounds(loop);
+    if (!docBox) { this._bar.hide(); return; }
+    // documentToScreen 只有缩放和平移、没有旋转，所以映两个对角就够，不必把整圈
+    // 点都映一遍。这里不能用 transformPolygon——它是另一种变换（搬动选区那种），
+    // 拿来做这件事会得到一个看不出错的错结果。
+    const a = documentToScreen(this.transform, docBox.minX, docBox.minY);
+    const b = documentToScreen(this.transform, docBox.maxX, docBox.maxY);
+    this._bar.place(
+      { minX: a.x, minY: a.y, maxX: b.x, maxY: b.y },
+      this._viewport || { width: 0, height: 0 },
+      { mode: 'selection', colors: this._swatches },
+    );
+  }
+
+  /**
+   * 把圈住的这一片再来一份，挪开一点。
+   *
+   * 复制完选中的是新的那一份，套索线也跟着挪过去——人接着要做的事十有八九是把它
+   * 拖到别处，而那需要它是被选中的那一个。
+   */
+  duplicateSelection() {
+    if (!this.selection.length) return false;
+    const offset = COPY_OFFSET / (this.transform.scale || 1);
+    const copies = [];
+    for (const id of this.selection) {
+      const original = this.layer.getById(id);
+      if (!original) continue;
+      const copy = cloneStroke(original, offset, offset);
+      if (copy) copies.push(copy);
+    }
+    if (!copies.length) return false;
+
+    // 一次手势，一步撤销。不然复制十条要按十次才收得回来。
+    this.history.beginBatch();
+    for (const copy of copies) {
+      this.layer.add(copy);
+      this.history.recordAdd(copy, this.layer.strokes.length - 1);
+    }
+    this.history.endBatch();
+
+    this.selection = copies.map(s => s.id);
+    if (this.selectionLoop) {
+      this.selectionLoop = this.selectionLoop
+        .map(p => ({ ...p, x: p.x + offset, y: p.y + offset }));
+    }
+    this._anchor = -1;
+    this.render();
+    this.handlers.onChange?.(this.layer);
+    return true;
+  }
+
+  /** 圈住的这一片，不要了。撤销拿得回来——它走的是橡皮那条路。 */
+  deleteSelection() {
+    if (!this.selection.length) return false;
+    const removed = this.layer.removeByIds(this.selection);
+    if (!removed.length) return false;
+    this.history.recordErase(removed);
+    this.clearSelection();
+    this.render();
+    this.handlers.onChange?.(this.layer);
+    return true;
+  }
+
+  /**
+   * 剪下来收着，等会儿放到别处。
+   *
+   * 剪贴板是两个分栏共用的一份——从这一页剪下来，翻到另一页、换到另一栏、换到
+   * 草稿纸上再放下，那正是剪切存在的理由。
+   */
+  cutSelection() {
+    if (!this.selection.length) return false;
+    const strokes = this.selection.map(id => this.layer.getById(id)).filter(Boolean);
+    if (!strokes.length) return false;
+    putOnClipboard(strokes);
+    return this.deleteSelection();
+  }
+
+  /**
+   * 把手里这一片放下。
+   *
+   * 落在当前看得见的那块地方的中间：粘贴之后人多半还要把它拖到确切的位置，而
+   * 从画面正中往外拖，比从某个记不住的旧坐标往回找要短。
+   *
+   * 放下之后它是被选中的，套索线也圈好——接着拖就行，不必再套一次。
+   */
+  pasteClipboard() {
+    if (!clipboardHasInk() || !this._viewport) return false;
+    const centre = screenToDocument(
+      this.transform, this._viewport.width / 2, this._viewport.height / 2);
+    const strokes = takeFromClipboard(centre.x, centre.y);
+    if (!strokes.length) return false;
+
+    // 落点算的是整片的左上角，所以还要把它自己的一半挪回去，才是「居中」。
+    const box = strokes.reduce((acc, s) => {
+      const b = s.bounds;
+      if (!b) return acc;
+      return {
+        minX: Math.min(acc.minX, b.minX), minY: Math.min(acc.minY, b.minY),
+        maxX: Math.max(acc.maxX, b.maxX), maxY: Math.max(acc.maxY, b.maxY),
+      };
+    }, { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+    const dx = -(box.maxX - box.minX) / 2;
+    const dy = -(box.maxY - box.minY) / 2;
+    for (const stroke of strokes) {
+      for (const pt of stroke.points) { pt.x += dx; pt.y += dy; }
+      recomputeBounds(stroke);
+    }
+
+    this.history.beginBatch();
+    for (const stroke of strokes) {
+      this.layer.add(stroke);
+      this.history.recordAdd(stroke, this.layer.strokes.length - 1);
+    }
+    this.history.endBatch();
+
+    this.selection = strokes.map(s => s.id);
+    const pad = 6;
+    this.selectionLoop = [
+      { x: box.minX + dx - pad, y: box.minY + dy - pad },
+      { x: box.maxX + dx + pad, y: box.minY + dy - pad },
+      { x: box.maxX + dx + pad, y: box.maxY + dy + pad },
+      { x: box.minX + dx - pad, y: box.maxY + dy + pad },
+    ];
+    this._anchor = -1;
+    this.render();
+    this.handlers.onChange?.(this.layer);
+    return true;
+  }
+
+  /**
+   * 把圈住的这一片改成另一个颜色。
+   *
+   * 记下每一条原来的颜色，而不是「原来都是黑的」——一片里本来就可能有好几种色，
+   * 撤销要把各自的那一种还回去。
+   */
+  recolorSelection(color) {
+    if (!this.selection.length || !color) return false;
+    const before = [];
+    for (const id of this.selection) {
+      const stroke = this.layer.getById(id);
+      if (!stroke || stroke.color === color) continue;
+      before.push({ id, color: stroke.color });
+      stroke.color = color;
+    }
+    if (!before.length) return false;
+    this.history.recordRestyle(before, color);
+    this.render();
+    this.handlers.onChange?.(this.layer);
+    return true;
   }
 
   /**
@@ -684,11 +922,14 @@ export class InkSurface {
       }
     }
 
-    // Inside the LOOP, not inside its bounding box: pressing in the empty
-    // corner of a diagonal selection's box is a press on the page, and it
-    // should start a new lasso rather than drag ink the user never enclosed.
+    // Inside the LOOP, or close enough to its edge to have meant it — but NOT
+    // merely inside its bounding box. Pressing in the empty corner of a
+    // diagonal selection's box is a press on the page and starts a new lasso;
+    // a freehand loop hugs the ink, though, so a stylus a few pixels outside
+    // the line still meant to grab it. `GRAB_MARGIN` px of screen, in doc units.
     const loop = this.selectionLoop;
-    if (this.selection.length && loop && pointInPolygon(pt.x, pt.y, loop)) {
+    const margin = GRAB_MARGIN / (this.transform.scale || 1);
+    if (this.selection.length && loop && nearPolygon(pt.x, pt.y, loop, margin)) {
       this._grab = {
         mode: 'move',
         last: pt,

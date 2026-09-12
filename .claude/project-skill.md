@@ -2,108 +2,68 @@
 
 ## 代码规范
 - JS 使用 ES Module (`import`/`export`)
-- CSS 使用 `src/styles/` 分模块管理（base/ocr/editor/handwriting/mobile）
+- CSS 使用 `src/styles/` 分模块管理（base / ocr / pdf / scratch / deck / ink-toolbar / mobile / material）
 - HTML 标签内联事件用 `pointerdown` 而不是 `click`（WebView 兼容）
 - 所有用户可见文本使用 `data-i18n` 属性 + `t()` 函数，禁止硬编码中文
-- 语言包在 `src/core/lang/` 统一管理，新增文本只需加键值对
+- 语言包在 `src/core/lang/` 统一管理，新增文本要五种语言都加；缺的键回落到简体中文
 - 新增功能归到所属模块，不要跨模块散落
 - 修改 `public/` 下文件后需重新 `npm run build`
-- 提交时**不添加 `Co-Authored-By` 署名行**
-- 新增 OCR 模式：创建 `src/ocr/pipelines/<name>.js` → 在 `pipelines/manifest.json` 加一行声明即可，无需改 recognition.js 或 registry
-- 新增功能模块：在模块内导出 `bindEvents()` → 在 `app.js` 注册，无需改 main.js
+- 状态先写成纯函数（`*-state.js`、`scratch-camera.js`、`scratch-style.js`），再由
+  编排层接 DOM。这是这个仓库里绝大多数验收保证能在 Node 里被证明的原因
+- 提交署名跟随仓库既有历史：带 `Co-Authored-By` 行。（本文件早先写的是「不添加」，
+  与实际提交记录不符，以记录为准）
 
 ---
 
 ## 一、项目架构
 
+> 本节以下的旧章节（识别引擎、ONNX 模型清单、导出系统等）描述的是**已经移除**的
+> OCR 应用，只作历史留存，不描述当前代码。当前结构以 README.md 和各文件头部注释
+> 为准。
+
 ```
 LaTeXSnipper_mobile/
-├── index.html                 # 单页面 SPA，4 个 Tab 页面
-├── public/
-│   ├── vendor/                # 内置库
-│   │   ├── katex.min.js       # KaTeX 公式渲染 (265KB)
-│   │   ├── katex.min.css      # KaTeX CSS + fonts/ 字体
-│   │   ├── mathlive/          # MathLive 编辑器
-│   │   └── pdf.min.js         # PDF.js
-│   ├── models/                # 模型目录（doc-ori ONNX + tokenizer/keys fallback）
-│   ├── sw.js                  # Service Worker
-│   └── manifest.json          # PWA 清单
+├── index.html                 # 单页面 SPA：练习 / 设置 两个 Tab
+├── public/vendor/             # pdf.js、cmaps、standard_fonts、KaTeX、MathLive
 ├── src/
-│   ├── main.js                # 入口（17 行）：await bootstrap → await createApp → await start
-│   ├── constants.js           # 全局常量
-│   ├── update-checker.js      # GitHub Releases 自动更新检查
-│   ├── core/                  # 基础设施
-│   │   ├── bootstrap.js       # 平台初始化（Theme/SW/Tab/PWA）
-│   │   ├── app.js             # 模块加载/事件注册/业务逻辑
-│   │   ├── event-registry.js  # EventRegistry（registerBinding/bindAll）
-│   │   ├── logger.js          # 日志收集（localStorage + Java 桥接 + DOM 事件）
-│   │   ├── i18n.js            # 国际化引擎
-│   │   └── lang/              # 语言文件（zh-CN/zh-TW/en/ja/ko）
-│   ├── ocr/                   # OCR 管线
-│   │   ├── pipeline.js        # OcrPipeline 基类（Metadata: id/name/icon/requiredModels）
-│   │   ├── pipeline-registry.js # 注册表（Manifest 自发现 + Lazy 加载 + checkPipelineModels）
-│   │   ├── ocr-result.js      # OcrResult/OcrBlock 数据模型
-│   │   ├── ocr-native.js      # Android Native Bridge 封装
-│   │   ├── recognition.js     # 识别协调器（PDF/外部API/Pipeline调度）
-│   │   └── pipelines/         # 可插拔 Pipeline（lazy chunk）
-│   │       ├── manifest.json  # Pipeline 声明（自动发现注册）
-│   │       ├── formula.js     # 公式识别
-│   │       ├── text.js        # 文字识别
-│   │       └── mixed.js       # 混合识别
-│   ├── model/                 # 模型管理
-│   │   ├── model-manager.js   # 清单解析、CRUD、下载、导入、变体合并
-│   │   ├── model-analyzer.js  # ONNX protobuf 解析器
-│   │   ├── model-import.js    # ZIP/单文件导入 UI
-│   │   ├── model-settings.js  # 设置页模型管理 UI
-│   │   └── package-builder.js # 模型包创建器
-│   ├── camera/                # 全屏相机：拍照/框选/套索/四角把手/旋转
-│   ├── handwriting/           # Canvas 手写板 + 导出
-│   ├── editor/                # MathLive 编辑器 + 虚拟键盘 + KaTeX 预览
-│   ├── export/                # 导出模块
-│   │   ├── pandoc-export.js   # 统一导出系统（下拉菜单 + 9 种格式）
-│   │   ├── latex-generator.js # OcrResult → LaTeX
-│   │   ├── markdown-generator.js # OcrResult → Markdown
-│   │   └── share.js           # 分享功能（Capacitor → 下载降级）
-│   ├── history/               # IndexedDB 存储（idb 封装）
-│   ├── settings/              # 设置页面逻辑
-│   ├── ui/                    # UI 组件
-│   │   ├── ui.js              # 状态栏/进度条/拖放/模式切换
-│   │   ├── result.js          # 结果显示/KaTeX预览/复制/分享/PDF分页/导出
-│   │   ├── splash.js          # 启动加载进度
-│   │   ├── custom-select.js   # 自定义下拉选择器
-│   │   ├── status.js          # 状态栏（带图标）
-│   │   ├── theme.js           # 日/夜主题切换
-│   │   ├── polish.js          # AI 整理（DeepSeek API）
-│   │   ├── welcome-dialog.js  # 首次启动欢迎弹窗
-│   │   └── dom-refs.js        # DOM 元素引用共享
-│   └── styles/                # CSS 样式模块
-│       ├── base.css           # CSS 变量、布局、导航、自定义下拉
-│       ├── ocr.css            # 识别页面 + 导出下拉菜单样式
-│       ├── editor.css         # MathLive + KaTeX 预览 + 符号工具栏
-│       ├── handwriting.css    # 手写板
-│       ├── history.css        # 历史记录滑动
-│       └── mobile.css         # 移动端适配
-├── android/                   # Capacitor Android 项目
-│   └── app/src/main/java/com/latexsnipper/app/
-│       └── MainActivity.java  # 仅 BridgeActivity，无原生业务代码
-├── test/                      # 测试套件（4 套 785+ 项）
-│   ├── test_behavior_consistency.js  # 行为一致性（112 项）
-│   ├── test_integration.js           # 集成测试（221 项）
-│   ├── test_user_workflows.js        # 用户工作流（154 项）
-│   ├── test_e2e.js                   # E2E 全量（303 项）
-├── scripts/
-│   ├── build-android-windows.ps1  # Windows 非 ASCII 路径下的 Android 构建
-│   └── build-ios.sh               # 本地 iOS 构建
-├── vite.config.js             # Vite 8 配置（wasm + top-level-await 原生支持）
-├── SECURITY.md                # 安全政策
-├── capacitor.config.json      # Capacitor 配置
-└── .github/workflows/
-    ├── build-apk.yml                  # Android APK 构建（workflow_dispatch）
-    ├── build-ios.yml                  # iOS 模拟器构建
-    └── security-scan.yml              # 安全扫描
+│   ├── main.js                # 入口：bootstrap → createApp → start
+│   ├── core/                  # bootstrap、app、crash-guard、logger、i18n、lang/
+│   ├── pdf/                   # 工作区与对题
+│   │   ├── deck-state.js          # 纯：一栏一个有序队列 + 当前项，含原子 moveEntry
+│   │   ├── workspace-state.js     # 纯：两栏布局、分栏比例、互换、专注、收起
+│   │   ├── pdf-view-state.js      # 纯：单栏的页码 / 缩放 / 平移
+│   │   ├── document-session.js    # 会话 v2 持久化 + v1 迁移；view 按 entry 记
+│   │   ├── pdf-workspace.js       # 编排：交接事务、切换、移动、收起、专注、对题
+│   │   ├── pdf-workspace-ui.js    # 导入、文档库、顶栏收起手势
+│   │   ├── pdf-pane.js            # 单栏 PDF 视图：手势、翻页动画、位图缓存
+│   │   ├── deck-strip.js          # 52dp 切换行 + 内容列表 + 滑动手势
+│   │   ├── deck-dialogs.js        # 新建 / 选栏 / 移动 / 危险确认
+│   │   ├── deck-organizer.js      # 整理内容：两栏并排，拖手柄或点按
+│   │   ├── answer-association.js  # 习题册 ↔ 答案册的配套关联
+│   │   └── (21 个匹配引擎模块，来自 Math-answer-to-question-matching-model)
+│   ├── scratch/               # 无限草稿纸
+│   │   ├── scratch-camera.js      # 纯：世界中心 + 缩放，四方向无界
+│   │   ├── scratch-background.js  # 八种底纹，按可见世界区域直接绘制
+│   │   ├── scratch-style.js       # 纯：底纹 / 纸色 / 间距 / 浓淡
+│   │   ├── scratch-store.js       # 草稿纸资源（IndexedDB），笔迹走 ink-store
+│   │   ├── scratch-pane.js        # 单栏草稿纸视图：手势、相机、保存状态机
+│   │   └── scratch-style-panel.js # 样式选择面板
+│   ├── ink/                   # 矢量笔迹层（PDF 与草稿纸共用，一行未改）
+│   ├── settings/              # 设置页
+│   ├── ui/                    # liquid-glass、particles、custom-select、double-tap
+│   └── styles/                # base / ocr / pdf / scratch / deck / ink-toolbar /
+│                              #   mobile / material
+├── android/                   # Capacitor Android（除 Capacitor 外无原生业务代码）
+└── test/                      # 23 套，809 项，入口只有 `npm test`
 ```
 
----
+### 新增功能要落在哪里
+
+- 新增一种队列操作 → `deck-state.js` 加纯函数 → `workspace-state.js` 包一层 →
+  `pdf-workspace.js` 接线。三层都是纯的，只有最后一层碰 DOM。
+- 新增一种草稿纸底纹 → `scratch-style.js` 的 `PATTERNS` 加一项，
+  `scratch-background.js` 的 switch 加一个分支，语言包加 `pattern.PXX` 两条。
+- 新增用户可见文案 → 五个语言包都加；缺的键会回落到简体中文，不会显示裸键。
 
 ## 二、Tab 页面结构
 

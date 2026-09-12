@@ -29,6 +29,7 @@ import {
   isCornerPoint,
   isDocked,
   isEraser,
+  isYielded,
   moveDrag,
   openCard,
   orientationOf,
@@ -42,7 +43,9 @@ import {
   setOpacity,
   setWidth,
   startDrag,
+  yieldToCorner,
   undock,
+  unyield,
 } from './toolbar-state.js';
 import { t } from '../core/i18n.js';
 import { INK_TOOLS } from './stroke.js';
@@ -135,7 +138,37 @@ const iconFor = (tool, size) => icon(metaFor(tool).icon, size);
 /** 工具的显示名。每次调用都重新翻译，所以切换语言后无需重建这张表。 */
 const labelFor = (tool) => t(metaFor(tool).key);
 
+/**
+ * How long the bar takes to fold away, and to come back.
+ *
+ * Slower than the drag's own 320ms on purpose. A drag is motion the reader is
+ * already making, and it only has to keep up with them; this one they did not
+ * ask for, so it has to be legible instead — long enough to read as the bar
+ * folding up and travelling to a corner, short enough that a menu still feels
+ * like it opened at once. The unfold is given slightly longer because it ends
+ * on the shape the reader has to use, and arriving is worth more time than
+ * leaving.
+ */
+const FOLD_MS = 420;
+const UNFOLD_MS = 460;
+
+/** Picking the bar up is the reader's own gesture, so the fold keeps up with it. */
+const DRAG_FOLD_MS = 200;
+
 const clampNumber = (v, lo, hi) => (hi < lo ? (lo + hi) / 2 : Math.min(hi, Math.max(lo, v)));
+
+/**
+ * Do two on-screen rectangles share any area?
+ *
+ * Touching edges do not count: a bar that ends exactly where a panel begins is
+ * not covering it, and treating that as a collision would send the bar into a
+ * corner for nothing.
+ */
+export function overlaps(a, b) {
+  if (!a || !b) return false;
+  if (!a.width || !a.height || !b.width || !b.height) return false;
+  return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+}
 
 /** Honour the OS reduced-motion setting, per §8.3. */
 function prefersReducedMotion() {
@@ -242,6 +275,9 @@ export class InkToolbar {
         shape: this.state.lassoShape,
         mode: this.state.lassoMode,
       });
+      // 选中一片之后那条小条上的换色用的就是这排色——和笔用的是同一排，不另立
+      // 一套。人刚用某个色写完，圈起来想改成另一个，手会往同一组颜色上去找。
+      surface.setSwatches?.(this.state.swatches);
       return;
     }
     if (isEraser(this.state)) {
@@ -316,7 +352,11 @@ export class InkToolbar {
     const b = Math.max(0, Number(bottom) || 0);
     if (t === this._safe.top && b === this._safe.bottom) return;
     this._safe = { top: t, bottom: b };
-    this._clampIntoHost();
+    // 收起成球的时候 _clampIntoHost 是直接返回的（球是靠两条边钉住的，往上面写
+    // top 会把它拉长），所以球要走自己那条路重新摆一次。菜单栏升起来时球也在下
+    // 角，一样会被盖住。
+    if (this.state.phase === TOOLBAR_PHASE.DOCKED) this._positionDocked();
+    else this._clampIntoHost();
   }
 
   /**
@@ -484,18 +524,210 @@ export class InkToolbar {
     s.transform = '';
     const M = '10px';
     const corner = this.state.corner || CORNERS.TOP_LEFT;
-    if (corner === CORNERS.TOP_LEFT) { s.left = M; s.top = M; }
-    else if (corner === CORNERS.TOP_RIGHT) { s.right = M; s.top = M; }
-    else if (corner === CORNERS.BOTTOM_LEFT) { s.left = M; s.bottom = M; }
-    else { s.right = M; s.bottom = M; }
+    // 下面那两个角要把菜单栏让出来：球收在下角，而菜单栏正是从下面升上来的。
+    // 上面两个角同理，让的是分栏自己的横杠。
+    const top = `${this._safe.top + 10}px`;
+    const bottom = `${this._safe.bottom + 10}px`;
+    if (corner === CORNERS.TOP_LEFT) { s.left = M; s.top = top; }
+    else if (corner === CORNERS.TOP_RIGHT) { s.right = M; s.top = top; }
+    else if (corner === CORNERS.BOTTOM_LEFT) { s.left = M; s.bottom = bottom; }
+    else { s.right = M; s.bottom = bottom; }
   }
+
+  /**
+   * Steps the bar aside into one of `corners`, folding it into the puck and
+   * flying it there.
+   *
+   * The candidates are tried in order and the first whose puck actually clears
+   * `avoid` wins, because the corner nearest the panel is the natural one to
+   * ask for and the one a long panel is most likely to still be covering.
+   * Each candidate is measured after layout rather than predicted, so the
+   * answer holds whatever the puck's size turns out to be.
+   *
+   * Only the travel is animated; the resting placement is already correct
+   * before the first frame, which is what makes this safe to interrupt.
+   */
+  yieldTo(corners, avoid = null) {
+    if (isYielded(this.state)) return;
+    // Bottom corners only, whatever the caller asked for.
+    //
+    // "Sometimes it goes to the top corner" — an earlier version offered the
+    // top corner as a last resort when a long list covered both bottom ones,
+    // and where the bar ended up depended on how tall that list happened to
+    // be. Stepping aside has to land in the same place every time or it is not
+    // a place, it is a scatter. The rule is the floor of the column, and this
+    // is where it is enforced rather than trusted.
+    const candidates = (Array.isArray(corners) ? corners : [corners])
+      .filter(c => c === CORNERS.BOTTOM_LEFT || c === CORNERS.BOTTOM_RIGHT);
+    if (!candidates.length) return;
+
+    // Nothing from a previous fold may still be in the air: two stills over
+    // one bar is the one way this can look like a duplicate rather than a move.
+    this._clearGhosts();
+    const from = this.root.getBoundingClientRect();
+    // Taken BEFORE the swap, while there is still a bar to take a picture of.
+    const ghost = this._ghost(from);
+
+    let landed = false;
+    for (const corner of candidates) {
+      this._set(yieldToCorner(this.state, corner), { pushTools: false });
+      landed = true;
+      if (!avoid || !overlaps(this.root.getBoundingClientRect(), avoid)) break;
+    }
+    // Every corner was still covered: the first is as good as any, and the bar
+    // being small and in a corner already beats it lying across the panel.
+    if (!landed) { ghost?.remove(); return; }
+    this._playFold(ghost, from, this.root.getBoundingClientRect());
+  }
+
+  /**
+   * A still of the bar, parked over the real one and owning no events.
+   *
+   * Returns null when there is nothing worth animating — no layout, or a
+   * reader who has asked for less motion.
+   */
+  _ghost(from) {
+    if (!from?.width || !from.height) return null;
+    if (prefersReducedMotion() || typeof this.root.animate !== 'function') return null;
+    const clone = this.root.cloneNode(true);
+    clone.removeAttribute('id');
+    clone.setAttribute('aria-hidden', 'true');
+    clone.dataset.role = 'toolbar-ghost';
+    // Fixed, in viewport coordinates, on the body: the bar's own ancestors
+    // carry transforms, and a fixed child of a transformed element is measured
+    // against that element instead of the viewport.
+    clone.style.cssText = `position: fixed; margin: 0; left: ${from.left}px; top: ${from.top}px;`
+      + ` width: ${from.width}px; height: ${from.height}px; right: auto; bottom: auto;`
+      + ' transform: none; pointer-events: none; z-index: 59;';
+    document.body.appendChild(clone);
+    return clone;
+  }
+
+  /**
+   * The bar folding into the corner, as one object rather than two.
+   *
+   * `render()` swaps the bar's contents for the puck within a single frame, so
+   * the element itself can never be caught shrinking: by the time there is
+   * anything to animate, the tools are already gone and all that is left to
+   * scale is a circle — which stretches into an ellipse and reads as a glitch,
+   * not as folding. So what travels is the still: it shrinks and fades into the
+   * puck's box while the real puck is held back and brought up underneath it.
+   * One thing folds up; nothing vanishes and nothing appears.
+   */
+  _playFold(ghost, from, to, { duration = FOLD_MS, holdBack = true } = {}) {
+    if (!ghost) return;
+    if (!to?.width || !to.height) { ghost.remove(); return; }
+
+    const dx = (to.left + to.width / 2) - (from.left + from.width / 2);
+    const dy = (to.top + to.height / 2) - (from.top + from.height / 2);
+    const sx = to.width / from.width;
+    const sy = to.height / from.height;
+
+    const travel = ghost.animate(
+      [
+        { transform: 'none', opacity: 1, borderRadius: '26px' },
+        { transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, opacity: 0, borderRadius: '50%' },
+      ],
+      { duration, easing: 'cubic-bezier(0.32, 0.72, 0, 1)', fill: 'forwards' },
+    );
+
+    // The puck comes up as the still goes out, over the same stretch of time,
+    // so the two are never both fully there and never both gone.
+    //
+    // Not while dragging, though: there the token is under the reader's pen and
+    // has to be there from the first pixel. The still simply dissolves behind
+    // it instead.
+    if (holdBack) {
+      this._fade = this.root.animate(
+        [{ opacity: 0 }, { opacity: 1 }],
+        { duration: duration * 0.45, delay: duration * 0.55, easing: 'linear', fill: 'backwards' },
+      );
+    }
+
+    const done = () => ghost.remove();
+    if (travel.finished) travel.finished.then(done, done);
+    else travel.onfinish = done;
+  }
+
+  /** Hands back the placement a `yieldTo` borrowed, unfolding on the way. */
+  restoreFromYield() {
+    if (!isYielded(this.state)) return;
+    const from = this.root.getBoundingClientRect();
+    // A fold still in the air has nothing left to finish; the bar is coming
+    // back and the still would only fade out on top of it.
+    this._clearGhosts();
+    // Same reason as _undock(): the bar must be at full size before
+    // _clampIntoHost() measures it, or it centres a bar still growing.
+    this.root.classList.add('is-instant');
+    this._set(unyield(this.state), { pushTools: false });
+    this._absorb(from, false, UNFOLD_MS);
+    requestAnimationFrame(() => {
+      this.root.classList.remove('is-instant');
+      this._clampIntoHost();
+    });
+  }
+
+  /**
+   * Picking the bar up: the same fold, quicker, and with nothing held back.
+   *
+   * The bar used to become the token in the frame the pointer went down —
+   * "suddenly become one", with no shrink to watch. It is the same swap the
+   * deck list triggers and it gets the same treatment, only faster: a drag is
+   * a gesture the reader is making, and anything that lags behind their pen
+   * reads as the app being slow rather than as the bar folding up.
+   */
+  _beginDrag(point) {
+    // A puck is already the shape it would fold into. Taking a picture of one
+    // circle to shrink it into another circle is motion that says nothing.
+    if (isDocked(this.state)) {
+      this._set(startDrag(this.state, point), { pushTools: false });
+      return;
+    }
+    this._clearGhosts();
+    const from = this.root.getBoundingClientRect();
+    const ghost = this._ghost(from);
+    this._set(startDrag(this.state, point), { pushTools: false });
+    this._playFold(ghost, from, this.root.getBoundingClientRect(),
+      { duration: DRAG_FOLD_MS, holdBack: false });
+  }
+
+  /** Drops any still left in the air, so two folds cannot stack up. */
+  _clearGhosts() {
+    for (const el of document.querySelectorAll('[data-role="toolbar-ghost"]')) el.remove();
+    // Only the fade this fold started. `getAnimations()` returns everything
+    // running on the bar — the travel from a drag, the settle after a resize,
+    // any CSS transition mid-flight — and cancelling all of it to clean up
+    // after ourselves stopped motion that had nothing to do with the fold.
+    this._fade?.cancel();
+    this._fade = null;
+    this.root.style.opacity = '';
+  }
+
+  isYielded() { return isYielded(this.state); }
+
+  /** Where the bar is on screen, for callers deciding whether it is in the way. */
+  rect() { return this.root.getBoundingClientRect(); }
 
   /** Puck → bar, unfolding out of the corner it was parked in. */
   _undock() {
     if (!isDocked(this.state)) return;
     const from = this.root.getBoundingClientRect();
+    // Expand at full size with the padding/border-radius transition suppressed.
+    //
+    // `.is-docked` sets `padding: 0`; leaving it, those transition over 200ms.
+    // `_clampIntoHost()` runs inside the `render()` below and measures
+    // `offsetHeight` — mid-transition that reads a bar still growing, so it
+    // centres a too-short bar. The next render (the first tool tap) re-measures
+    // the settled height and nudges the bar ~5px down: the "slight downward
+    // jump". Snapping to full size makes that first measurement the real one;
+    // `_absorb()` still animates the visible travel from the puck.
+    this.root.classList.add('is-instant');
     this._set(undock(this.state), { pushTools: false });
     this._absorb(from, false);
+    requestAnimationFrame(() => {
+      this.root.classList.remove('is-instant');
+      this._clampIntoHost();
+    });
   }
 
   _positionExpanded() {
@@ -530,6 +762,19 @@ export class InkToolbar {
   _clampIntoHost() {
     const host = this.host;
     if (!host) return;
+    // Only the expanded bar is placed by an edge and a fraction along it. A
+    // puck is anchored to the two sides of its corner and a drag token follows
+    // the pointer, and writing `top` on either of those is not a nudge — it is
+    // a second anchor. `bottom: 10px` from the corner plus a `top` from here
+    // stretched the puck to the full height of the column and then translated
+    // it half its own height off the screen: the bar did not fold away, it
+    // vanished.
+    //
+    // It reached here through fitTo(), which re-clamps after a scale change and
+    // is called from onChange on the very _set() that docked the bar — so
+    // whether the bar survived stepping aside came down to whether its scale
+    // happened to change, which is why it did it some of the time.
+    if (this.state.phase !== TOOLBAR_PHASE.EXPANDED) return;
     const hostW = host.clientWidth;
     const hostH = host.clientHeight;
     const barW = this.root.offsetWidth;
@@ -561,6 +806,16 @@ export class InkToolbar {
         : clampNumber(this.state.offset * hostW, half + M, hostW - half - M);
       s.left = `${centre}px`;
       s.transform = 'translateX(-50%)';
+      // 横着躺的那一条也要让开那两条带子。
+      //
+      // 这一支原来只夹左右——竖着的那条早就认 _safe，横着的这条没有。于是贴在
+      // 底边的工具栏会被升起来的菜单栏盖掉半截，而那正是最容易撞上的摆法。
+      //
+      // 只改它自己那一侧的那一个属性：贴底边的改 bottom，贴顶边的改 top。两边
+      // 都写就是给同一个元素钉了两条边，那会把它拉长——收起来的球被拉成整栏高
+      // 的一条，就是这么来的。
+      if (this.state.edge === EDGES.BOTTOM) s.bottom = `${this._safe.bottom + M}px`;
+      else s.top = `${this._safe.top + M}px`;
     }
   }
 
@@ -578,7 +833,7 @@ export class InkToolbar {
    * slightly, so "absorbed into the corner" reads differently from "placed on
    * an edge".
    */
-  _absorb(from, corner) {
+  _absorb(from, corner, duration = null) {
     const el = this.root;
     if (!from || typeof el.animate !== 'function' || prefersReducedMotion()) return;
     const to = el.getBoundingClientRect();
@@ -595,7 +850,7 @@ export class InkToolbar {
         { transform: 'none', opacity: 1 },
       ],
       {
-        duration: corner ? 420 : 320,
+        duration: duration ?? (corner ? 420 : 320),
         easing: corner
           ? 'cubic-bezier(0.22, 1.2, 0.36, 1)'
           : 'cubic-bezier(0.32, 0.72, 0, 1)',
@@ -682,6 +937,8 @@ export class InkToolbar {
   _installDragController() {
     this._drag = { pointerId: null, start: null, started: false, fromDocked: false };
     this._swallowClick = false;
+    /** Swallow even a click that lands on the toolbar itself. See the undock tap. */
+    this._swallowInside = false;
 
     const toHostPoint = (e) => {
       const rect = this.host.getBoundingClientRect();
@@ -719,7 +976,7 @@ export class InkToolbar {
       // at once and stays glued to the pen from the first pixel.
       if (this._drag.fromDocked) return;
       this._drag.started = true;
-      this._set(startDrag(this.state, point), { pushTools: false });
+      this._beginDrag(point);
     };
 
     this._onDragMove = (e) => {
@@ -731,7 +988,7 @@ export class InkToolbar {
         const from = this._drag.start;
         if (Math.hypot(point.x - from.x, point.y - from.y) < TAP_SLOP) return;
         this._drag.started = true;
-        this._set(startDrag(this.state, point), { pushTools: false });
+        this._beginDrag(point);
       }
 
       this._set(moveDrag(this.state, point), { pushTools: false });
@@ -762,11 +1019,21 @@ export class InkToolbar {
       // a cancelled gesture, a stylus lifted outside — the arming has to
       // expire, or it would swallow whatever the user pressed minutes later.
       clearTimeout(this._swallowTimer);
-      this._swallowTimer = setTimeout(() => { this._swallowClick = false; }, 400);
+      this._swallowTimer = setTimeout(() => {
+        this._swallowClick = false;
+        this._swallowInside = false;
+      }, 400);
 
       // Never travelled, so it was a tap — and on a docked puck a tap expands.
       if (!started) {
-        if (fromDocked) this._undock();
+        if (fromDocked) {
+          // Expanding puts a whole bar of controls under a finger that is
+          // still down. The click that follows lands INSIDE the toolbar, on a
+          // button that did not exist when the press began — so this is the
+          // one case where a click inside must be swallowed too.
+          this._swallowInside = true;
+          this._undock();
+        }
         return;
       }
 
@@ -813,12 +1080,16 @@ export class InkToolbar {
     this._onClickCapture = (e) => {
       if (!this._swallowClick) return;
       this._swallowClick = false;
+      // Set only by the tap that expands a docked puck; see there.
+      const alsoInside = this._swallowInside;
+      this._swallowInside = false;
       // A toolbar that is no longer in the document has no business
       // suppressing anything. This listener lives on `window` and outlives a
       // subtree that was replaced rather than destroyed, and it is the one
       // listener here whose effect is not scoped by a pointer id.
       if (!this.root.isConnected) return;
-      if (this.root.contains(e.target) || this.cardLayer.contains(e.target)) return;
+      if (!alsoInside
+          && (this.root.contains(e.target) || this.cardLayer.contains(e.target))) return;
       e.preventDefault();
       e.stopPropagation();
     };

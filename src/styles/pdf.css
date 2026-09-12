@@ -140,14 +140,29 @@ body.is-top-hidden .bar-peek { pointer-events: auto; }
 /* Where the dock can be taken hold of once it has gone.
    It sits exactly where the dock itself lives, so it takes nothing away that
    was reachable before, and it exists only while the dock is away. */
+/* The way back to a hidden dock: a handle in the middle, not the whole width.
+ *
+ * This strip is z-index 999 and takes pointer events while the dock is away, so
+ * everything it covers is not page any more — a press there lands on the strip
+ * and never reaches the ink canvas underneath. At 520px that was most of the
+ * bottom of the workspace, which is why a line of working written along the
+ * foot of a page could not be written at all, and why trying kept pulling the
+ * dock back out from under the hand.
+ *
+ * 200px, centred. In a split workspace the centre of the screen is the divider
+ * and its gutter, so the handle costs almost no writing area on either page,
+ * and it is still a target a thumb coming off the bezel finds without aiming.
+ * PdfWorkspace's chrome gestures narrow the STYLUS to the same band in JS —
+ * this decides what swallows the press, that decides what the press means.
+ */
 .dock-peek {
   position: fixed;
   left: 0;
   right: 0;
   bottom: calc(6px + var(--safe-b, 0px));
   margin-inline: auto;
-  width: calc(100% - 32px);
-  max-width: 520px;
+  width: 200px;
+  max-width: calc(100% - 32px);
   height: 84px;
   z-index: 999;
   pointer-events: none;
@@ -657,13 +672,56 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
   transform: translate(-50%, -50%) scale(1);
 }
 
+/* 缩放时浮出来的比例牌。
+ *
+ * 和分栏比例那块牌子同一套说法（同样的玻璃、同样的圆角），但它浮在这一栏的正
+ * 中间而不是整个工作区的顶上：比例是这一栏自己的事，两栏各有各的。
+ *
+ * pointer-events: none——它只是报个数，不该挡住底下那一页。 */
+.pdf-zoom-badge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.9);
+  background: rgba(20, 20, 24, 0.82);
+  color: #fff;
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 0.5px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  border-radius: var(--pill-radius);
+  padding: 8px 18px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease, transform 0.18s var(--spring-ease);
+  z-index: 40;
+}
+
+.pdf-zoom-badge.is-visible {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pdf-zoom-badge { transition: opacity 0.18s ease; }
+}
+
 /* ── Per-Slot Liquid Glass Toolbar ────────────────────────────────────────── */
 
+/* 两条横杠加起来吃掉每栏 91px（660px 的 14%），而这是一个读书的应用：
+   主体应该是那份文件，不是文件上面的两排按钮。工具栏 47→38、切换条 44→36，
+   一栏多出 17px 给正文。按钮仍然是整行最高的东西，所以高度由按钮定，内边距
+   只留够让玻璃底有个边。 */
 .pdf-slot-toolbar {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.45rem 0.65rem;
+  padding: 0.22rem 0.65rem;
   background: var(--glass-bg);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
@@ -678,6 +736,20 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
 
 .pdf-slot-toolbar::-webkit-scrollbar { display: none; }
 
+/* The groups are grouping and nothing else.
+ *
+ * They exist so a whole set of controls can be shown or hidden in one move —
+ * the page controls go when a slot is holding a scratchpad — and they must not
+ * become boxes while they are here. `display: contents` leaves their children
+ * as direct flex items of the toolbar, laid out exactly as they were before the
+ * groups existed.
+ *
+ * Without it the spans defaulted to `display: inline`, so each became one flex
+ * item with its own inline content inside: the toolbar's single scrolling row
+ * broke into three, and the gap between the grouped controls disappeared.
+ * Hiding still works, because `[hidden]` carries `!important`. */
+.pdf-slot-group { display: contents; }
+
 .pdf-slot-title {
   font-size: 0.84rem;
   font-weight: 600;
@@ -690,9 +762,11 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
 }
 
 .pdf-slot-btn {
-  min-width: 2rem;
-  height: 2rem;
-  padding: 0 0.45rem;
+  /* 同上：按钮被压到 min-width 时，里面的字也就没地方了。 */
+  flex-shrink: 0;
+  min-width: 1.9rem;
+  height: 1.9rem;
+  padding: 0 0.42rem;
   border: var(--glass-border-subtle);
   border-radius: 8px;
   background: var(--glass-bg-subtle);
@@ -706,11 +780,17 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
   transition: all var(--transition-fast);
 }
 
-.pdf-slot-btn:hover:not(:disabled) {
-  background: var(--card-bg);
-  border-color: var(--accent);
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+/* 悬停样式只给真的能悬停的设备。
+   触摸屏上 Chrome 会把 :hover 留在最后点过的那个元素上，直到你点别处——于是
+   点完「目录」，那个按钮就一直顶着强调色的边框和抬起的阴影，看上去像是被选中
+   了、或者卡住了。它并没有被选中，它只是还记得你碰过它。 */
+@media (hover: hover) and (pointer: fine) {
+  .pdf-slot-btn:hover:not(:disabled) {
+    background: var(--card-bg);
+    border-color: var(--accent);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  }
 }
 
 .pdf-slot-btn:active:not(:disabled) {
@@ -753,23 +833,11 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
   transition: all var(--transition-fast);
 }
 
-.pdf-slot-label {
-  width: 3.2rem;
-  height: 2rem;
-  text-align: center;
-  border: var(--glass-border-subtle);
-  border-radius: 8px;
-  background: var(--glass-bg-subtle);
-  color: var(--fg);
-  font-size: 0.8rem;
-  font-weight: 500;
-  outline: none;
-  font-family: inherit;
-  transition: all var(--transition-fast);
-}
-
-.pdf-slot-page:focus,
-.pdf-slot-label:focus {
+/* `.pdf-slot-label` — the 题号 field — is gone with the input it dressed. It
+   was written into `pane.exerciseLabel` and read by nothing: answer lookup
+   resolves questions from the page number and the question index, never from a
+   typed number. */
+.pdf-slot-page:focus {
   border-color: var(--accent);
   background: var(--card-bg);
   box-shadow: 0 0 0 2px var(--accent-light);
@@ -895,9 +963,123 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
 
 /* ── Outline Panel: Glass Accordion ───────────────────────────────────────── */
 
+/* ── the ⋯ menu ────────────────────────────────────────────────────────────
+   关闭文档 used to be a ✕ at the end of the slot toolbar, against the edge of
+   the screen, one stylus-width from the answer button. It was hit by accident,
+   and what it threw away was the reading position of a book someone was
+   working in. Two taps now, behind a menu — the only control here that is not
+   one tap, because it is the only one that is not undoable.
+
+   Anchored under the toolbar in JS (see PdfWorkspace._setSlotMenu), because the
+   bar sheds rows as the pane narrows and its height is not a constant. Opaque
+   for the same reason the outline panel is: --card-bg is 0.18 white and this
+   WebView computes backdrop-filter to none, so glass over a page is unreadable
+   text on unreadable text. */
+/* ── a page that is still being drawn ─────────────────────────────────────
+   `_render` keeps the outgoing page up while it rasterises, which beats a
+   white rectangle — but the page number above it has already changed, so for
+   that stretch the pane shows one page under another one's number. On the
+   tablet a cold page took a second and a half of exactly that, and it reads as
+   "the turn didn't work". So after a grace period the pane says so: the stale
+   page steps back, and a small ring says the new one is coming.
+
+   The ring is the one animation that survives 减少动态效果 (see base.css) —
+   frozen, it would report the opposite of what it means. */
+.pdf-pane.is-page-loading .pdf-pane-canvas {
+  opacity: 0.38;
+  filter: saturate(0.6);
+  transition: opacity 120ms ease, filter 120ms ease;
+}
+
+.pdf-pane.is-page-loading .pdf-pane-viewport::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  border-radius: 50%;
+  border: 2.5px solid var(--border-color, rgba(15, 23, 42, 0.12));
+  border-top-color: var(--accent);
+  animation: pdfPageLoading 0.8s linear infinite;
+  pointer-events: none;
+  z-index: 6;
+}
+
+@keyframes pdfPageLoading { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .pdf-pane.is-page-loading .pdf-pane-viewport::after {
+    animation-duration: 1.6s !important;
+    animation-iteration-count: infinite !important;
+  }
+}
+
+.pdf-slot-menu {
+  position: absolute;
+  right: 6px;
+  z-index: 12;
+  min-width: 9rem;
+  padding: 0.3rem;
+  border-radius: 12px;
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  box-shadow: var(--glass-shadow);
+  animation: outlineIn 0.16s var(--spring-ease);
+}
+
+.pdf-slot-menu-item {
+  display: block;
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.86rem;
+  text-align: start;
+  cursor: pointer;
+  /* 48dp of stylus target, whatever the text does. */
+  min-height: 2.75rem;
+}
+.pdf-slot-menu-item:hover { background: rgba(15, 23, 42, 0.06); }
+/* Named danger, not merely coloured danger: colour alone is not a warning to a
+   reader who cannot see it, so the word 关闭 does the work and the colour only
+   agrees with it.
+
+   The same red as 删除 in the document library — the app's other destructive
+   action — rather than a token of its own. There is no `--danger` in this
+   stylesheet; inventing one here would have resolved to nothing and left the
+   item in body text, which is precisely the wrong thing for it to look like. */
+.pdf-slot-menu-item:active { background: rgba(15, 23, 42, 0.1); }
+.pdf-slot-menu-item.is-danger { color: #FF3B30; }
+.pdf-slot-menu-item.is-danger:hover { background: rgba(255, 59, 48, 0.08); }
+.pdf-slot-menu-item.is-danger:active { background: rgba(255, 59, 48, 0.16); }
+.pdf-slot-menu-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .pdf-outline-panel {
-  max-height: 42%;
-  overflow: auto;
+  /* 浮在页面上，而不是把页面推下去。
+     原来它是分栏里的一个 flex 子项，长一像素、页面就往下挪一像素——把面板拖大
+     的同时，你正在看的那一页从手底下滑走了，而这个面板存在的意义恰恰是找页。
+     顶边由 JS 量出来（--panel-top），因为它上面那两条横杠的高度已经改过两回。 */
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--panel-top, 0);
+  z-index: 24;
+  /* 高度由读者拖出来，存的是这一栏的比例而不是像素——分栏线一动、窗口一转，
+     「300px 的面板」就不再是原来那么多了。见 panel-state.js。 */
+  height: var(--panel-height, 42%);
+  max-height: 85%;
+  min-height: 25%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border-bottom: var(--glass-border-subtle);
   /* 不透明。这是一张要被读的清单，而它取的 --card-bg 在液态玻璃里是 0.18 的白，
      全靠 backdrop-filter 把身下糊掉才成立——这块 WebView 上那个属性计算结果是
@@ -906,6 +1088,360 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
   padding: 0.5rem 0;
   box-shadow: var(--glass-shadow);
   animation: outlineIn 0.22s var(--spring-ease);
+}
+
+/* ── 面板：目录 / 缩略图两面 ─────────────────────────────────────────── */
+
+.pdf-panel-tabs {
+  display: flex;
+  gap: 0.15rem;
+  padding: 0 0.5rem;
+  border-bottom: var(--glass-border-subtle);
+  flex: none;
+}
+
+.pdf-panel-tab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--fg-muted, #6b7280);
+  padding: 0.5rem 0.75rem 0.4rem;
+  cursor: pointer;
+  position: relative;
+  /* 下划线不参与布局，否则选中的一页会比没选中的高 2px，整排跟着抖。 */
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.pdf-panel-tab.is-selected {
+  color: var(--accent, #2563eb);
+  border-bottom-color: var(--accent, #2563eb);
+}
+
+.pdf-panel-tab:focus-visible {
+  outline: 2px solid var(--accent, #2563eb);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
+.pdf-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0.4rem 0;
+}
+
+/* 底边是把手。它得看起来可以拖，又不能像一条分隔线——所以是一小段短横，
+   居中，平时很淡，按住时跟着强调色走。 */
+.pdf-panel-grip {
+  flex: none;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  cursor: ns-resize;
+  touch-action: none;
+  border-top: var(--glass-border-subtle);
+}
+
+.pdf-panel-grip span {
+  display: block;
+  width: 34px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--line, rgba(15, 23, 42, 0.18));
+  transition: background 140ms ease, width 140ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .pdf-panel-grip:hover span { background: rgba(15, 23, 42, 0.3); }
+}
+
+.pdf-panel-grip.is-dragging span {
+  background: var(--accent, #2563eb);
+  width: 48px;
+}
+
+/* 已经拉过头了，松手就是关掉——趁手还没松说出来，而不是松手之后才给个意外。
+   面板到 MIN 就不再变矮，这段路要是没有反馈，看上去就是拖不动了。 */
+.pdf-outline-panel.is-closing {
+  opacity: 0.55;
+  transition: opacity 120ms ease;
+}
+
+.pdf-outline-panel.is-closing .pdf-panel-grip span {
+  background: var(--danger, #dc2626);
+  width: 22px;
+}
+
+.pdf-panel-grip:focus-visible {
+  outline: 2px solid var(--accent, #2563eb);
+  outline-offset: -2px;
+}
+
+/* ── 缩略图 ───────────────────────────────────────────────────────────── */
+
+.pdf-thumb-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem 0.6rem 0.6rem;
+  display: grid;
+  /* 一栏可能只有半个屏那么宽，格子数得跟着栏宽走，而不是写死几列。 */
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 0.7rem 0.55rem;
+}
+
+.pdf-thumb-cell {
+  margin: 0;
+  /* 827 个格子，只有屏幕上那几个值得排版和绘制。没有这一条，把面板拖高一点
+     就要让浏览器把整本书重排一遍——拖动的卡顿有一半在这里。
+     contain-intrinsic-size 给出没排版时的估算高度，滚动条因此仍然诚实。 */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 150px;
+}
+
+/* 拖动中不要再为缩略图做过渡动画，它们只会和拖动抢主线程。 */
+.pdf-outline-panel.is-resizing .pdf-thumb-shot { transition: none; }
+
+.pdf-thumb-hit {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.28rem;
+  cursor: pointer;
+  font: inherit;
+}
+
+/* 空盒子先占好位置：827 页的滚动条从第一帧就是诚实的，读者可以直接甩到中间。 */
+.pdf-thumb-shot {
+  width: 100%;
+  display: block;
+  background: #fff;
+  border: 1px solid var(--line, rgba(15, 23, 42, 0.12));
+  border-radius: 4px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+  transition: box-shadow 160ms ease, border-color 160ms ease;
+}
+
+.pdf-thumb-shot.is-loaded { background: #fff; }
+.pdf-thumb-shot.is-failed { background: repeating-linear-gradient(
+  45deg, #f3f4f6, #f3f4f6 6px, #e5e7eb 6px, #e5e7eb 12px); }
+
+.pdf-thumb-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.pdf-thumb-num {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--fg-muted, #6b7280);
+  line-height: 1;
+}
+
+.pdf-thumb-cell.is-current .pdf-thumb-shot {
+  border-color: var(--accent, #2563eb);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.22);
+}
+
+.pdf-thumb-cell.is-current .pdf-thumb-num { color: var(--accent, #2563eb); }
+
+.pdf-thumb-hit:focus-visible .pdf-thumb-shot {
+  outline: 2px solid var(--accent, #2563eb);
+  outline-offset: 2px;
+}
+
+/* ── 书签 ─────────────────────────────────────────────────────────────── */
+
+/* 工具栏上的开关：空心是没记，实心是记了。用文字字形而不是图标，因为这一个
+   控件要在两种状态间切换，而两个字形本来就是一对。 */
+/* 尾部的两个动作靠到栏的另一头，于是这条横杠不论多宽都横跨整栏：左边是这
+   一份是什么，右边是拿它怎么办。原来所有东西都挤在左边，栏一变宽就空出一大
+   片，看着像栏变了而横杠没变。
+   窄到溢出时 auto 外边距会塌成 0，所以挤的时候不受影响。 */
+.pdf-slot-sep.is-tail { margin-inline-start: auto; }
+
+/* 横杠里会被让位收走的那几样，都能被看着收走。
+   0.26s 跟分栏动画的 0.36s 同一族但略快：它是那个动作的结果，不该跟它齐步。 */
+/* 横杠上的东西不许被挤，只许被收。
+ *
+ * 原来它们都是可压缩的 flex 项，栏一窄就被压到内容宽度以下——「112%」显示成
+ * 半个百分号，「/ 478」少半个 8。而且压缩把溢出吸收掉了：scrollWidth 不再大
+ * 于 clientWidth，梯子于是以为「装得下」，停在上一级不再往下收，那半个字就
+ * 一直半着。
+ *
+ * 不许压之后，装不下就是真的装不下，梯子照实收；收走的是整件东西，不是半个
+ * 字。最深一级里这几样本来就归零，所以底下没有新的溢出。 */
+.pdf-slot-title,
+.pdf-slot-btn-text,
+.pdf-slot-zoom,
+.pdf-slot-total {
+  flex-shrink: 0;
+  max-width: 9rem;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: max-width 0.26s cubic-bezier(0.32, 0.72, 0, 1),
+              opacity 0.16s ease,
+              margin-inline 0.26s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.pdf-slot-sep {
+  transition: width 0.26s cubic-bezier(0.32, 0.72, 0, 1),
+              margin-inline-end 0.26s cubic-bezier(0.32, 0.72, 0, 1),
+              opacity 0.16s ease;
+}
+
+/* 收起和展开不是同一件事的正反两遍。
+ *
+ * 让位的时候，横杠是已经挤不下了才收的：那一刻标题正被 flex 压到 0 宽。宽度
+ * 一开始往 0 走，压力就松了，标题反而弹回二十来像素——一条刚消失的字又冒出来
+ * 再淡掉。所以收起时不给 opacity 过渡：位置照样是滑着合拢的（宽度和外边距仍
+ * 在动），字则在横杠说「这里放不下」的那一帧就没了，不再回头。
+ *
+ * 展开时反过来，由上面那条基础规则接管，字是淡进来的。 */
+.pdf-ws-slot.is-snug .pdf-slot-title,
+.pdf-ws-slot.is-snug .pdf-slot-btn-text,
+.pdf-ws-slot.is-snugger .pdf-slot-zoom,
+.pdf-ws-slot.is-snugger .pdf-slot-total {
+  transition: max-width 0.26s cubic-bezier(0.32, 0.72, 0, 1),
+              margin-inline 0.26s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.pdf-ws-slot.is-snugger .pdf-slot-sep {
+  transition: width 0.26s cubic-bezier(0.32, 0.72, 0, 1),
+              margin-inline-end 0.26s cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pdf-slot-title,
+  .pdf-slot-btn-text,
+  .pdf-slot-zoom,
+  .pdf-slot-total,
+  .pdf-slot-sep,
+  .pdf-ws-slot.is-snug .pdf-slot-title,
+  .pdf-ws-slot.is-snug .pdf-slot-btn-text,
+  .pdf-ws-slot.is-snugger .pdf-slot-zoom,
+  .pdf-ws-slot.is-snugger .pdf-slot-total,
+  .pdf-ws-slot.is-snugger .pdf-slot-sep { transition: none; }
+}
+
+.pdf-slot-mark { line-height: 0; }
+.pdf-slot-mark svg { display: block; }
+.pdf-slot-mark.is-on { color: var(--math-gold, #d97706); border-color: currentColor; }
+
+.pdf-mark-list { list-style: none; margin: 0; padding: 0.15rem 0; }
+
+.pdf-mark-row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.35rem 0 0.5rem;
+}
+
+.pdf-mark-row.is-current .pdf-mark-page { color: var(--accent, #2563eb); }
+
+.pdf-mark-go {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: start;
+  padding: 0.42rem 0.25rem;
+  cursor: pointer;
+  color: var(--fg);
+  border-radius: 8px;
+}
+
+.pdf-mark-go:active { background: var(--glass-bg-subtle); }
+
+/* 页码等宽，于是一列数字对得齐，扫的时候眼睛不用来回找。 */
+.pdf-mark-page {
+  flex: none;
+  min-width: 2.6em;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: 0.82rem;
+  color: var(--fg-muted, #6b7280);
+}
+
+.pdf-mark-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.84rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 那支笔和那个 × 长得一样、挨在一起，因为它们是同一类东西：这一条书签自己的
+   两个小动作。区别只在按下去的颜色——一个是改，一个是删。 */
+.pdf-mark-name,
+.pdf-mark-drop {
+  flex: none;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted, #6b7280);
+  font: inherit;
+  font-size: 1.05rem;
+  line-height: 1;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.pdf-mark-drop:active { background: var(--glass-bg-subtle); color: var(--danger, #dc2626); }
+.pdf-mark-name { font-size: 0.92rem; }
+.pdf-mark-name:active { background: var(--glass-bg-subtle); color: var(--accent); }
+
+/* 缩略图上的角标。放在右上角、盖在页面之上，因为它说的是「这一页」而不是页面
+   内容的一部分。 */
+.pdf-thumb-shot { position: relative; }
+
+/* 一条真的丝带，从页顶垂下来，底边咬一个 V——和工具栏上那个开关同一个形状，
+   于是「这一页记过」在两处是同一个东西，而不是一个角标和一个星星。 */
+.pdf-thumb-flag {
+  position: absolute;
+  top: 0;
+  right: 9px;
+  width: 11px;
+  height: 17px;
+  background: var(--math-gold, #d97706);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 72%, 0 100%);
+  pointer-events: none;
+}
+
+/* 目录空手而归时，直接把另一面递过去，而不是只说一句「没有目录」。 */
+.pdf-outline-suggest {
+  display: block;
+  margin: 0.6rem auto 0;
+  appearance: none;
+  border: var(--glass-border-subtle);
+  border-radius: 8px;
+  background: var(--glass-bg-subtle);
+  color: var(--accent, #2563eb);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
 }
 
 @keyframes outlineIn {
@@ -1020,6 +1556,253 @@ body.is-library-open .ink-card-layer { display: none; }
   font-size: 0.92rem;
 }
 
+/* ── 书架 ─────────────────────────────────────────────────────────────────
+ *
+ * 一行只摆得下几本。minmax 的下限是 240px 而不是能塞多少塞多少：封面缩到
+ * 一百来像素就认不出是哪本书了，而认封面正是这排书存在的理由。宁可往下滚。
+ */
+.pdf-shelf {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr));
+  gap: 1.9rem 1.5rem;
+  padding: 1.4rem 0.75rem 4rem;
+  align-items: start;
+}
+
+.pdf-book {
+  position: relative;
+  min-width: 0;
+}
+
+.pdf-book-hit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 一本书，不是一张卡片。
+ *
+ * 三件东西凑出「这是本书」：封面占整块、左边一道书脊的暗、右边一叠纸的边。
+ * 没有右边那一叠，它就只是一张圆角图片；有了，厚薄才看得出来。 */
+.pdf-book-block {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1.414;
+  border-radius: 3px 9px 9px 3px;
+  background: var(--card-bg, #fff);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.10),
+    0 10px 22px -10px rgba(15, 23, 42, 0.30);
+  transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1),
+              box-shadow 0.22s ease;
+  overflow: hidden;
+}
+
+.pdf-book-cover {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center top;
+  background-repeat: no-repeat;
+  /* 封面还没渲出来的那几百毫秒里，格子里是一张素纸而不是一个空洞——书架是
+     一本本长出来的，不是一片空白突然变满。 */
+  background-color: color-mix(in srgb, var(--fg) 6%, var(--card-bg, #fff));
+  opacity: 0.55;
+  transition: opacity 0.3s ease;
+}
+
+.pdf-book-cover.is-loaded { opacity: 1; }
+
+/* 书脊那一道暗，和右边那一叠纸。都是画上去的，不占布局。 */
+.pdf-book-block::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 7px;
+  background: linear-gradient(90deg,
+    rgba(15, 23, 42, 0.26) 0%,
+    rgba(15, 23, 42, 0.10) 45%,
+    rgba(255, 255, 255, 0.18) 70%,
+    rgba(15, 23, 42, 0.04) 100%);
+  z-index: 2;
+}
+
+.pdf-book-edge {
+  position: absolute;
+  inset: 3px -1px 3px auto;
+  right: 0;
+  width: 5px;
+  border-radius: 0 4px 4px 0;
+  background: repeating-linear-gradient(90deg,
+    rgba(255, 255, 255, 0.92) 0px,
+    rgba(255, 255, 255, 0.92) 1px,
+    rgba(15, 23, 42, 0.10) 1px,
+    rgba(15, 23, 42, 0.10) 2px);
+  z-index: 2;
+}
+
+/* 草稿纸的封面就是它自己的纸，所以不要封面图那套投影，要一张纸的样子。 */
+.pdf-book-block.is-pad .pdf-book-edge { inset: 6px 0 6px auto; }
+
+.pdf-book-tag {
+  position: absolute;
+  top: 8px;
+  left: 14px;
+  z-index: 3;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0 6px 6px 0;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(15, 23, 42, 0.62);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.pdf-book-block.is-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.2rem;
+  font-weight: 300;
+  color: var(--muted);
+  background: transparent;
+  border: 1.5px dashed color-mix(in srgb, var(--fg) 22%, transparent);
+  box-shadow: none;
+}
+
+.pdf-book-name {
+  margin-top: 0.65rem;
+  width: 100%;
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: center;
+  color: var(--fg);
+  /* 两行封顶。书名可以很长，但第三行开始它就不是名字了，是简介。 */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.pdf-book-sub {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+.pdf-book-more {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.18s ease, background 0.18s ease;
+}
+
+/* 触摸屏上没有悬停，⋯ 一直露着——不然它就是个找不到的功能。 */
+.pdf-book-more { opacity: 0.55; }
+
+@media (hover: hover) and (pointer: fine) {
+  .pdf-book-more { opacity: 0; }
+  .pdf-book:hover .pdf-book-more { opacity: 1; }
+  .pdf-book-more:hover {
+    background: color-mix(in srgb, var(--fg) 10%, transparent);
+    color: var(--fg);
+  }
+  .pdf-book-hit:hover .pdf-book-block {
+    transform: translateY(-4px);
+    box-shadow:
+      0 2px 4px rgba(15, 23, 42, 0.12),
+      0 18px 34px -14px rgba(15, 23, 42, 0.38);
+  }
+}
+
+.pdf-book-hit:active .pdf-book-block { transform: translateY(-1px) scale(0.985); }
+
+@media (prefers-reduced-motion: reduce) {
+  .pdf-book-block { transition: none; }
+}
+
+/* ── 翻开 ─────────────────────────────────────────────────────────────────
+ *
+ * 飞在所有东西上面，包括文档库自己（z-index 60）。position: fixed 是因为落点
+ * 是按视口算的：分栏在页面里，而这一下是在整块屏幕上演的。 */
+.pdf-book-flight {
+  position: fixed;
+  z-index: 120;
+  pointer-events: none;
+  perspective: 1500px;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+/* 影子自己一层，只有透明度在动。
+   给纸做 box-shadow 关键帧也能画出同一个样子，但那要主线程每帧重画一遍，而
+   这一下正演在「解开一本 800 页的书」的同一条线程上。 */
+.pdf-book-flight-shade {
+  position: absolute;
+  inset: 0;
+  border-radius: 3px 9px 9px 3px;
+  box-shadow: 0 26px 60px rgba(15, 23, 42, 0.30);
+  opacity: 0.25;
+}
+
+.pdf-book-flight-page {
+  position: absolute;
+  inset: 0;
+  border-radius: 3px 9px 9px 3px;
+  /* 翻开先看到的是纸，正文是后来才画上去的——视频里也是这样。 */
+  background: #fdfcf9;
+}
+
+.pdf-book-flight-cover {
+  position: absolute;
+  inset: 0;
+  border-radius: 3px 9px 9px 3px;
+  background-size: cover;
+  background-position: center top;
+  background-color: var(--card-bg, #fff);
+  transform-origin: 0 50%;
+  /* 转过 90° 之后背面朝人，它自己就该没了；不用再写一条淡出，也就不会出现
+     「已经翻过去了还留着一层影子」。 */
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  box-shadow: 2px 0 12px rgba(15, 23, 42, 0.18);
+}
+
+.pdf-book-flight-cover.is-plain {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12%;
+  text-align: center;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--fg);
+  background: linear-gradient(145deg,
+    color-mix(in srgb, var(--accent, #2563eb) 12%, var(--card-bg, #fff)),
+    var(--card-bg, #fff));
+}
+
 .pdf-library-row {
   display: flex;
   align-items: center;
@@ -1108,10 +1891,18 @@ body.is-library-open .ink-card-layer { display: none; }
 
 /* ── Role Selection Modal Sheet ───────────────────────────────────────────── */
 
+/* 「这份文件是？」要盖在文档库上面。
+ *
+ * 它原来是 50，而文档库是 60——于是这个对话框被压在书架底下：隔着 44px 的毛
+ * 玻璃看得见一个灰白的影子，却点不着，因为指头落在书架上。以前导入按钮在顶上
+ * 那条横杠里、书架多半是关着的，碰不到这一层；书架上有了「＋」之后，每一次导入
+ * 都会碰到。
+ *
+ * 130 而不是 61：它要在这一页所有东西之上，包括翻书那一下的 120。 */
 .pdf-role-overlay {
   position: absolute;
   inset: 0;
-  z-index: 50;
+  z-index: 130;
   display: grid;
   place-items: center;
   background: rgba(0, 0, 0, 0.35);
@@ -1657,7 +2448,167 @@ body.is-library-open .ink-card-layer { display: none; }
 }
 
 
-/* 目录展开时，浮动笔迹栏与它的设置卡片让位——理由见 pdf-workspace.js 的
-   _syncOverlayState。 */
-.pdf-workspace.is-outline-open .ink-toolbar,
+/* 找页面板展开时，笔迹栏的处理和「本栏内容」那张单子完全一样：不是把它
+   display:none 掉，而是收成球、飞进冲突那一栏的下角，关掉再展开回原位——而且
+   只在真的压住面板时才动。见 pdf-workspace.js 的 _yieldToolbarAround。
+   卡片留在这里关掉：它挂在长条上，长条这会儿不是长条。 */
 .pdf-workspace.is-outline-open .ink-card-layer { display: none; }
+
+/* 本栏内容列表展开时同理：笔迹栏在工作区上、z-index 36，列表是分栏里的一块，
+   怎么排都在它下面，于是工具图标正压在条目名称上——而列表存在的意义就是让人
+   读出这些名称。
+
+   但笔迹栏本身不再 display:none。整条突然消失不像"让开"，像出了故障：没有东西
+   移动过，也就没有东西可跟随，列表关掉时它又凭空出现。改由 pdf-workspace.js 的
+   _yieldToolbarAround 收成圆球、飞进那一栏的下角，关掉再展开回原位——而且只在
+   真的压住列表时才动。卡片留在这里关掉：它挂在长条上，长条已经不是长条了。 */
+.pdf-workspace.is-deck-list-open .ink-card-layer { display: none; }
+
+/* ── 使用说明 ─────────────────────────────────────────────────────────────
+ *
+ * 盖在文档库上面，不顶掉它：人是从书架进来的，看完要回得去。层级比书架（60）
+ * 高一级，比那些对话框（130）低——说明书不是一个要人回答的问题。
+ */
+.pdf-guide {
+  position: absolute;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  /* 不透明，不是磨砂。
+     底下压着的是一整架封面——书名、册别角标、彩色的封皮。隔着毛玻璃它们照样认得
+     出来，而这一页是要人读字的：一段说明和一张图，底下透出另一本书的标题，两边
+     都看不清。文档库那一层可以是磨砂，因为它底下是一页正文；这一层不行。 */
+  background: linear-gradient(180deg, #ffffff 0%, #f4f7fc 100%);
+  animation: libraryIn 0.26s var(--spring-ease);
+}
+
+.pdf-guide-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.85rem 1.25rem;
+  border-bottom: var(--glass-border-subtle);
+  background: var(--hdr-bg);
+}
+
+.pdf-guide-header strong {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.pdf-guide-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 1.6rem 1.25rem 3.5rem;
+  outline: none;
+}
+
+.guide-head {
+  max-width: 52rem;
+  margin: 0 auto 1.6rem;
+  text-align: center;
+}
+
+.guide-head h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1.55rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+
+.guide-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+/* 一行一件事。窄屏时图在上、字在下——图是说明，不是装饰，不该被挤成一条缝。 */
+.guide-cards {
+  max-width: 60rem;
+  margin: 0 auto;
+  display: grid;
+  gap: 1.1rem;
+}
+
+.guide-card {
+  display: grid;
+  grid-template-columns: minmax(0, 20rem) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: center;
+  padding: 1.15rem 1.35rem;
+  border-radius: var(--card-radius);
+  background: var(--card-bg);
+  border: var(--glass-border-subtle);
+  box-shadow: var(--card-shadow);
+}
+
+@media (max-width: 720px) {
+  .guide-card {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.9rem;
+  }
+}
+
+.guide-card-art { min-width: 0; }
+
+.guide-figure {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  background: var(--guide-bg);
+  /* 图里那些变量只在这里定义：说明书之外没有别的地方用得着它们。 */
+  --guide-bg: #f4f7fc;
+  --guide-paper: #ffffff;
+  --guide-line: #d3dcea;
+  --guide-dim: #93a1b5;
+  --guide-chip: #ffffff;
+  --guide-badge: rgba(28, 28, 30, 0.72);
+  --guide-red: #dc2626;
+  --guide-green: #16a34a;
+  --guide-dot1: #111827;
+}
+
+.guide-card-text h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.08rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.guide-card-text p {
+  margin: 0 0 0.4rem;
+  font-size: 0.93rem;
+  line-height: 1.62;
+  color: var(--fg);
+}
+
+.guide-card-text p:last-child {
+  margin-bottom: 0;
+  color: var(--muted);
+}
+
+.guide-foot {
+  max-width: 60rem;
+  margin: 1.6rem auto 0;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+/* 书架上那一格。和别的书一样厚，只是封面是画的。 */
+.pdf-book-block.is-guide { background: #eef3fb; }
+
+.pdf-book-cover.is-guide-cover {
+  opacity: 1;
+  display: block;
+}
+
+.pdf-book-cover.is-guide-cover svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}

@@ -6,28 +6,37 @@
 // pickers and list rendering.
 
 import { PdfWorkspace } from './pdf-workspace.js';
-import { SLOTS } from './workspace-state.js';
 import {
   DOC_ROLES,
   deleteDocument,
   importPdf,
   libraryUsageBytes,
   listDocuments,
+  renameDocument,
+  setDocumentRole,
 } from './pdf-library.js';
-import { onDoubleTap } from '../ui/double-tap.js';
 import { isPdfRuntimeAvailable } from './pdf-document.js';
+import { docViewOrder, forgetDocView } from './document-session.js';
 import { deleteDocumentInk } from '../ink/ink-store.js';
+import { ENTRY_KINDS } from './deck-state.js';
+import { chooseAction, confirmDestructive, promptText } from './deck-dialogs.js';
+import { SHELF_KINDS, shelfItems, shelfSubtitle } from './shelf-state.js';
+import { BookShelf } from './book-shelf.js';
+import { fitRect, playBookOpen } from './book-open.js';
+import { openGuide } from './user-guide.js';
+import { forgetCover } from './cover-store.js';
+import {
+  deleteScratchpad,
+  listScratchpads,
+  renameScratchpad,
+} from '../scratch/scratch-store.js';
+import { t } from '../core/i18n.js';
 import Logger from '../core/logger.js';
 
 let workspace = null;
 /** Takes the chrome-hiding listeners back off, so a rebuild does not double them. */
 let chromeOff = null;
 let elRoot = null;
-
-const SLOT_LABELS = {
-  [SLOTS.PRIMARY]: '左/上',
-  [SLOTS.SECONDARY]: '右/下',
-};
 
 function formatBytes(n) {
   if (!n) return '0 B';
@@ -41,6 +50,18 @@ function setStatus(message, isError) {
   if (!el) return;
   el.textContent = message || '';
   el.classList.toggle('is-error', !!isError);
+  // 书架开着的时候，那条状态栏正被它盖着。
+  //
+  // 导入的入口现在也在书架上（那个「＋」），于是「正在导入 …」这句话说给了一个
+  // 没人看得见的地方——人答完「这份文件是？」之后，等着的是几秒钟的安静。所以
+  // 同一句话在书架自己的头上再说一遍；刷新书架时那一行会重新写成新的份数，正好
+  // 是这件事结束的样子。
+  const shelfEl = elRoot?.querySelector('[data-role="library-usage"]');
+  const shelfOpen = !libraryEl()?.hidden;
+  if (shelfEl && shelfOpen) {
+    shelfEl.textContent = message || '';
+    shelfEl.classList.toggle('is-error', !!isError);
+  }
 }
 
 /**
@@ -51,99 +72,207 @@ function setStatus(message, isError) {
  */
 let openingId = null;
 
+/** 屏幕上那一排书。每次刷新重建——封面都在缓存里，重建是便宜的。 */
+let shelf = null;
+
+/** 书架自己那一层。翻书的最后四分之一要把它淡掉，所以动画需要认得它。 */
+function libraryEl() {
+  return elRoot?.querySelector('[data-role="library"]') || null;
+}
+
 async function refreshLibrary() {
   const list = elRoot?.querySelector('[data-role="library-list"]');
   if (!list) return;
 
-  const [docs, usage] = await Promise.all([listDocuments(), libraryUsageBytes()]);
+  const [docs, usage, pads] = await Promise.all([
+    listDocuments(), libraryUsageBytes(), listScratchpads(),
+  ]);
   const usageEl = elRoot.querySelector('[data-role="library-usage"]');
-  if (usageEl) usageEl.textContent = `${docs.length} 个文档 · ${formatBytes(usage)}`;
+  if (usageEl) {
+    usageEl.textContent = t('shelf.usage', {
+      docs: docs.length, pads: pads.length, size: formatBytes(usage),
+    });
+  }
 
-  if (docs.length === 0) {
-    list.innerHTML = '<div class="pdf-library-empty">还没有导入任何 PDF</div>';
+  shelf?.destroy();
+  shelf = null;
+
+  const items = shelfItems(docs, pads, docViewOrder());
+
+  // 一本书都没有时也要把架子搭出来。
+  //
+  // 原来这里直接回一句「书架上还没有书」就走了——而那正是第一次打开软件看到的
+  // 那一屏：一句说现状的话，没有说明书，连「＋」都没有。现在空的时候那句话摆在
+  // 架子上面，架子上是说明书和一个「＋」。
+  const frag = document.createDocumentFragment();
+  if (!items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'pdf-library-empty';
+    empty.textContent = t('shelf.empty');
+    frag.appendChild(empty);
+  }
+
+  const host = document.createElement('div');
+  host.className = 'pdf-shelf';
+  frag.appendChild(host);
+  list.replaceChildren(frag);
+  shelf = new BookShelf(host, {
+    onOpen: openItem,
+    onMenu: openItemMenu,
+    onAdd: () => elRoot.querySelector('[data-role="file-exercise"]')?.click(),
+    onGuide: showGuide,
+  });
+  shelf.setItems(items);
+}
+
+/**
+ * 摊开说明书。
+ *
+ * 盖在书架上，不顶掉书架：人是从书架进来的，看完要回得去，而书架在底下原样待着
+ * 就不用重建一次——那些封面都还在。
+ */
+function showGuide() {
+  const host = libraryEl();
+  if (!host) return;
+  openGuide(host);
+}
+
+/**
+ * 起飞和落地。
+ *
+ * 起点是那一格封面此刻在屏幕上的矩形，终点是那一页在目标栏里会占的位置——
+ * 不是那一栏本身。双开时它是半边，单开时它是整屏，被收起来的栏量出来是空的，
+ * 那就退回整个工作区。三种情形的差别全在这个矩形上，动画本身一行都不用改。
+ *
+ * 量不出来就不演：没有起点的翻书是凭空长出来的一本书，比直接切过去更难看。
+ */
+function beginFlight(item, slot) {
+  const from = shelf?.tileRect(item.id);
+  if (!from || !from.width) return null;
+  const box = workspace.slotRect?.(slot) || workspace.root?.getBoundingClientRect();
+  if (!box || !box.width) return null;
+  return playBookOpen({
+    from,
+    to: fitRect(from.width / from.height, box),
+    coverUrl: shelf.coverUrl(item.id),
+    title: item.name,
+    veil: libraryEl(),
+    onSettled: closeLibrary,
+  });
+}
+
+/**
+ * 点一本书。
+ *
+ * 一下点开，不是双击——书架上一本书只有一件正面的事可做。改名、换册别、删除
+ * 都收在角上那个 ⋯ 里。
+ *
+ * 还是挡着重入：分栏在问「开到哪一栏」的时候人可以再点一下别的书，两次调用
+ * 会各自去要「下一个空栏」，而那时谁都还没填上。
+ */
+async function openItem(item) {
+  if (openingId === item.id) return;
+  openingId = item.id;
+  let flight = null;
+  try {
+    // 开到哪一栏是问出来的，不是猜出来的：一栏里本来就叠着一摞，「空的那边」
+    // 常常哪边都不是；而册别说的是这份文件「是什么」，不是它该在屏幕的哪半边。
+    const slot = await workspace.chooseSlotFor(item.id);
+    if (!slot) return;
+
+    flight = beginFlight(item, slot);
+    // 先让这一下站稳，再去干那件会占住主线程的活。顺序反过来，书会先愣三百
+    // 毫秒再飞——真机上量到的就是这个。
+    if (flight) await flight.ready();
+    setStatus('正在打开…');
+    await workspace.openResource(item.id, item.kind === SHELF_KINDS.PAD
+      ? { kind: ENTRY_KINDS.SCRATCH, slot }
+      : { slot });
+    setStatus('');
+    if (flight) await flight.land();
+    else closeLibrary();
+  } catch (error) {
+    // 打不开就留在书架上。这时候把书架收掉，人会看着一个空分栏不知道刚才那一
+    // 下有没有发生过。
+    flight?.cancel();
+    Logger.error('PDF', 'open failed', error);
+    setStatus('打开失败: ' + error.message, true);
+  } finally {
+    openingId = null;
+  }
+}
+
+/** 一本书的 ⋯。 */
+async function openItemMenu(item) {
+  const isPad = item.kind === SHELF_KINDS.PAD;
+  const actions = [{ id: 'rename', label: '重命名' }];
+  if (!isPad) {
+    if (item.role !== DOC_ROLES.EXERCISE) actions.push({ id: 'role-exercise', label: '标为练习册' });
+    if (item.role !== DOC_ROLES.ANSWER) actions.push({ id: 'role-answer', label: '标为答案册' });
+  }
+  actions.push({ id: 'delete', label: '永久删除', danger: true });
+
+  const chosen = await chooseAction({
+    title: item.name,
+    note: shelfSubtitle(item),
+    actions,
+  });
+  if (!chosen) return;
+
+  if (chosen === 'rename') {
+    const next = await promptText({
+      title: '重命名',
+      label: isPad ? '草稿纸名称' : '书名',
+      value: item.name,
+      confirm: '保存',
+    });
+    // 空名字不是名字。清空对书签是「去掉这个名字」，对一本书不是——书没有名字
+    // 就没法在架子上被认出来，所以这里把空串和取消一样对待。
+    if (!next) return;
+    if (isPad) await renameScratchpad(item.id, next);
+    else await renameDocument(item.id, next);
+    await refreshLibrary();
     return;
   }
 
-  list.replaceChildren(...docs.map((doc) => {
-    const row = document.createElement('div');
-    row.className = 'pdf-library-row';
-    row.title = '双击打开';
+  if (chosen === 'role-exercise' || chosen === 'role-answer') {
+    await setDocumentRole(item.id,
+      chosen === 'role-exercise' ? DOC_ROLES.EXERCISE : DOC_ROLES.ANSWER);
+    await refreshLibrary();
+    return;
+  }
 
-    const info = document.createElement('div');
-    info.className = 'pdf-library-info';
-    const roleTag = doc.role === DOC_ROLES.EXERCISE ? '练习'
-      : doc.role === DOC_ROLES.ANSWER ? '答案' : '';
-    info.innerHTML = `
-      <div class="pdf-library-name">${escapeHtml(doc.name)}${roleTag ? ` <span class="pdf-role-tag">${roleTag}</span>` : ''}</div>
-      <div class="pdf-library-meta">${doc.pageCount} 页 · ${formatBytes(doc.sizeBytes)} · ${doc.hasOutline ? '有目录' : '无目录'}</div>
-    `;
-    row.appendChild(info);
+  if (chosen === 'delete') await deleteItem(item);
+}
 
-    const actions = document.createElement('div');
-    actions.className = 'pdf-library-actions';
-    // One button, not one per side.
-    //
-    // The page holds two documents; the first one opened takes the left pane
-    // and the second takes the right. Asking the user to choose a side up front
-    // made them decide something they had no basis to decide yet — and it was
-    // the wrong moment to ask, because the arrangement is trivially changed
-    // afterwards with the swap control on the divider.
-    // One open path, two ways to reach it.
-    //
-    // Guarded against a second activation while the first is still in flight:
-    // a double-tap on the button itself, or an impatient second tap on the
-    // row, would otherwise open the same document into BOTH panes — the two
-    // calls each ask for the next free slot before either has filled one.
-    const openDoc = async () => {
-      if (openingId === doc.id) return;
-      openingId = doc.id;
-      const slot = workspace.nextFreeSlot();
-      try {
-        setStatus('正在打开…');
-        await workspace.openDocument(slot, doc.id);
-        setStatus('');
-        closeLibrary();
-      } catch (error) {
-        Logger.error('PDF', 'open failed', error);
-        setStatus('打开失败: ' + error.message, true);
-      } finally {
-        openingId = null;
-      }
-    };
+/**
+ * 永久删除，连它身上挂着的东西一起。
+ *
+ * 笔迹、读到哪一页、封面缓存都和文件本体分开存着，所以都得点名删掉，否则它们
+ * 会比被标注的那份文件活得更久。先从每一摞里撤出去再删字节：不然会留下一条
+ * 指着已经不存在的字节的记录——而正在显示它的那一栏应该落到它底下那一份上，
+ * 不是变空：丢一本书不该连带赔上同一栏里的另外两本。
+ */
+async function deleteItem(item) {
+  const isPad = item.kind === SHELF_KINDS.PAD;
+  const ok = await confirmDestructive({
+    title: isPad ? t('scratch.deleteTitle') : '永久删除这本书？',
+    body: isPad ? t('scratch.deleteBody', { name: item.name })
+      : `「${item.name}」连同它上面的笔迹会一起删掉，无法撤销。`,
+    confirmLabel: t('scratch.delete'),
+  });
+  if (!ok) return;
 
-    const open = document.createElement('button');
-    open.type = 'button';
-    open.className = 'pdf-library-btn is-primary';
-    open.textContent = '打开';
-    open.title = '打开到空的一侧';
-    open.addEventListener('click', openDoc);
-    actions.appendChild(open);
-
-    // Double-tap the row. The buttons speak for themselves, so a tap that
-    // lands on one is a tap on IT, not on the row around it.
-    onDoubleTap(row, openDoc, { ignore: '.pdf-library-actions' });
-
-    const del = document.createElement('button');
-    del.type = 'button';
-    del.className = 'pdf-library-btn is-danger';
-    del.textContent = '删除';
-    del.addEventListener('click', async () => {
-      // Deleting a document that is currently open would leave a pane bound to
-      // bytes that no longer exist, so close those slots first.
-      for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
-        if (workspace.state.documents[slot] === doc.id) workspace.closeSlot(slot);
-      }
-      await deleteDocument(doc.id);
-      // Ink is stored separately from the PDF, so it has to be cleaned up
-      // explicitly or it would outlive the document it annotates.
-      await deleteDocumentInk(doc.id);
-      await refreshLibrary();
-    });
-    actions.appendChild(del);
-
-    row.appendChild(actions);
-    return row;
-  }));
+  await workspace.forgetResource(item.id);
+  if (isPad) {
+    await deleteScratchpad(item.id);
+  } else {
+    await deleteDocument(item.id);
+    await deleteDocumentInk(item.id);
+  }
+  forgetDocView(item.id);
+  await forgetCover(item.id);
+  await refreshLibrary();
 }
 
 function escapeHtml(s) {
@@ -232,7 +361,7 @@ async function handleImport(files, suggestedRole) {
   }
 
   setStatus('已导入 1 个文档');
-  await refreshLibrary();
+  // openLibrary 自己会刷新，不必先刷一遍——那是把整架书连同每一张封面重建两次。
   openLibrary();
 }
 
@@ -251,9 +380,15 @@ export async function initPdfWorkspace() {
   if (!host) return;
 
   workspace = new PdfWorkspace(host);
+  // 关掉最后一份文件之后，书架自己回来。空工作区没有别的用途，而人接下来要做
+  // 的事就在书架上。
+  workspace.onEmpty = () => openLibrary();
 
   chromeOff?.();
-  chromeOff = initChromeHiding(elRoot);
+  // 菜单栏一动，工具栏就跟着让位——见 initChromeHiding 里那个泵。
+  chromeOff = initChromeHiding(elRoot, {
+    onChromeMove: () => workspace?.syncToolbarSafeArea?.(),
+  });
 
   elRoot.querySelector('[data-role="import-exercise"]')?.addEventListener('click', () => {
     elRoot.querySelector('[data-role="file-exercise"]')?.click();
@@ -271,13 +406,34 @@ export async function initPdfWorkspace() {
   });
   elRoot.querySelector('[data-role="open-library"]')?.addEventListener('click', openLibrary);
   elRoot.querySelector('[data-role="close-library"]')?.addEventListener('click', closeLibrary);
+  // Creating a pad is available before any PDF is opened, which is why this is
+  // bound here rather than inside the workspace's own empty state.
+  elRoot.querySelector('[data-role="new-scratch"]')?.addEventListener('click', async () => {
+    try {
+      await workspace.createScratchpad();
+    } catch (error) {
+      Logger.error('PDF', 'create scratchpad failed', error);
+      setStatus('新建草稿纸失败: ' + error.message, true);
+    }
+  });
 
   try {
     await workspace.init();
   } catch (error) {
     Logger.error('PDF', 'session restore failed', error);
   }
-  await refreshLibrary();
+
+  // 桌上还摊着东西就接着读，桌上是空的才回书架。
+  //
+  // 上次退出时手边还开着书，那么「我在读什么」这个问题人自己心里有答案，直接
+  // 落回那一页就是；这时候盖一层书架上去，是拿一个他没问的问题挡住他要的东西。
+  // 反过来，上次是把书都合上才走的，那再进来时唯一要做的事就是挑一本——而那个
+  // 入口原来藏在横杠上一个叫「文档库」的按钮里。
+  //
+  // 判断用的是恢复之后的工作区，不是存盘里那一行：会话里那份文件可能已经被删
+  // 掉了，restoreSession 会把它剔掉，于是「存盘时有」而「恢复后没有」。人看到
+  // 的是后者。
+  if (workspace.isEmpty()) openLibrary();
 }
 
 /** Exposed for teardown in tests and for release(). */
@@ -302,7 +458,7 @@ export function destroyPdfWorkspace() {
  * all work the same way, and it only fires on a deliberate travel: a bar you
  * brush past on the way to a button must not disappear.
  */
-export function initChromeHiding(elRoot) {
+export function initChromeHiding(elRoot, { onChromeMove } = {}) {
   // Everything below is hung on the document and on the window, and the
   // workspace can be built more than once in a session — leave the last set
   // attached and every gesture is handled twice, which for the swallowed click
@@ -418,6 +574,32 @@ export function initChromeHiding(elRoot) {
   };
   const inBox = (b, x, y) => !!b && x >= b.left && x <= b.right && y >= b.top && y <= b.bottom;
 
+  /** How much of the dock's peek strip answers to a STYLUS, in CSS pixels. */
+  const PEN_PEEK_WIDTH = 200;
+
+  /**
+   * The way back to a hidden dock, which is narrower for a pen than for a hand.
+   *
+   * A finger at the bottom of the screen is reaching for the dock: there is
+   * nothing else down there for it to be doing, so it may call the dock back
+   * from anywhere along the strip. A stylus IS doing something else — the
+   * bottom of the pane is page, and a line of working that ran along it kept
+   * pulling the dock back out from under the writing hand. That is the conflict
+   * the tablet run reported.
+   *
+   * So the pen gets a handle in the middle of the strip rather than the whole
+   * of it: far enough from where a line of working ends to be deliberate, and
+   * still the obvious place to reach for. Only the way BACK is narrowed —
+   * putting the dock away is untouched, for the pen and the hand alike.
+   */
+  const dockSummonBox = (pointerType) => {
+    const box = boxOf(peek);
+    if (!box || pointerType !== 'pen') return box;
+    const middle = (box.left + box.right) / 2;
+    const half = Math.min(PEN_PEEK_WIDTH, box.right - box.left) / 2;
+    return { left: middle - half, right: middle + half, top: box.top, bottom: box.bottom };
+  };
+
   let drag = null;
 
   /**
@@ -442,7 +624,32 @@ export function initChromeHiding(elRoot) {
    * changes, and on some paths neither does the transform, so the event that
    * would end this may never arrive.
    */
+  /**
+   * 菜单栏在动的这段时间里，每一帧都告诉外面一声。
+   *
+   * 这是「菜单栏把工具栏顶起来」那件事的动力：工具栏的底边安全区是按菜单栏此刻
+   * 的上沿算的，所以只要每帧重算一次，它就贴着菜单栏走——手慢慢滑，它慢慢让；
+   * 手停住，它也停住。用 CSS 过渡去追是追不出这个效果的，那样它只会在菜单栏
+   * 到位之后自己滑一段。
+   *
+   * 拖的过程和松手之后那段自己走完的路，都被 is-*-moving 这个类框住了，所以
+   * 一个泵盯着它就够，不必在指针事件和收尾两处各接一次。
+   */
+  let pumping = false;
+  const pump = () => {
+    onChromeMove?.();
+    const moving = document.body.classList.contains('is-top-moving')
+      || document.body.classList.contains('is-bottom-moving')
+      || !!drag;
+    if (!moving || life.signal.aborted) { pumping = false; return; }
+    requestAnimationFrame(pump);
+  };
+
   const markMoving = (which) => {
+    if (!pumping && typeof requestAnimationFrame === 'function') {
+      pumping = true;
+      requestAnimationFrame(pump);
+    }
     document.body.classList.add(`is-${which}-moving`);
     clearTimeout(moveTimers[which]);
     moveTimers[which] = setTimeout(() => {
@@ -486,7 +693,7 @@ export function initChromeHiding(elRoot) {
     // Taking hold of one that is away, to pull it back.
     } else if (isHidden('top') && (inBox(boxOf(barPeek), x, y) || y <= EDGE_TOP)) {
       drag = { which: 'top', from: 1, span: topBarHeight(), sign: -1 };
-    } else if (isHidden('bottom') && inBox(boxOf(peek), x, y)) {
+    } else if (isHidden('bottom') && inBox(dockSummonBox(e.pointerType), x, y)) {
       drag = { which: 'bottom', from: 1, span: dockHeight(), sign: 1 };
     }
     if (!drag) return;

@@ -164,11 +164,66 @@ check('drag transitions touch placement only — nothing else', () => {
 // ═══════════════════════════════════════════════════════════════
 group('4. Tool and parameter state');
 
-check('selecting a tool adopts that tool\'s defaults', () => {
+check('a tool never used starts at its own defaults', () => {
   const s = selectTool(createToolbarState(), INK_TOOLS.HIGHLIGHTER);
   assert.equal(s.tool, INK_TOOLS.HIGHLIGHTER);
   assert.equal(s.width, TOOL_DEFAULTS[INK_TOOLS.HIGHLIGHTER].width);
   assert.equal(s.opacity, TOOL_DEFAULTS[INK_TOOLS.HIGHLIGHTER].opacity);
+});
+
+check('a tool is picked up in the state it was put down in', () => {
+  // Adopting the factory defaults on every selection meant a width someone had
+  // chosen lasted only until they touched another tool and came back — every
+  // adjustment silently undone by the act of using the eraser.
+  let s = createToolbarState();
+  s = selectTool(s, INK_TOOLS.PEN);
+  s = setWidth(s, 1.2);
+  s = selectTool(s, INK_TOOLS.HIGHLIGHTER);
+  s = setWidth(s, 24);
+
+  s = selectTool(s, INK_TOOLS.PEN);
+  assert.equal(s.width, 1.2, 'the pen is still the pen the user set');
+  s = selectTool(s, INK_TOOLS.HIGHLIGHTER);
+  assert.equal(s.width, 24, 'and the highlighter is still theirs');
+});
+
+check('each tool remembers its own opacity too', () => {
+  let s = selectTool(createToolbarState(), INK_TOOLS.PENCIL);
+  s = setOpacity(s, 0.33);
+  s = selectTool(s, INK_TOOLS.MARKER);
+  assert.notEqual(s.opacity, 0.33, 'the marker did not inherit it');
+  s = selectTool(s, INK_TOOLS.PENCIL);
+  assert.equal(s.opacity, 0.33);
+});
+
+check('going by way of the eraser changes nothing', () => {
+  let s = selectTool(createToolbarState(), INK_TOOLS.MARKER);
+  s = setWidth(s, 9);
+  s = selectTool(s, ERASER_TOOL);
+  s = selectTool(s, INK_TOOLS.MARKER);
+  assert.equal(s.width, 9, 'the eraser is not a reset button');
+});
+
+check('the eraser keeps its own size, apart from any stroke tool', () => {
+  let s = setEraserWidth(createToolbarState(), 22);
+  s = selectTool(s, INK_TOOLS.PEN);
+  s = setWidth(s, 3);
+  s = selectTool(s, ERASER_TOOL);
+  assert.equal(s.eraserWidth, 22, 'and a pen width never lands on the eraser');
+});
+
+check('every tool size survives a restart, not just the current one', () => {
+  let s = createToolbarState();
+  s = selectTool(s, INK_TOOLS.PEN);
+  s = setWidth(s, 1.4);
+  s = selectTool(s, INK_TOOLS.MARKER);
+  s = setWidth(s, 11);
+
+  const restored = createToolbarState(JSON.parse(JSON.stringify(serializeToolbarState(s))));
+  assert.equal(restored.tool, INK_TOOLS.MARKER);
+  assert.equal(restored.width, 11, 'it comes back holding the same tool');
+  assert.equal(selectTool(restored, INK_TOOLS.PEN).width, 1.4,
+    'and the others are still where they were left');
 });
 
 check('the eraser is selectable as a tool but is not a stroke tool', () => {
@@ -245,14 +300,40 @@ for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
     `${lang} states what clearing does, and what it does not touch`);
 }
 
+// 空态不许「画」控件，只许叫它的名字。
+//
+// 「还没有书签。翻到要记住的一页，点工具栏上的 ☆。」——这句话里的星星是照着当时
+// 那个按钮画的。后来按钮改成了书签形状，这句话没人跟着改，于是屏幕上指着一个
+// 并不存在的星星。指路的文字和被指的图标分在两个文件里，它们迟早会走散，所以
+// 不让它们发生关系：说「书签按钮」，按钮长什么样就都不影响它。
+for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
+  const dict = $read(`src/core/lang/${lang}.js`);
+  const line = dict.match(/"panel\.noMarks":\s*"([^"]+)"/);
+  ok(line, `${lang} 得告诉人书签从哪儿来`);
+  ok(line && !/[☆★⭐✩✪🔖]/.test(line[1]),
+    `${lang} 的空态不该把图标画进文字里——画了就会跟着图标一起过时`);
+}
+
 const workspaceCode = $code('src/pdf/pdf-workspace.js');
 ok(
   /onClearInk:\s*\(\)\s*=>\s*\{[\s\S]{0,200}?ink\.clear\(\)/.test(workspaceCode),
   'the workspace routes clear to the ink layer, never to the document',
 );
 ok(
-  /getSurface:\s*\(\)\s*=>\s*this\.panes\[this\.activeSlot\]/.test(workspaceCode),
+  /getSurface:\s*\(\)\s*=>\s*this\._loadedViewIn\(this\.activeSlot\)\?\.ink/.test(workspaceCode),
   'one shared toolbar applies to the explicitly active pane (§11.2)',
+);
+// And to whatever that pane is SHOWING. Asking `panes[slot]` returned the book
+// pane even when a scratchpad was on screen, so on paper every tool, colour and
+// width went to a surface nobody was drawing on and the pad kept the one tool
+// its constructor gave it.
+ok(
+  !workspaceCode.includes('getSurface: () => this.panes['),
+  'and reaches the pad, not the book underneath it',
+);
+ok(
+  /_loadedViewIn\(slot\) \{[\s\S]{0,400}?scratchPanes\?\.\[slot\]\?\.isLoaded/.test(workspaceCode),
+  'which is decided by what is loaded, not by what the deck says',
 );
 
 // ═══════════════════════════════════════════════════════════════
@@ -271,6 +352,15 @@ ok(
 ok(
   !/width:\s*100%|flex:\s*1/.test(toolbarCss.split('.ink-card-layer')[1] || ''),
   'opening a card does not resize the workspace',
+);
+// The bar's padding and radius are transitioned, and `.is-docked` sets padding
+// to zero — so on the way out of a corner the bar grows over 200ms. _undock()
+// suppresses that for the frame it measures itself in; without this rule the
+// class it adds does nothing and the bar lands a few pixels out, to be
+// corrected by the next render. That correction is the jump.
+ok(
+  /\.ink-toolbar\.is-instant\s*\{[^}]*transition:\s*none/.test(toolbarCss),
+  'the class _undock() sets actually suppresses the size transition',
 );
 
 // ═══════════════════════════════════════════════════════════════

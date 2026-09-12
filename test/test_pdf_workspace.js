@@ -64,6 +64,67 @@ function check(label, fn) {
   try { fn(); pass(label); } catch (e) { fail(label, e.message); }
 }
 
+group('11. 同一本书可以同时开在两栏（A09）');
+
+{
+  const { PdfWorkspace } = await import('../src/pdf/pdf-workspace.js');
+  const { openInSlot } = await import('../src/pdf/workspace-state.js');
+
+  // 只给 _destinationSpec 用得着的那几样：它不碰 DOM，也不出文案。
+  const wsWith = (state) => {
+    const ws = Object.create(PdfWorkspace.prototype);
+    // describeEntry 会去问「这一栏此刻装着什么」，空着就是空着。
+    Object.assign(ws, { state, panes: {}, scratchPanes: {}, pads: {}, _names: {} });
+    return ws;
+  };
+
+  // 一栏里已经有这本书
+  const inA = openInSlot(createWorkspaceState(), SLOTS.PRIMARY,
+    { kind: 'pdf', resourceId: 'book-x' }).state;
+
+  check('已经开着的书再点一次，照样问开到哪一栏', () => {
+    const spec = wsWith(inA)._destinationSpec('book-x');
+    assert.equal(spec.openIn, SLOTS.PRIMARY, '认得出它在哪一栏');
+    assert.equal(spec.options.length, 2, '两栏都给，回到它那儿也只是一下');
+  });
+
+  check('默认落在另一栏——看得见它在那儿还来点，多半是想对照', () => {
+    assert.equal(wsWith(inA)._destinationSpec('book-x').preferred, SLOTS.SECONDARY);
+  });
+
+  check('没开过的书，默认还是空的那一栏', () => {
+    const spec = wsWith(inA)._destinationSpec('book-y');
+    assert.equal(spec.openIn, null, '它不在任何一栏');
+    assert.equal(spec.preferred, SLOTS.SECONDARY, '空的那一栏');
+  });
+
+  check('选它已经在的那一栏，是回到它那儿，不是开第二份', () => {
+    // 这一条是 openInSlot 的老规矩，这里钉住：一栏里同一份文件只能有一项，
+    // 否则两个阅读位置会抢同一个页码。
+    const { state, entry } = openInSlot(inA, SLOTS.PRIMARY,
+      { kind: 'pdf', resourceId: 'book-x' });
+    assert.equal(state.decks[SLOTS.PRIMARY].entries.length, 1, '还是一项');
+    assert.equal(entry.resourceId, 'book-x');
+  });
+
+  check('选另一栏，两栏各有各的一项，各记各的页码', () => {
+    const both = openInSlot(inA, SLOTS.SECONDARY,
+      { kind: 'pdf', resourceId: 'book-x' }).state;
+    const a = both.decks[SLOTS.PRIMARY].entries[0];
+    const b = both.decks[SLOTS.SECONDARY].entries[0];
+    assert.equal(a.resourceId, b.resourceId, '同一本书');
+    assert.notEqual(a.id, b.id, '两条不同的 entry——页码和缩放是按 entry 记的');
+  });
+
+  check('两栏都已经有了，就没有「它在哪一栏」这回事，照常问', () => {
+    const both = openInSlot(inA, SLOTS.SECONDARY,
+      { kind: 'pdf', resourceId: 'book-x' }).state;
+    const spec = wsWith(both)._destinationSpec('book-x');
+    assert.equal(spec.openIn, null);
+    assert.equal(spec.options.length, 2);
+  });
+}
+
 console.log('═══════════════════════════════════════════════════════════════');
 console.log('  PDF Workspace Tests — dual document, independent panes');
 console.log('═══════════════════════════════════════════════════════════════');
@@ -382,13 +443,22 @@ ok(
 );
 
 const workspaceSource = $read('src/pdf/pdf-workspace.js');
+// The outline moved out of the workspace and into the find-a-page panel, where
+// it now shares a home with the thumbnails and the bookmarks. The rules did
+// not move: a book without a table of contents still says so, and an entry
+// pointing nowhere is still shown but not offered.
+const panelSource = $read('src/pdf/page-panel.js');
 ok(
-  workspaceSource.includes('pdf.noOutline'),
+  panelSource.includes('pdf.noOutline'),
   'the UI states plainly when a document has no table of contents',
 );
 ok(
-  /pageNumber\s*\)/.test(workspaceSource) && workspaceSource.includes('disabled = true'),
+  /pageNumber\s*\)/.test(panelSource) && panelSource.includes('disabled = true'),
   'outline entries with an unresolvable destination are not navigable',
+);
+ok(
+  panelSource.includes("t('panel.thumbs')") && panelSource.includes("t('panel.marks')"),
+  'and the same panel offers the two ways in that need no table of contents',
 );
 
 // ═══════════════════════════════════════════════════════════════
@@ -407,6 +477,176 @@ for (const f of [
 ]) {
   ok(existsSync(join(ROOT, f)), `${f} exists`);
 }
+
+// ═══════════════════════════════════════════════════════════════
+group('9. Slot toolbar — what it carries, and what it no longer does');
+
+const paneSource = $read('src/pdf/pdf-pane.js');
+
+check('the 保存 button is gone, and the autosave that made it redundant is not', () => {
+  // Annotations were already written on a 400ms debounce, flushed on every page
+  // change and again on unload; the button only reported what had happened.
+  assert.ok(!/data-role="save-ink"/.test(workspaceSource), 'no save button on the bar');
+  assert.ok(!/saveNow/.test(workspaceSource + paneSource), 'and no handler left behind');
+  assert.ok(/_scheduleInkSave\(\)/.test(paneSource), 'the debounce stays');
+  assert.ok(/_flushInkSave\(\)/.test(paneSource), 'and so does the flush it ends in');
+  const unload = paneSource.slice(paneSource.indexOf('  unload() {'));
+  assert.ok(/_flushInkSave\(\)/.test(unload.slice(0, 400)),
+    'closing a book still commits the strokes drawn just before it closed');
+});
+
+check('the 题号 field is gone, along with the state nothing read', () => {
+  // `pane.exerciseLabel` was written by that input and cleared on unload, and
+  // never read: answer lookup resolves questions from the page number and the
+  // question index, not from a typed label.
+  assert.ok(!/data-role="exercise-label"/.test(workspaceSource), 'no field on the bar');
+  assert.ok(!/exerciseLabel/.test(workspaceSource + paneSource), 'and no dead field behind it');
+  assert.ok(/questionsOnPage\(pane\.questionIndex, page\)/.test(workspaceSource),
+    'answer lookup still asks the page, which is what it always used');
+});
+
+check('taking content out of a pane is behind the ⋯ menu, not on the bar', () => {
+  // It was the last control on the bar, against the edge of the screen, and it
+  // threw away the reading position of a book someone was working in.
+  //
+  // The action is now "remove from this pane" rather than "close": the resource
+  // stays in its library and the pane falls to whatever was rotated underneath.
+  // Its label comes from the language pack, so the wording is asserted there
+  // rather than here.
+  const chrome = workspaceSource.slice(workspaceSource.indexOf('function slotChrome'));
+  assert.ok(/data-role="slot-more"/.test(chrome), 'the bar ends with the menu button');
+  assert.ok(/data-role="slot-menu"/.test(chrome), 'and the menu is a panel of its own');
+  assert.ok(!/pdf-slot-btn" data-role="close"/.test(chrome),
+    'the ✕ is no longer one of the toolbar buttons');
+  const menu = chrome.slice(chrome.indexOf('data-role="slot-menu"'),
+    chrome.indexOf('pdf-outline-panel'));
+  assert.ok(/data-role="close"/.test(menu), 'removing is an item inside it');
+  assert.ok(/is-danger/.test(menu), 'and it is marked as the destructive one');
+  assert.ok(/deck\.removeFromPane/.test(workspaceSource),
+    'named in words from the language pack, not as a glyph');
+  assert.ok(/_closeSlotMenus\(\)/.test(workspaceSource),
+    'and a press anywhere else puts the menu away');
+});
+
+// ═══════════════════════════════════════════════════════════════
+group('10. A document remembers where it was left');
+
+const store = new Map();
+globalThis.localStorage = {
+  getItem: (k) => (store.has(k) ? store.get(k) : null),
+  setItem: (k, v) => store.set(k, String(v)),
+  removeItem: (k) => store.delete(k),
+  clear: () => store.clear(),
+};
+const { rememberDocView, recallDocView, forgetDocView } = await import('../src/pdf/document-session.js');
+
+check('a book reopens on the page it was left on', () => {
+  // The session remembers a SLOT, which is right for "reopen the app". Closing
+  // a book and opening it again is a different question, and it used to be
+  // answered with page 1 of a book the reader was forty pages into.
+  store.clear();
+  assert.equal(recallDocView('book-a'), null, 'a book never opened has no place yet');
+
+  rememberDocView('book-a', createViewState(400, { pageNumber: 42, zoom: 1.5 }));
+  const back = recallDocView('book-a');
+  assert.equal(back.pageNumber, 42, 'the page comes back');
+  assert.equal(back.zoom, 1.5, 'and the zoom it was being read at');
+
+  rememberDocView('book-b', createViewState(10, { pageNumber: 3 }));
+  assert.equal(recallDocView('book-a').pageNumber, 42, 'one book does not overwrite another');
+
+  forgetDocView('book-a');
+  assert.equal(recallDocView('book-a'), null, 'and a deleted book is forgotten');
+  assert.equal(recallDocView('book-b').pageNumber, 3, 'without taking its neighbour with it');
+});
+
+check('the remembered places are bounded, oldest first', () => {
+  store.clear();
+  for (let i = 0; i < 60; i++) {
+    rememberDocView(`doc-${i}`, createViewState(10, { pageNumber: 2 }));
+  }
+  const kept = Object.keys(JSON.parse(store.get('ls_pdf_doc_views')));
+  assert.ok(kept.length <= 48, `kept ${kept.length}, which must not grow without limit`);
+  assert.ok(kept.includes('doc-59'), 'the most recent is still there');
+  assert.ok(!kept.includes('doc-0'), 'and the oldest has been dropped');
+});
+
+// `_persist()` is called from `onStateChange`, which fires on every frame of a
+// pan. saveSession() is one stringify of a few scalars and is meant to run
+// there. Filing each book's place is not: it reads, parses, rewrites and stores
+// a map of every document opened, once per pane. Hung off the same beat it
+// tripled the storage traffic on the main thread, under a stylus sampling at
+// 120Hz — the exact cost this release exists to remove.
+{
+  const { PdfWorkspace } = await import('../src/pdf/pdf-workspace.js');
+  store.clear();
+  let docViewWrites = 0;
+  const realSet = globalThis.localStorage.setItem;
+  globalThis.localStorage.setItem = (k, v) => {
+    if (k === 'ls_pdf_doc_views') docViewWrites++;
+    return realSet(k, v);
+  };
+
+  const ws = Object.create(PdfWorkspace.prototype);
+  Object.assign(ws, {
+    state: assignDocument(createWorkspaceState(), SLOTS.PRIMARY, 'book-x'),
+    panes: {
+      [SLOTS.PRIMARY]: { state: createViewState(100, { pageNumber: 12 }) },
+      [SLOTS.SECONDARY]: { state: null },
+    },
+  });
+
+  for (let frame = 0; frame < 60; frame++) ws._persist();
+  ok(docViewWrites === 0, 'sixty frames of panning do not write a book\'s place once',
+    `wrote ${docViewWrites} times`);
+
+  await new Promise((r) => setTimeout(r, 500));      // past DOC_VIEW_SETTLE
+  ok(docViewWrites === 1, 'and once the hand stops, exactly one write',
+    `wrote ${docViewWrites} times`);
+  ok(recallDocView('book-x')?.pageNumber === 12, 'with the right page in it');
+
+  // Closing does not wait for the debounce: it is the last chance to record.
+  clearTimeout(ws._docViewTimer);
+  ws.panes[SLOTS.PRIMARY].state = createViewState(100, { pageNumber: 44 });
+  ws._rememberSlotView(SLOTS.PRIMARY);
+  ok(recallDocView('book-x')?.pageNumber === 44, 'closing files it at once, unwaited');
+
+  globalThis.localStorage.setItem = realSet;
+}
+
+check('a session restore still outranks the remembered place', () => {
+  // Reopening the app must show the workspace as it was left, not each book at
+  // wherever it was last read from the library.
+  //
+  // A third claimant sits between them now: when this pane's deck already holds
+  // an entry for the resource, opening it is a RECALL, and that entry's own
+  // page is where it should land — which is what keeps one PDF at two different
+  // pages in the two panes. It outranks the library-wide place for the same
+  // reason the restore does, and is itself outranked by the restore.
+  // The chain lives in `_preparePdf` now — the half of the handoff that gets a
+  // book onto the screen. `openDocument` is a thin wrapper over it.
+  const open = workspaceSource.slice(workspaceSource.indexOf('async _preparePdf'));
+  const chain = open.slice(0, 1600);
+  const at = (needle) => chain.indexOf(needle);
+  assert.ok(at('restoredView') > -1, 'the restored view is consulted');
+  assert.ok(at('viewForEntry(entry.id)') > at('restoredView'),
+    'the restored view is consulted first');
+  assert.ok(at('recallDocView(entry.resourceId)') > at('viewForEntry(entry.id)'),
+    'and this entry\'s own page outranks wherever the book was last read');
+});
+
+check('storage being unavailable loses the place, not the pane', () => {
+  const real = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem() { throw new Error('denied'); },
+    setItem() { throw new Error('denied'); },
+    removeItem() { throw new Error('denied'); },
+  };
+  assert.equal(recallDocView('anything'), null);
+  rememberDocView('anything', createViewState(10, { pageNumber: 4 }));
+  forgetDocView('anything');
+  globalThis.localStorage = real;
+});
 
 const appSource = $read('src/core/app.js');
 ok(appSource.includes('initPdfWorkspace'), 'workspace is initialised from app start');

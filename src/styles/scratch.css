@@ -1,0 +1,341 @@
+/* Scratch Module — the borderless surface (V2.1 F05, F10).
+ *
+ * This stylesheet exists mostly to say what a scratchpad is NOT. V1 and V2
+ * drew it as a sheet of paper: an inset card with a margin round it, a shadow
+ * under it, a fixed aspect ratio, and a 12dp strip reserved at the bottom for
+ * the edges of the cards stacked underneath. V2.1 supersedes all of that.
+ *
+ * The pane's whole drawable area is one continuous surface. There is no card to
+ * inset, no edge for a shadow to fall from, and no ratio to keep, because the
+ * paper has no size — so panning cannot bring an outside edge into view, and
+ * there is nothing for a stack gap to sit outside of. What is retained
+ * underneath is said by the switching strip's name, count and stack icon, in
+ * words, where it can be read.
+ *
+ * The PDF pane is untouched by any of this: a page has boundaries, and its
+ * layout still shows them.
+ */
+
+.scratch-pane {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  /* No padding, no margin, no border and no radius. Each of them would be an
+     edge, and the whole point is that there is not one. */
+  padding: 0;
+  margin: 0;
+}
+
+.scratch-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  /* touch-action none because every gesture here is handled: a browser that
+     scrolls or page-zooms underneath would move the paper twice. */
+  touch-action: none;
+  cursor: grab;
+  /* The paper canvas paints the tone, but a canvas that has not been sized yet
+     is transparent for one frame — long enough to flash the app background
+     through. White is the default tone and the honest thing to show until the
+     real one is drawn. */
+  background: #fff;
+}
+
+.scratch-viewport.is-panning { cursor: grabbing; }
+
+/* Both canvases fill the viewport exactly. The backing bitmaps are sized in JS
+   to the device pixel ratio; these rules only place them. */
+.scratch-paper,
+.scratch-ink {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+.scratch-paper {
+  z-index: 1;
+  /* Decoration. Every pointer belongs to the ink canvas above it or, when the
+     ink surface declines one, to the viewport underneath. */
+  pointer-events: none;
+}
+
+.scratch-ink {
+  z-index: 2;
+  touch-action: none;
+}
+
+/* ── the pad's own controls ───────────────────────────────────────────────
+   A scratchpad has no outline, no page controls, no question label and no
+   answer lookup, because it has no pages and takes no part in matching. What it
+   has instead is its name, its zoom, a way back to the origin, a way to see
+   everything at once, and the save state. */
+
+.scratch-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.scratch-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* The save state wears the same clothes as everything else on that bar.
+ *
+ * It is a control among controls — same height, same radius, same subtle glass
+ * border as `.pdf-slot-btn` beside it — and it used to arrive as a bare
+ * <button>, which on the device meant a heavy default border and a hard shadow
+ * sitting in the middle of a row of flat, quiet chrome.
+ *
+ * The state is carried by the WORD, not by the colour: "dangerous actions use
+ * explicit wording, not colour alone" applies just as much to reporting that
+ * something was not written, and the colour is the half a screen reader cannot
+ * read out. */
+.scratch-save {
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 0.5rem;
+  border: var(--glass-border-subtle);
+  border-radius: 8px;
+  background: var(--glass-bg-subtle);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  /* Between states it crossfades rather than moving: paper that shakes to
+     report a failed write is reporting it in the wrong place. */
+  transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+
+.scratch-save.is-saved,
+.scratch-save.is-saving { color: var(--muted); }
+
+/* Unsaved is not an alarm — it is the ordinary state of a pad being written
+   on — so it only steps up to the same weight as the labels around it. */
+.scratch-save.is-unsaved { color: var(--fg); }
+
+/* A failure stays visible and stays pressable. It does not fade out on a timer
+   and it is not written only to the log. */
+.scratch-save.is-failed {
+  color: #b42318;
+  border-color: rgba(180, 35, 24, 0.35);
+  background: rgba(180, 35, 24, 0.08);
+  cursor: pointer;
+}
+
+.scratch-save:disabled { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .scratch-save { transition: none; }
+}
+
+/* ── the style chooser (F11) ──────────────────────────────────────────────
+ * Wide layouts get a floating panel positioned within the WHOLE workspace
+ * rather than squeezed into one narrow pane; compact layouts get a bottom
+ * sheet. Both share the two-column pattern grid, the scrolling settings and a
+ * footer that does not scroll away, so Cancel and Apply are always reachable.
+ *
+ * Glass belongs to the controls. The writing surface behind stays opaque and
+ * calm — it is the thing being decided about, and a chooser that decorates it
+ * is a chooser you cannot judge against. */
+
+.style-panel {
+  width: 100%;
+  max-width: 440px;
+  margin: auto;
+  max-height: min(84vh, 720px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 18px;
+  background: var(--card, #fff);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
+  overflow: hidden;
+}
+
+.deck-overlay.is-sheet { align-items: flex-end; padding: 0; }
+.deck-overlay.is-sheet .style-panel {
+  max-width: none;
+  border-radius: 20px 20px 0 0;
+  max-height: 78vh;
+}
+
+.style-head { padding: 1rem 1.1rem 0.6rem; }
+.style-title { font-size: 1rem; font-weight: 700; color: var(--text); }
+
+.style-subject {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+/* Named in words, every time a draft differs from what is stored. A preview
+   that looks like a saved state is the one way this panel could lose work. */
+.style-preview-flag { color: var(--accent, #2563eb); font-weight: 600; }
+.style-preview-flag[hidden] { display: none; }
+
+.style-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.4rem 1.1rem 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  /* The panel scrolls itself; the gesture must not leak to the canvas behind. */
+  overscroll-behavior: contain;
+}
+
+.style-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.style-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.35rem;
+  border: 2px solid var(--line, rgba(15, 23, 42, 0.1));
+  border-radius: 12px;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: start;
+}
+
+.style-tile.is-selected { border-color: var(--accent, #2563eb); }
+
+.style-tile-canvas {
+  width: 100%;
+  height: auto;
+  border-radius: 7px;
+  display: block;
+}
+
+.style-tile-name { font-size: 0.78rem; font-weight: 700; color: var(--text); }
+.style-tile-note { font-size: 0.68rem; color: var(--muted); }
+
+.style-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.style-row[hidden] { display: none; }
+.style-row-label { font-size: 0.76rem; font-weight: 600; color: var(--muted); min-width: 64px; }
+
+.style-swatches, .style-segments { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+
+.style-swatch {
+  width: var(--deck-target, 48px);
+  height: 36px;
+  border: 2px solid var(--line, rgba(15, 23, 42, 0.14));
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.style-swatch.is-selected { border-color: var(--accent, #2563eb); }
+
+.style-segment {
+  min-height: 40px;
+  padding: 0 0.7rem;
+  border: 1.5px solid var(--line, rgba(15, 23, 42, 0.12));
+  border-radius: 10px;
+  background: transparent;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.style-segment.is-selected {
+  border-color: var(--accent, #2563eb);
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.style-note { margin: 0; font-size: 0.74rem; line-height: 1.5; }
+.style-note.is-warning { color: #92400e; }
+.style-note.is-error { color: #b42318; }
+
+/* Fixed, so Cancel and Apply cannot scroll out of reach on a small screen. */
+.style-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  padding: 0.7rem 1.1rem 1rem;
+  border-top: 1px solid var(--line, rgba(15, 23, 42, 0.08));
+}
+
+/* Large text drops the grid to one column rather than clipping the names. */
+@media (min-resolution: 1x) and (max-width: 420px) {
+  .style-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ── choosing the paper when the pad is made ─────────────────────────────────
+ * A compact version of the chooser, inside the create dialog. Small tiles in a
+ * scrolling grid rather than the full panel: the dialog is 440dp and already
+ * carries a name and a destination, and the point here is a quick decision —
+ * squared for a derivation, ruled for an explanation — not a fine-tuning
+ * session. Spacing and guide contrast stay in the full panel. */
+
+.create-styles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.35rem;
+  max-height: 168px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px;
+}
+
+.create-style-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.2rem;
+  /* Nothing crosses the rounded border, whatever the sample inside decides
+     it is. The canvas already fits itself; this is the guarantee. */
+  overflow: hidden;
+  min-width: 0;
+  border: 2px solid var(--line, rgba(15, 23, 42, 0.1));
+  border-radius: 9px;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+}
+
+.create-style-tile.is-selected { border-color: var(--accent, #2563eb); }
+
+.create-style-tile canvas {
+  width: 100%;
+  height: auto;
+  border-radius: 5px;
+  display: block;
+}
+
+.create-style-tile span {
+  font-size: 0.64rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Two columns where four would squeeze the names out of readability. */
+@media (max-width: 520px) {
+  .create-styles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

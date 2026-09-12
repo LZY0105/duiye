@@ -469,24 +469,48 @@
    whose controls stay behind either way. Nothing that can be pressed is ever
    hidden — losing a tap target is worse than losing a caption. */
 .pdf-ws-slot.is-snug .pdf-slot-toolbar { gap: 0.2rem; padding-inline: 0.3rem; }
+
+/* 让位的东西是缩走的，不是消失的。
+   原来是 display:none：一件东西整个从排版里抽掉，它后面的所有按钮在同一帧里
+   横跳一段。改成把宽度收到 0 再淡出——后面的按钮于是是滑过去的，而滑动是能被
+   眼睛跟住的，跳不能。
+   这几样本来就是 nowrap 且有上限的，所以收宽度对它们是干净的做法。 */
 .pdf-ws-slot.is-snug .pdf-slot-btn-text,
-.pdf-ws-slot.is-snug .pdf-slot-title { display: none; }
+.pdf-ws-slot.is-snug .pdf-slot-title {
+  max-width: 0;
+  opacity: 0;
+  margin-inline: 0;
+}
 
 .pdf-ws-slot.is-snugger .pdf-slot-zoom,
-.pdf-ws-slot.is-snugger .pdf-slot-total,
-.pdf-ws-slot.is-snugger .pdf-slot-sep { display: none; }
+.pdf-ws-slot.is-snugger .pdf-slot-total {
+  max-width: 0;
+  opacity: 0;
+  margin-inline: 0;
+}
+
+/* 分隔线收成没有宽度，但仍然在排版里——尾部那一条的 auto 外边距是整条横杠
+   横跨本栏的唯一依靠，display:none 会连它一起拿掉，于是挤的时候尾部动作又
+   缩回左边去了。这里只动 end 一侧，start 留给 .is-tail 的 auto。 */
+.pdf-ws-slot.is-snugger .pdf-slot-sep {
+  width: 0;
+  margin-inline-end: 0;
+  opacity: 0;
+}
+.pdf-ws-slot.is-snugger .pdf-slot-sep:not(.is-tail) { margin-inline-start: 0; }
 
 .pdf-ws-slot.is-tiny .pdf-slot-toolbar {
   gap: 2px;
   padding-inline: 2px;
 }
 /* At this width only the controls that let you get back out still fit: the
-   pane title, the page counter and the secondary actions go, the close/expand
-   control stays. A pane you cannot re-expand is a pane you have lost. */
+   pane title, the page counter and the secondary actions go, the expand control
+   and the ⋯ menu that holds 关闭文档 stay. A pane you can neither re-expand nor
+   close is a pane you have lost. */
 .pdf-ws-slot.is-tiny .pdf-slot-title,
 .pdf-ws-slot.is-tiny .pdf-page-indicator,
 .pdf-ws-slot.is-tiny .pdf-control-label,
-.pdf-ws-slot.is-tiny .pdf-slot-toolbar .pdf-control-btn:not([data-role="focus"]):not([data-role="close"]) {
+.pdf-ws-slot.is-tiny .pdf-slot-toolbar .pdf-control-btn:not([data-role="focus"]):not([data-role="slot-more"]) {
   display: none;
 }
 .pdf-ws-slot.is-tiny .pdf-outline-panel { display: none; }
@@ -1178,44 +1202,25 @@
    greyed out means already safe. */
 /* Both labelled pills sit IN the row, not on top of it.
  
-   They were 30px tall next to 32px siblings, kept the base button's glass
-   hairline underneath their own flat fill — a second edge reading as a seam —
-   and inherited a hover that translates the button up by a pixel and adds a
-   drop shadow. Between the three, the save control looked like it belonged to
-   a different layer than the toolbar it is part of. Same height, one edge, and
-   a hover that changes colour instead of elevation. */
-.pdf-slot-btn.is-save-action,
+   It was 30px tall next to 32px siblings, kept the base button's glass hairline
+   underneath its own flat fill — a second edge reading as a seam — and
+   inherited a hover that translates the button up by a pixel and adds a drop
+   shadow. Between the three it looked like it belonged to a different layer
+   than the toolbar it is part of. Same height, one edge, and a hover that
+   changes colour instead of elevation.
+
+   The 保存 button that shared these rules is gone: annotations were already
+   written on a 400ms debounce, flushed on every page change and again on close,
+   so it only ever reported what had already happened. */
 .pdf-slot-btn.is-answer-action {
   height: 2rem;
   border: 1px solid transparent;
   box-shadow: none;
 }
-.pdf-slot-btn.is-save-action:hover:not(:disabled),
 .pdf-slot-btn.is-answer-action:hover:not(:disabled) {
   transform: none;
   box-shadow: none;
 }
-
-.pdf-slot-btn.is-save-action {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  width: auto;
-  padding: 0 10px;
-  border-radius: var(--pill-radius);
-  white-space: nowrap;
-  font-weight: 600;
-  font-size: 0.78rem;
-  line-height: 1;
-  color: #475569;
-  background: rgba(15, 23, 42, 0.04);
-}
-.pdf-slot-btn.is-save-action.is-dirty {
-  color: var(--accent);
-  background: var(--accent-light);
-}
-.pdf-slot-btn.is-save-action:disabled { opacity: 0.55; cursor: default; }
-.pdf-slot-btn.is-save-action svg { flex: 0 0 auto; }
 
 /* ══════════════════════════════════════════════════════════════════════════
    Press rebound
@@ -1235,7 +1240,6 @@
 }
 
 .answer-goto,
-.pdf-slot-btn.is-save-action,
 .pdf-slot-btn.is-answer-action,
 .pdf-bar-btn,
 .ocr-btn,
@@ -1248,7 +1252,6 @@
               color 140ms ease;
 }
 .answer-goto:active,
-.pdf-slot-btn.is-save-action:active:not(:disabled),
 .pdf-slot-btn.is-answer-action:active,
 .pdf-bar-btn:active,
 .ocr-btn:active,
@@ -1259,13 +1262,11 @@
 
 @media (prefers-reduced-motion: reduce) {
   .answer-goto,
-  .pdf-slot-btn.is-save-action,
   .pdf-slot-btn.is-answer-action,
   .pdf-bar-btn,
   .ocr-btn,
   .answer-close { transition: background 140ms ease, color 140ms ease; }
   .answer-goto:active,
-  .pdf-slot-btn.is-save-action:active:not(:disabled),
   .pdf-slot-btn.is-answer-action:active,
   .pdf-bar-btn:active,
   .ocr-btn:active,

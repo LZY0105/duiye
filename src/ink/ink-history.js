@@ -31,6 +31,14 @@ export const INK_OPS = Object.freeze({
   SPLIT: 'split',
   /** A lasso selection moved, rotated or resized. */
   TRANSFORM: 'transform',
+  /**
+   * 一片选中的笔画换了颜色。
+   *
+   * 不能拿「擦掉再画一遍」凑：那会换掉它们的 id 和层序，于是撤销之后回来的是
+   * 另外几条笔画——同一个样子，不同的身份，而选区、剪贴板、正在进行的搬动都是
+   * 按 id 认人的。
+   */
+  RESTYLE: 'restyle',
 });
 
 const DEFAULT_LIMIT = 500;
@@ -141,6 +149,15 @@ export class InkHistory {
     });
   }
 
+  /**
+   * @param {Array<{id:string, color:string}>} before 各自原来的颜色
+   * @param {string} color 新的颜色
+   */
+  recordRestyle(before, color) {
+    if (!before?.length) return;
+    this.record({ type: INK_OPS.RESTYLE, before, color });
+  }
+
   recordClear(entries) {
     if (!entries.length) return;
     this.record({ type: INK_OPS.CLEAR, entries });
@@ -197,6 +214,12 @@ export class InkHistory {
       case INK_OPS.TRANSFORM:
         restorePoints(this.layer, op.before);
         break;
+      case INK_OPS.RESTYLE:
+        for (const { id, color } of op.before) {
+          const stroke = this.layer.getById(id);
+          if (stroke) stroke.color = color;
+        }
+        break;
       default:
         break;
     }
@@ -221,6 +244,12 @@ export class InkHistory {
         break;
       case INK_OPS.TRANSFORM:
         restorePoints(this.layer, op.after);
+        break;
+      case INK_OPS.RESTYLE:
+        for (const { id } of op.before) {
+          const stroke = this.layer.getById(id);
+          if (stroke) stroke.color = op.color;
+        }
         break;
       default:
         break;

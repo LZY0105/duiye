@@ -94,6 +94,41 @@ function makePane(store) {
   };
 }
 
+/**
+ * The CURRENT protocol with the atomic blank: the surface is cleared the
+ * instant the page changes, so the previous page's notes are never drawn over
+ * the new page while its ink is being read. The danger that buys is obvious —
+ * a save arriving after the blank would write an empty layer over real work —
+ * so the outgoing (page, layer) are captured as a pair first and `inkPage` is
+ * set to null, which disowns the cleared surface until the new page lands.
+ */
+function makeAtomicPane(store) {
+  return {
+    inkPage: 1,
+    layer: 'layer-p1',
+    _chain: Promise.resolve(),
+    /** The autosave timer and unload path; writes only what it still owns. */
+    async _flush() {
+      if (!this.inkPage) return;
+      await store.save(this.inkPage, this.layer);
+    },
+    async _perform(toPage, fromPage, outgoing) {
+      if (fromPage && outgoing) await store.save(fromPage, outgoing);
+      const loaded = await store.load(toPage);
+      this.layer = loaded;
+      this.inkPage = toPage;
+    },
+    swap(toPage) {
+      const fromPage = this.inkPage;
+      const outgoing = fromPage ? this.layer : null;
+      this.inkPage = null;              // disowned
+      this.layer = 'blank';             // surface cleared, synchronously
+      this._chain = this._chain.then(() => this._perform(toPage, fromPage, outgoing));
+      return this._chain;
+    },
+  };
+}
+
 /** The OLD protocol, kept to prove these tests actually detect the defect. */
 function makeLegacyPane(store) {
   return {
@@ -197,6 +232,76 @@ ok(
 ok(
   !/_flushInkSave\(\s*[A-Za-z_]/.test(pane),
   'no call site passes a page to the save path',
+);
+
+// ═══════════════════════════════════════════════════════════════
+group('4. Blanking the surface must not blank the page it came from');
+
+await checkAsync('the outgoing page keeps its strokes even though the surface is cleared', async () => {
+  const store = controllableStore();
+  const pane = makeAtomicPane(store);
+  pane.layer = 'strokes-from-page-1';
+
+  const done = pane.swap(2);
+  assert.equal(pane.layer, 'blank', 'the surface is cleared at once, not a read later');
+  assert.equal(pane.inkPage, null, 'and the page is disowned in the same breath');
+  await settle(store);
+  await done;
+  assert.equal(store.saved.get(1), 'strokes-from-page-1',
+    'page 1 must hold what was drawn on page 1, not the blank that replaced it');
+  assert.equal(pane.layer, 'layer-p2');
+  assert.equal(pane.inkPage, 2);
+});
+
+await checkAsync('an autosave landing in the gap can never write the blank', async () => {
+  // The 400ms debounce can fire between the surface being cleared and the new
+  // page's ink arriving. With the page disowned there is nothing for it to
+  // write to — which is the whole point, because what it would otherwise write
+  // is the cleared surface, over work the reader can still see on paper.
+  const store = controllableStore();
+  const pane = makeAtomicPane(store);
+  pane.layer = 'strokes-from-page-1';
+
+  const done = pane.swap(2);
+  assert.equal(pane.inkPage, null, 'nothing is owned while the swap is in flight');
+  await pane._flush();                 // the autosave timer, mid-swap
+  assert.notEqual(store.saved.get(1), 'blank',
+    'the cleared surface must never be written to the page it replaced');
+  assert.equal(store.saved.has(2), false,
+    'nor to the page that has not arrived yet');
+
+  await settle(store);
+  await done;
+  assert.equal(store.saved.get(1), 'strokes-from-page-1', 'and the real save lands');
+  assert.equal(pane.inkPage, 2, 'ownership resumes only once the new layer is installed');
+});
+
+await checkAsync('a fast 1 → 2 → 3 run keeps every page with its own strokes', async () => {
+  const store = controllableStore();
+  const pane = makeAtomicPane(store);
+  pane.layer = 'strokes-from-page-1';
+
+  const a = pane.swap(2);
+  await settle(store);
+  await a;
+  pane.layer = 'strokes-from-page-2';   // the reader writes on page 2
+  const b = pane.swap(3);
+  await settle(store);
+  await b;
+
+  assert.equal(store.saved.get(1), 'strokes-from-page-1');
+  assert.equal(store.saved.get(2), 'strokes-from-page-2');
+  assert.equal(pane.inkPage, 3);
+});
+
+const paneSrc = $read('src/pdf/pdf-pane.js');
+ok(
+  /this\._inkPage = null;[\s\S]{0,200}?this\.ink\.loadLayer\(null\);/.test(paneSrc),
+  'the real swap disowns the page before clearing the surface',
+);
+ok(
+  /_performInkSwap\(toPage, fromPage, outgoing\)/.test(paneSrc),
+  'and hands the captured pair to the save, rather than re-reading state later',
 );
 
 const workspace = $read('src/pdf/pdf-workspace.js');

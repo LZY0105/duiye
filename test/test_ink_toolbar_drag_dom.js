@@ -231,6 +231,36 @@ test('a corner release parks the bar as a puck, and a tap unfolds it', () => {
   assert.equal(bar.root.querySelectorAll('.ink-tool').length, TOOL_COUNT);
 });
 
+test('unfolding measures the bar it becomes, not one still easing open', () => {
+  const { bar } = mountToolbar();
+  drag(bar, { from: [40, 400], to: [970, 770] });
+  assert.equal(bar.state.phase, 'docked', 'precondition: parked in a corner');
+
+  // `.is-docked` sets `padding: 0`, and the bar transitions padding over 200ms
+  // on the way out of it. `_clampIntoHost()` positions the bar by measuring
+  // `offsetHeight`; run while that padding is still easing open it measures a
+  // short bar and centres it too high. Nothing corrects that until the NEXT
+  // render — which is the first tool tap — and that one measures the settled
+  // height and drops the bar a few pixels. That step is the "slight downward
+  // jump after expanding" the tablet run reported.
+  const clampedUnder = [];
+  const realClamp = bar._clampIntoHost.bind(bar);
+  bar._clampIntoHost = () => {
+    clampedUnder.push(bar.root.classList.contains('is-instant'));
+    realClamp();
+  };
+
+  const puck = bar.root.querySelector('[data-role="handle"]');
+  pointer('pointerdown', { x: 960, y: 760, target: puck });
+  pointer('pointerup', { x: 962, y: 761, target: puck });
+
+  assert.equal(bar.state.phase, 'expanded', 'the tap unfolded it');
+  assert.ok(clampedUnder.length > 0, 'unfolding does place the bar');
+  assert.ok(clampedUnder[0],
+    'and it measures with the size transition suppressed, so the first '
+    + 'measurement is the settled one and there is nothing left to correct');
+});
+
 test('dragging the puck moves it instead of expanding it', () => {
   const { bar } = mountToolbar();
   const handle = bar.root.querySelector('[data-role="handle"]');
@@ -517,6 +547,387 @@ test('destroy() is idempotent', () => {
   assert.doesNotThrow(() => bar.destroy());
   assert.equal(bar.root.isConnected, false);
 });
+
+// ── stepping aside, and coming back ─────────────────────────────────────────
+//
+// A deck list opening over the bar used to display:none it. Nothing travelled,
+// so there was nothing to follow, and it reappeared out of nowhere when the
+// list closed. Now it folds into the puck and flies to a corner — and the
+// placement it left behind is a debt, not a new home. These tests are about
+// that debt: what it is worth is that the bar comes back to the SAME place,
+// and that a list which happened to be open at the last save cannot decide
+// where the bar lives next launch.
+
+const RECT = (left, top, right, bottom) => ({
+  left, top, right, bottom, x: left, y: top,
+  width: right - left, height: bottom - top,
+});
+
+test('a yield folds the bar into the puck in the corner it was given', () => {
+  const { bar } = mountToolbar();
+  bar.yieldTo('bottom-left');
+  assert.equal(bar.isYielded(), true);
+  assert.equal(bar.state.phase, 'docked');
+  assert.equal(bar.state.corner, 'bottom-left');
+  assert.equal(bar.root.classList.contains('is-docked'), true, 'and it looks like the puck');
+});
+
+test('restoring gives back the exact placement it borrowed', () => {
+  const { bar } = mountToolbar();
+  const before = { phase: bar.state.phase, edge: bar.state.edge, offset: bar.state.offset };
+  bar.yieldTo('bottom-right');
+  bar.restoreFromYield();
+  assert.equal(bar.isYielded(), false);
+  assert.equal(bar.state.phase, before.phase);
+  assert.equal(bar.state.edge, before.edge);
+  assert.equal(bar.state.offset, before.offset);
+  assert.equal(bar.state.corner, null, 'and it is not left parked in the borrowed corner');
+  assert.equal(bar.root.classList.contains('is-docked'), false);
+});
+
+test('a bar the reader docked themselves gets THEIR corner back', () => {
+  // The two states look identical on screen. Only one of them is owed back.
+  const { bar } = mountToolbar();
+  drag(bar, { from: [40, 40], to: [980, 780] });
+  assert.equal(bar.state.phase, 'docked', 'parked by hand');
+  const chosen = bar.state.corner;
+  assert.equal(chosen, 'bottom-right', 'the drag went to the bottom right');
+  bar.yieldTo('bottom-left');
+  assert.equal(bar.state.corner, 'bottom-left', 'it moved off the list');
+  bar.restoreFromYield();
+  assert.equal(bar.state.corner, chosen);
+  assert.equal(bar.state.phase, 'docked');
+});
+
+test('a yield will not go to a top corner even when asked to', () => {
+  // "Sometimes it goes to the top corner, sometimes the bottom": stepping
+  // aside has to land in the same place every time, or it is not a place.
+  const { bar } = mountToolbar();
+  bar.yieldTo('top-left');
+  assert.equal(bar.isYielded(), false, 'refused outright rather than obeyed');
+  assert.equal(bar.state.phase, 'expanded', 'and the bar is left alone');
+
+  bar.yieldTo(['top-left', 'top-right', 'bottom-left']);
+  assert.equal(bar.state.corner, 'bottom-left', 'the tops are dropped, the floor is kept');
+});
+
+test('a borrowed corner is never what gets written to storage', () => {
+  const { bar } = mountToolbar();
+  const owed = bar.state.offset;
+  bar.yieldTo('bottom-left');
+  const saved = JSON.parse(dom.window.localStorage.getItem('ls_ink_toolbar'));
+  assert.equal(saved.corner, null, 'a list that happened to be open cannot re-home the bar');
+  assert.equal(saved.offset, owed);
+});
+
+test('a yield never interrupts a drag in progress', () => {
+  const { bar } = mountToolbar();
+  const handle = bar.root.querySelector('[data-role="handle"]');
+  pointer('pointerdown', { x: 40, y: 40, target: handle });
+  pointer('pointermove', { x: 300, y: 300 });
+  assert.equal(bar.state.phase, 'dragging');
+  bar.yieldTo('bottom-left');
+  assert.equal(bar.state.phase, 'dragging', 'the token stays under the stylus');
+  assert.equal(bar.isYielded(), false);
+  pointer('pointerup', { x: 300, y: 300 });
+});
+
+test('the first corner that clears the panel is the one it lands in', () => {
+  const { bar } = mountToolbar();
+  // jsdom has no layout, so the puck is told where each corner would put it.
+  // bottom-left is still under the panel; bottom-right is not.
+  const where = { 'bottom-left': RECT(0, 700, 60, 760), 'bottom-right': RECT(940, 700, 1000, 760) };
+  bar.root.getBoundingClientRect = () => where[bar.state.corner] || RECT(0, 0, 0, 0);
+  bar.yieldTo(['bottom-left', 'bottom-right'], RECT(0, 100, 500, 800));
+  assert.equal(bar.state.corner, 'bottom-right');
+});
+
+test('every corner covered still parks it — small and in a corner beats across the panel', () => {
+  const { bar } = mountToolbar();
+  bar.root.getBoundingClientRect = () => RECT(0, 700, 60, 760);
+  bar.yieldTo(['bottom-left', 'bottom-right'], RECT(0, 0, 1000, 800));
+  assert.equal(bar.isYielded(), true);
+});
+
+test('restoring a bar that never yielded does nothing at all', () => {
+  const { bar } = mountToolbar();
+  const before = bar.state;
+  bar.restoreFromYield();
+  assert.equal(bar.state, before);
+});
+
+test('a second yield does not overwrite the debt', () => {
+  const { bar } = mountToolbar();
+  const owed = bar.state.offset;
+  bar.yieldTo('bottom-left');
+  bar.yieldTo('top-right');
+  assert.equal(bar.state.corner, 'bottom-left', 'the second call is refused outright');
+  bar.restoreFromYield();
+  assert.equal(bar.state.offset, owed);
+});
+
+// ── what actually travels ───────────────────────────────────────────────────
+//
+// The first version of the fold animated the element itself, and the element
+// is the PUCK by the time there is anything to animate: render() swaps the
+// bar's contents in one frame, so all that was left to scale was a circle. It
+// stretched into a tall ellipse and squashed back — which is not a bar folding
+// up, and read as a glitch. What has to travel is a still of the bar, taken
+// the instant before the swap.
+
+/** A test that may await. The sync `test()` above would score a rejected
+    promise as a pass, which is how the first cut of these hid its own failure. */
+async function atest(name, fn) {
+  try {
+    await fn();
+    passed++;
+    console.log(`  PASS  ${name}`);
+  } catch (err) {
+    failed++;
+    console.log(`  FAIL  ${name}`);
+    console.log(`        ${err.message}`);
+  }
+}
+
+/** jsdom has no Web Animations API; this is enough of one to assert against. */
+function fakeAnimations() {
+  const played = [];
+  let settle;
+  const finished = new Promise((res) => { settle = res; });
+  const real = dom.window.Element.prototype.animate;
+  dom.window.Element.prototype.animate = function (frames, opts) {
+    const anim = { frames, opts, cancelled: false, finished, cancel() { this.cancelled = true; } };
+    played.push({ el: this, anim });
+    return anim;
+  };
+  return {
+    played,
+    finish: async () => { settle(); await finished; await Promise.resolve(); },
+    restore: () => { dom.window.Element.prototype.animate = real; },
+  };
+}
+
+const BAR_RECT = { left: 10, top: 100, right: 62, bottom: 660, x: 10, y: 100, width: 52, height: 560 };
+const PUCK_RECT = { left: 10, top: 742, right: 58, bottom: 790, x: 10, y: 742, width: 48, height: 48 };
+
+/**
+ * A bar that knows its own size.
+ *
+ * jsdom lays nothing out, so every rect is zero — and a zero-sized bar is
+ * correctly given no fold at all, which made the first cut of these tests
+ * assert against a feature that had quietly switched itself off.
+ */
+function mountForFold() {
+  const { bar } = mountToolbar();
+  bar.root.getBoundingClientRect = () => ({ ...(bar.state.phase === 'docked' ? PUCK_RECT : BAR_RECT) });
+  return bar;
+}
+
+const ghosts = () => document.querySelectorAll('[data-role="toolbar-ghost"]');
+
+test('the fold sends a picture of the BAR travelling, not the puck', () => {
+  const anims = fakeAnimations();
+  try {
+    const bar = mountForFold();
+    const toolCount = bar.root.querySelectorAll('.ink-tool').length;
+    assert.ok(toolCount > 0, 'the bar has tools to begin with');
+
+    bar.yieldTo('bottom-left');
+
+    assert.equal(ghosts().length, 1, 'exactly one still is in the air');
+    const ghost = ghosts()[0];
+    assert.equal(ghost.querySelectorAll('.ink-tool').length, toolCount,
+      'and it is the bar, complete with its tools — not the circle it became');
+    assert.equal(ghost.getAttribute('aria-hidden'), 'true', 'invisible to a screen reader');
+    assert.equal(ghost.style.pointerEvents, 'none', 'and it swallows no taps');
+
+    const travelled = anims.played.find(({ el }) => el === ghost);
+    assert.ok(travelled, 'the still is what is animated');
+    const [from, to] = travelled.anim.frames;
+    assert.equal(from.transform, 'none', 'starting where the bar was');
+    assert.match(to.transform, /translate\(.+\) scale\(/, 'and shrinking as it travels');
+    assert.equal(to.opacity, 0, 'handing over rather than piling up');
+    assert.ok(travelled.anim.opts.duration >= 300,
+      'slow enough to be seen — a fold nobody asked for has to be legible');
+  } finally { anims.restore(); }
+});
+
+test('it shrinks to the size of the puck, and lands on it', () => {
+  const anims = fakeAnimations();
+  try {
+    const bar = mountForFold();
+    bar.yieldTo('bottom-left');
+    const [, to] = anims.played.find(({ el }) => el === ghosts()[0]).anim.frames;
+    const [, sx, sy] = to.transform.match(/scale\(([\d.]+), ([\d.]+)\)/).map(Number);
+    assert.ok(Math.abs(sx - PUCK_RECT.width / BAR_RECT.width) < 0.001, 'across');
+    assert.ok(Math.abs(sy - PUCK_RECT.height / BAR_RECT.height) < 0.001, 'and down to a ball');
+
+    const [, dx, dy] = to.transform.match(/translate\((-?[\d.]+)px, (-?[\d.]+)px\)/).map(Number);
+    const wantX = (PUCK_RECT.left + PUCK_RECT.width / 2) - (BAR_RECT.left + BAR_RECT.width / 2);
+    const wantY = (PUCK_RECT.top + PUCK_RECT.height / 2) - (BAR_RECT.top + BAR_RECT.height / 2);
+    assert.ok(Math.abs(dx - wantX) < 0.001 && Math.abs(dy - wantY) < 0.001,
+      'centre to centre, so it arrives ON the corner rather than near it');
+  } finally { anims.restore(); }
+});
+
+test('the puck is brought up as the still goes out, not before', () => {
+  const anims = fakeAnimations();
+  try {
+    const bar = mountForFold();
+    bar.yieldTo('bottom-left');
+    const onPuck = anims.played.find(({ el }) => el === bar.root);
+    assert.ok(onPuck, 'the puck fades in on its own');
+    assert.equal(onPuck.anim.frames[0].opacity, 0, 'starting invisible');
+    assert.ok(onPuck.anim.opts.delay > 0, 'and held back while the still is still on its way');
+    assert.equal(onPuck.anim.opts.fill, 'backwards', 'invisible during the wait, not just after it');
+  } finally { anims.restore(); }
+});
+
+await atest('the still is taken down once it has arrived', async () => {
+  const anims = fakeAnimations();
+  try {
+    const bar = mountForFold();
+    bar.yieldTo('bottom-left');
+    assert.equal(ghosts().length, 1);
+    await anims.finish();
+    assert.equal(ghosts().length, 0, 'nothing is left lying over the page');
+  } finally { anims.restore(); }
+});
+
+test('a list closed mid-fold does not leave the still behind', () => {
+  const anims = fakeAnimations();
+  try {
+    const bar = mountForFold();
+    bar.yieldTo('bottom-left');
+    assert.equal(ghosts().length, 1);
+    bar.restoreFromYield();
+    assert.equal(ghosts().length, 0, 'the bar is coming back; the picture of it must go');
+  } finally { anims.restore(); }
+});
+
+test('a reader who asked for less motion gets no still at all', () => {
+  const anims = fakeAnimations();
+  const realMM = dom.window.matchMedia;
+  dom.window.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });
+  try {
+    const bar = mountForFold();
+    bar.yieldTo('bottom-left');
+    assert.equal(ghosts().length, 0);
+    assert.equal(bar.isYielded(), true, 'but it still gets out of the way');
+    assert.equal(bar.state.corner, 'bottom-left');
+  } finally { dom.window.matchMedia = realMM; anims.restore(); }
+});
+
+// ── one anchor at a time ────────────────────────────────────────────────────
+//
+// The bar stepped aside and disappeared instead of landing in the corner.
+// _positionDocked() anchors the puck to the two sides of its corner —
+// left + bottom — and clears top. Then fitTo(), which the workspace calls from
+// onChange on the very _set() that docked it, re-clamped and wrote `top` back.
+//
+// An absolutely positioned element given BOTH top and bottom is not moved by
+// the second one, it is STRETCHED between them: the 48px puck became a 549px
+// sliver, and translateY(-50%) then lifted it 274px off the top of the screen.
+// Nothing was hidden and nothing was faded — it was pulled out of the viewport.
+//
+// It only happened some of the time because fitTo() returns early when the
+// scale has not moved, so whether the bar survived came down to whether
+// docking changed how big it wanted to be.
+
+/** Gives jsdom enough measurements for _clampIntoHost to want to run. */
+function measurable(bar, host) {
+  Object.defineProperty(host, 'clientWidth', { value: 1000, configurable: true });
+  Object.defineProperty(host, 'clientHeight', { value: 700, configurable: true });
+  Object.defineProperty(bar.root, 'offsetWidth', { value: 52, configurable: true });
+  Object.defineProperty(bar.root, 'offsetHeight', { value: 560, configurable: true });
+}
+
+test('clamping leaves a folded-away bar alone', () => {
+  const { bar, host } = mountToolbar();
+  measurable(bar, host);
+
+  bar.yieldTo('bottom-left');
+  assert.equal(bar.state.corner, 'bottom-left');
+  bar._clampIntoHost();
+
+  const s = bar.root.style;
+  assert.equal(s.bottom, '10px', 'still anchored to the floor of its corner');
+  assert.equal(s.top, '', 'and NOT also to the top — that would stretch it, not move it');
+  assert.equal(s.transform, '', 'nor shifted half its own height off the screen');
+});
+
+test('clamping leaves a token under the pointer alone', () => {
+  const { bar, host } = mountToolbar();
+  measurable(bar, host);
+  const handle = bar.root.querySelector('[data-role="handle"]');
+  pointer('pointerdown', { x: 40, y: 40, target: handle });
+  pointer('pointermove', { x: 300, y: 300 });
+  assert.equal(bar.state.phase, 'dragging');
+
+  bar._clampIntoHost();
+  assert.equal(bar.root.style.top, '300px', 'it stays where the pen is');
+  pointer('pointerup', { x: 300, y: 300 });
+});
+
+test('and still clamps the bar it is meant to clamp', () => {
+  const { bar, host } = mountToolbar();
+  measurable(bar, host);
+  assert.equal(bar.state.phase, 'expanded');
+  bar.root.style.top = '';
+  bar._clampIntoHost();
+  assert.notEqual(bar.root.style.top, '', 'an expanded bar is still kept inside the workspace');
+});
+// ── the tap that expands must not also pick something ───────────────────────
+//
+// Parking the bar with the marker selected, closing the app, reopening it and
+// tapping the puck gave back the LASSO. The tap expands the bar, which puts a
+// whole column of tool buttons under a finger that is still down, and the
+// click that follows lands on whichever one now occupies that spot.
+//
+// The swallow that exists for exactly this let it through, because it made an
+// exception for clicks landing inside the toolbar — reasonable after a drag,
+// where the bar under the finger is the same bar, and wrong here, where every
+// control under the finger is one second old.
+
+test('expanding a parked puck does not select whatever lands under the finger', () => {
+  const { bar } = mountToolbar();
+  // Park it, the way a drag into a corner does.
+  drag(bar, { from: [40, 40], to: [980, 780] });
+  assert.equal(bar.state.phase, 'docked', 'parked');
+  const parkedWith = bar.state.tool;
+
+  // Tap it: press and release without travelling.
+  const handle = bar.root.querySelector('[data-role="handle"]');
+  pointer('pointerdown', { x: 970, y: 770, target: handle || bar.root });
+  pointer('pointerup', { x: 970, y: 770 });
+  assert.equal(bar.state.phase, 'expanded', 'the tap expanded it');
+
+  // The click the browser synthesises now, retargeted onto the new bar.
+  const victim = [...bar.root.querySelectorAll('.ink-tool')].pop();
+  assert.ok(victim, 'there is a tool button to land on');
+  victim.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+
+  assert.equal(bar.state.tool, parkedWith,
+    'it came back holding the tool it was parked with');
+});
+
+test('and a real tap on a tool straight afterwards still works', () => {
+  // The swallow is armed once and spent once; the next click is the reader's.
+  const { bar } = mountToolbar();
+  drag(bar, { from: [40, 40], to: [980, 780] });
+  const handle = bar.root.querySelector('[data-role="handle"]');
+  pointer('pointerdown', { x: 970, y: 770, target: handle || bar.root });
+  pointer('pointerup', { x: 970, y: 770 });
+
+  const first = [...bar.root.querySelectorAll('.ink-tool')].pop();
+  first.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+
+  const pencil = bar.root.querySelector('.ink-tool[data-tool="pencil"]');
+  pencil.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  assert.equal(bar.state.tool, 'pencil', 'the reader deliberate tap is not eaten');
+});
+
+
 
 console.log(`\nink toolbar drag lifecycle: ${failed ? 'FAIL' : 'PASS'} (${passed} checks${failed ? `, ${failed} failed` : ''})`);
 if (failed) process.exit(1);

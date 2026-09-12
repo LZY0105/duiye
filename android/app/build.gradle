@@ -42,6 +42,38 @@ android {
         aaptOptions {
              ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
+
+        // 原生代理层（src/main/cpp）。现在编出来的是一座桥加两个空位，里面没有
+        // 任何模型，也没有任何识别引擎——但它是真编、真装进 APK、JS 真能问到的。
+        // 一份从来没编译过的接口和一份不存在的接口是一回事。
+        // 不关异常、不关 RTTI。这一层的全部用途就是以后往里插别人的东西——
+        // 模型运行时、识别引擎、JSON 库，它们大多要用异常；-fno-rtti 还会让
+        // dynamic_cast 不能用。为一个几十 KB 的桥省那点体积，换来的是接入方
+        // 第一天就得先来改这一行。另外 std::thread 和 make_shared 本身会抛，
+        // 关掉异常的话它们失败时直接 terminate，等于内存紧张时崩给用户看。
+        //
+        // STL 仍然是静态的：现在整个 APK 里只有这一个 .so，静态链接正是这种
+        // 情形该用的。接入方加进来第二个 .so 的那一天要改成 c++_shared——两个
+        // 库各带一份 libc++ 的话，异常跨不过库的边界，而那种毛病查起来要命。
+        externalNativeBuild {
+            cmake {
+                cppFlags '-std=c++17'
+                arguments '-DANDROID_STL=c++_static'
+            }
+        }
+        // 四个架构全带上会让 APK 多出三份用不上的库。这台设备和绝大多数现役
+        // 平板都是 arm64；32 位那份留着是因为还有在用的老机器，x86_64 是模拟器
+        // 要用的。接入方要是加了大体积的第三方库，该回来重看这一行。
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64'
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'src/main/cpp/CMakeLists.txt'
+            version '3.31.6'
+        }
     }
 
     signingConfigs {
@@ -76,11 +108,12 @@ android {
         }
     }
 
-    // No ABI splits. They sliced the native libraries of the recognition stack;
-    // with that gone the app ships no native code of its own, and the four
-    // architecture APKs came out byte-for-byte identical — same sha256, four
-    // uploads, and a release page asking the reader to choose between copies of
-    // one file. If native code returns, so should this block.
+    // 仍然不切 ABI 包。
+    //
+    // 上面那段注释原来写着「本 app 不含任何原生代码，所以四个架构的 APK 字节
+    // 完全一样」——现在含了，那句话不再成立，但结论还成立：代理层的 .so 只有
+    // 几十 KB，切成四个包省下来的比一个发布页让人挑架构的代价小得多。真接上
+    // 模型之后（那才是几十上百兆）该回来重看这一段。
 }
 
 repositories {

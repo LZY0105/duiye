@@ -472,19 +472,45 @@ check('one finger slides a page too big for its pane, and turns one that fits', 
   assert.ok(/if \(e\.pointerType === 'pen'\) return;/.test(code),
     'the pen never reaches the page gestures');
   assert.ok(/touches\.size === 2/.test(code), 'two fingers are a pinch');
-  assert.ok(/swipe\.mode = this\._roomToPan\(dx, dy\) \? 'pan' : 'turn'/.test(code),
+  assert.ok(/swipe\.mode = \(this\._zoomedPastTurning\(\) \|\| this\._roomToPan\(dx, dy\)\) \? 'pan' : 'turn'/.test(code),
     'the reading is taken once and kept');
 });
 
 /** A pane with a page of `content` in a viewport of `view`, scrolled to `at`. */
-function pannablePane({ view, content, at }) {
+function pannablePane({ view, content, at, zoom = 1, fitMode = 'page' }) {
   const pane = Object.create(PdfPane.prototype);
-  pane.state = { scrollX: at.x, scrollY: at.y, zoom: 1, fitMode: 'page' };
+  pane.state = { scrollX: at.x, scrollY: at.y, zoom, fitMode };
   pane.pageSize = { width: content.width, height: content.height };
   pane._viewport = () => view;
   pane._contentSize = () => content;
   return pane;
 }
+
+check('a swipe turns the page up to 130%, and only pans past it', () => {
+  // Asked for on the tablet. The gate was the whole-page fit exactly, which
+  // made a page nudged to 110% unturnable by hand — the reader has barely
+  // zoomed, there is almost nowhere to slide the page to, and a sideways drag
+  // can only mean "next page". Past 130% they are studying one working, one
+  // finger is how they move around it, and the ‹ › buttons turn.
+  const view = { width: 580, height: 610 };
+  const page = { width: 580, height: 610 };      // fitScale 1, so zoom IS displayZoom
+  const at = (zoom, fitMode = 'none') =>
+    pannablePane({ view, content: page, at: { x: 0, y: 0 }, zoom, fitMode });
+
+  assert.equal(at(1, 'page')._zoomedPastTurning(), false, 'a page shown whole turns');
+  assert.equal(at(1.1)._zoomedPastTurning(), false, '110% still turns');
+  assert.equal(at(1.29)._zoomedPastTurning(), false, 'and just under the line');
+  assert.equal(at(1.3)._zoomedPastTurning(), false, 'the line itself is inclusive — 130% turns');
+  assert.equal(at(1.31)._zoomedPastTurning(), true, 'just past it, one finger only pans');
+  assert.equal(at(2)._zoomedPastTurning(), true, 'and well past it');
+  assert.equal(at(0.6)._zoomedPastTurning(), false, 'zooming OUT never stops a turn');
+
+  // A fit is not a manual zoom. 适合宽度 can read well above 130% on a tall
+  // page, but there is no width to slide across, so the swipe still turns —
+  // _roomToPan is what decides that one.
+  assert.equal(at(1.8, 'width')._zoomedPastTurning(), false,
+    'a fit-to-width page is not "zoomed in" however large the number reads');
+});
 
 check('a page that fits its pane has nowhere to slide, so the swipe turns it', () => {
   const pane = pannablePane({
@@ -719,9 +745,15 @@ check('the preview is not dropped before the render that replaces it arrives', (
   const release = code.slice(code.indexOf('_stopTrackingPaneFits();'), code.indexOf('_stopTrackingPaneFits();') + 300);
   assert.ok(!/previewScale\?\.\(1\)/.test(release), 'nothing is reset on the way out');
   assert.ok(/_previewScale = 1;/.test($code('src/pdf/pdf-pane.js')), 'the render does it instead');
-  // Except for a pane that is being closed: no refit is coming for that one.
-  const closing = code.slice(code.indexOf('if (closing) {'), code.indexOf('if (closing) {') + 200);
-  assert.ok(/_clearPaneFitPreviews\(\)/.test(closing), 'a pane being closed is let go of');
+  // Except for a pane that is going away: no refit is coming for that one.
+  // Dragging the divider to an edge now COLLAPSES the pane rather than closing
+  // it — the deck is untouched and a restore control takes its place — but the
+  // preview still has to be released, because a collapsed pane is not going to
+  // be re-rendered either.
+  const at = code.indexOf('if (collapsing) {');
+  const collapsing = code.slice(at, at + 300);
+  assert.ok(/_clearPaneFitPreviews\(\)/.test(collapsing), 'a pane being put away is let go of');
+  assert.ok(/collapsePane\(/.test(collapsing), 'and it is collapsed, not closed');
 });
 
 check('the drag and the transition price the fit the same way', () => {
@@ -1370,11 +1402,130 @@ check('a bar with no box yet falls back to the active pane', () => {
   assert.equal(Math.round(ws._toolbarColumnWidth(fractions, ROOT_RECT)), Math.round(1200 * 0.7));
 });
 
+check('a bar whose active column has gone is fitted to the workspace, not to nothing', () => {
+  // One file on screen: the other column is at zero share, and it can be the
+  // ACTIVE one — tapping 专注 on the right pane does not move the cursor off
+  // the left. A fallback of "the active column's share" is zero there, and a
+  // bar fitted to a column 0px wide has nothing to lay out in.
+  const fractions = { [SLOTS.PRIMARY]: 0, [SLOTS.SECONDARY]: 1 };
+  const ws = workspaceOver(0, 0, { active: SLOTS.PRIMARY });
+  assert.equal(ws._toolbarColumnWidth(fractions, ROOT_RECT), 1200,
+    'with nothing to rest on, the bar gets the whole workspace');
+});
+
 check('changing the active pane refits the bar, with no resize to ride on', () => {
   const src = $code('src/pdf/pdf-workspace.js');
   const body = src.slice(src.indexOf('_markActive(slot) {'));
   assert.ok(/_syncToolbarSize/.test(body.slice(0, 400)),
     'activation must refit, or the bar keeps the size the other pane earned it');
+});
+
+check('the bar keeps clear of every header it can see, not just the active one', () => {
+  // Measured on the tablet: focusing the RIGHT column while the LEFT one was
+  // active took the left column out of the flow, its header measured 0, and
+  // the bar was told the top 40px were free. It sprang 76px upward in one
+  // frame — at the end of an animation that was never about it.
+  const head = (h) => ({ hidden: false, offsetHeight: h });
+  const slotWith = (h, { hidden = false, width = 600 } = {}) => ({
+    hidden,
+    offsetWidth: width,
+    querySelector: (sel) => (sel === '.pdf-slot-toolbar' ? head(h) : null),
+  });
+
+  const ws = Object.create(PdfWorkspace.prototype);
+  ws.activeSlot = SLOTS.PRIMARY;
+  ws.state = { orientation: 'row', swapped: false };
+  ws.root = { getBoundingClientRect: () => ({ left: 0, width: 1200, height: 700 }) };
+  const safe = [];
+  ws.toolbar = {
+    root: { getBoundingClientRect: () => ({ left: 900, width: 50 }) },
+    setSafeArea: (top) => safe.push(top),
+    fitTo: () => {},
+  };
+
+  // The active column is the one that has just left the screen.
+  ws.elSlots = {
+    [SLOTS.PRIMARY]: slotWith(40, { hidden: true, width: 0 }),
+    [SLOTS.SECONDARY]: slotWith(40),
+  };
+  ws._syncToolbarSize({ [SLOTS.PRIMARY]: 0, [SLOTS.SECONDARY]: 1 });
+  assert.equal(safe.pop(), 40, 'the header still on screen is still in the way');
+
+  // Nothing on screen at all is the only way to get zero.
+  ws.elSlots = {
+    [SLOTS.PRIMARY]: slotWith(40, { hidden: true, width: 0 }),
+    [SLOTS.SECONDARY]: slotWith(40, { hidden: true, width: 0 }),
+  };
+  ws._syncToolbarSize({ [SLOTS.PRIMARY]: 0, [SLOTS.SECONDARY]: 0 });
+  assert.equal(safe.pop(), 0);
+});
+
+check('回来先看见书架，但只在桌上是空的时候', () => {
+  const code = $code('src/pdf/pdf-workspace-ui.js');
+  assert.ok(/if \(workspace\.isEmpty\(\)\) openLibrary\(\);/.test(code),
+    '上次还开着书就接着读，全关了才回书架');
+  assert.ok(/workspace\.onEmpty = \(\) => openLibrary\(\)/.test(code),
+    '关掉最后一份之后，书架自己回来');
+});
+
+check('横向不挡路的菜单栏，不该把工具栏顶起来', () => {
+  // 真机上量到的：那条菜单栏是居中的一颗胶囊，横跨 360–840；而工具栏靠在最左边
+  // 的 10–63。两者横向根本不相交，可安全区原来是按整条底边算的——菜单栏一升起来
+  // 工具栏就被顶上去、还缩短了一截，而它从头到尾没被挡住过一个像素。
+  const ws = Object.create(PdfWorkspace.prototype);
+  ws.elSlots = { [SLOTS.PRIMARY]: null, [SLOTS.SECONDARY]: null };
+  const host = { left: 0, right: 1200, top: 64, bottom: 736, width: 1200, height: 672 };
+
+  const withDockAndBar = (dock, bar) => {
+    const realQuery = globalThis.document.querySelector;
+    globalThis.document.querySelector = (sel) => (sel === '.bottom-nav'
+      ? { getBoundingClientRect: () => dock } : realQuery.call(globalThis.document, sel));
+    ws.toolbar = { rect: () => bar };
+    try { return ws._toolbarSafeArea(host); } finally {
+      globalThis.document.querySelector = realQuery;
+    }
+  };
+
+  // 菜单栏升起来，盖住工作区底下 78px
+  const dockOut = { left: 360, right: 840, top: 658, bottom: 830, height: 172 };
+
+  const aside = withDockAndBar(dockOut, { left: 10, right: 63 });
+  assert.equal(aside.bottom, 0, '在最左边的工具栏，居中的菜单栏碰不到它');
+
+  const over = withDockAndBar(dockOut, { left: 400, right: 460 });
+  assert.equal(Math.round(over.bottom), 78, '横着压在它上面的才算数');
+
+  // 挨着边界的两种：擦过和差一点
+  assert.ok(withDockAndBar(dockOut, { left: 300, right: 370 }).bottom > 0, '压住一点也是压住');
+  assert.equal(withDockAndBar(dockOut, { left: 300, right: 360 }).bottom, 0, '刚好挨上不算');
+});
+
+check('判的是横向，不是纵向——否则会来回摆', () => {
+  // 被顶上去之后纵向就不相交了。拿纵向去判的话：顶上去 → 不冲突了 → 落回来 →
+  // 又冲突，一帧一个样。横向不随这个动作改变。
+  const src = $code('src/pdf/pdf-workspace.js');
+  const fn = src.slice(src.indexOf('_toolbarSafeArea(rect) {'));
+  const body = fn.slice(0, fn.indexOf('syncToolbarSafeArea()'));
+  assert.ok(/box\.right > bar\.left && box\.left < bar\.right/.test(body),
+    '横向相交');
+  assert.ok(!/box\.bottom > bar\.top/.test(body), '不能拿纵向去判');
+});
+
+check('a layout change asks again whether the bar is in the way', () => {
+  // The bar folds when a panel opens and comes back when it closes — but the
+  // panel can hold still while the layout moves out from under it. Focusing the
+  // other pane takes the column holding an open table of contents off the
+  // screen; nothing opened, nothing closed, and the bar stayed folded in a
+  // corner with nothing on screen left to close.
+  const src = $code('src/pdf/pdf-workspace.js');
+  const bands = src.slice(src.indexOf('_syncPaneWidthBands(fractions) {'));
+  const body = bands.slice(0, bands.indexOf('_settleHeaderFit() {'));
+  assert.ok(/_reviewToolbarConflict\(\)/.test(body),
+    'every layout settle re-asks the question');
+
+  const watch = src.slice(src.indexOf('_watchSlotSizes() {'));
+  assert.ok(/_reviewToolbarConflict\(\)/.test(watch.slice(0, watch.indexOf('// ── state'))),
+    'and so does a size change with no state change behind it — a rotation');
 });
 
 check('moving the bar refits it, because a move can change its column', () => {
@@ -1452,6 +1603,126 @@ check('widening a pane puts back what narrowing it took away', () => {
   for (let i = 0; i < 6; i++) ws._syncPaneHeaderFit();
   assert.equal(slot.classes.size, 0, 'everything comes back once there is room for it');
   void wide;
+});
+
+check('a rung is not judged while the last one is still closing', () => {
+  // Shedding a rung collapses its widths over a quarter second. Until that
+  // lands the bar still measures as though nothing had gone, so a ladder that
+  // looked again straight away would strip itself bare in three frames — and
+  // would record what it "wanted" from a width caught mid-flight, which is the
+  // number that decides whether the chrome ever comes back.
+  const slot = slotWithHeader(584, [774, 651, 561]);
+  const bar = slot.el.querySelector();
+  let moving = true;
+  bar.getAnimations = () => (moving
+    ? [{ playState: 'running', transitionProperty: 'max-width' }]
+    : []);
+
+  const ws = Object.create(PdfWorkspace.prototype);
+  ws._headerWanted = {};
+  ws.elSlots = { [SLOTS.PRIMARY]: slot.el, [SLOTS.SECONDARY]: null };
+
+  moving = false;
+  ws._syncPaneHeaderFit();
+  assert.equal(slot.classes.size, 1, 'the first rung goes on');
+
+  moving = true;
+  for (let i = 0; i < 6; i++) ws._syncPaneHeaderFit();
+  assert.equal(slot.classes.size, 1, 'and nothing follows it while it is moving');
+
+  moving = false;
+  ws._syncPaneHeaderFit();
+  assert.equal(slot.classes.size, 2, 'once it has landed the ladder carries on');
+});
+
+check('a fade or a hover tint is not a reason to wait', () => {
+  const slot = slotWithHeader(584, [774, 651, 561]);
+  slot.el.querySelector().getAnimations = () => [
+    { playState: 'running', transitionProperty: 'background-color' },
+    { playState: 'running', transitionProperty: 'opacity' },
+  ];
+  const ws = Object.create(PdfWorkspace.prototype);
+  ws._headerWanted = {};
+  ws.elSlots = { [SLOTS.PRIMARY]: slot.el, [SLOTS.SECONDARY]: null };
+  for (let i = 0; i < 4; i++) ws._syncPaneHeaderFit();
+  assert.equal(slot.classes.size, 2, 'only the transitions that move width hold it up');
+});
+
+check('a column that is animating sheds chrome frame by frame, not at the end', () => {
+  // The bar used to be left alone for the whole 380ms and measured once, when
+  // it was over. So a column collapsing from full screen to half spent the
+  // animation overflowing — the tail buttons pushed out past its own edge —
+  // and then everything landed in ONE frame: a 45px jump, measured on the
+  // tablet. The width during the animation is not a guess; the column really
+  // is that wide at that moment, so it can be priced then.
+  const slot = slotWithHeader(0, [774, 651, 561]);
+  let have = 1188;
+  Object.defineProperty(slot.el.querySelector(), 'clientWidth',
+    { get: () => have, configurable: true });
+
+  const ws = Object.create(PdfWorkspace.prototype);
+  ws._headerWanted = {};
+  ws.elSlots = {
+    [SLOTS.PRIMARY]: slot.el,
+    [SLOTS.SECONDARY]: { classList: { contains: () => false, add: () => {}, remove: () => {} }, querySelector: () => null },
+  };
+  let previews = 0;
+  ws._previewPaneFits = () => { previews++; };
+
+  const queue = [];
+  const raf = globalThis.requestAnimationFrame;
+  const caf = globalThis.cancelAnimationFrame;
+  globalThis.requestAnimationFrame = (fn) => queue.push(fn);
+  globalThis.cancelAnimationFrame = () => {};
+
+  const rungsAt = [];
+  try {
+    ws._trackPaneFits(380);
+    // Walk the column down the way the CSS transition does, a frame at a time.
+    for (const width of [1188, 900, 700, 640, 600, 584, 584, 584]) {
+      have = width;
+      queue.shift()?.();
+      rungsAt.push([width, ['is-snug', 'is-snugger'].filter((c) => slot.classes.has(c)).length]);
+    }
+  } finally {
+    globalThis.requestAnimationFrame = raf;
+    globalThis.cancelAnimationFrame = caf;
+  }
+
+  const first = rungsAt.find(([, n]) => n > 0);
+  assert.ok(first, 'a bar wanting 774 in a 584 column has to shed something');
+  assert.ok(first[0] > 584,
+    `the first rung goes on at ${first?.[0]}px, while the column is still on its
+     way — not after it has landed`);
+  assert.equal(rungsAt[rungsAt.length - 1][1], 2, 'and it arrives fully settled');
+  assert.ok(previews >= 8, 'the pages are still re-priced on every frame too');
+});
+
+check('one rung per frame, so an animation cannot thrash the bar', () => {
+  // The whole-ladder settle is for the ends of things. Per frame it is the
+  // drag rule: measure, step once, look again next frame.
+  const src = $code('src/pdf/pdf-workspace.js');
+  const step = src.slice(src.indexOf('_trackPaneFits(duration) {'));
+  const body = step.slice(0, step.indexOf('animateToRatio'));
+  assert.ok(/this._syncPaneHeaderFit()/.test(body), 'the tracker prices the bar');
+  assert.ok(!/this._settleHeaderFit()/.test(body),
+    'but one rung at a time — climbing the whole ladder every frame is the drag cost times two');
+});
+
+check('what a rung takes away slides shut, and comes back by fading in', () => {
+  const css = $read('src/styles/pdf.css');
+  const base = css.slice(css.indexOf('.pdf-slot-btn-text,'));
+  assert.ok(/transition: max-width [\d.]+s[^;]*opacity/.test(base.slice(0, 400)),
+    'coming back is a fade — the caption appears where its room already is');
+
+  // Going the other way the caption is dropped outright. It is collapsed at the
+  // moment the bar runs out of room, and at that moment flex has already
+  // squeezed it to nothing; animating the opacity there makes it spring BACK
+  // into view for a moment as the pressure releases.
+  const shut = css.slice(css.indexOf('.pdf-ws-slot.is-snug .pdf-slot-title,'));
+  const rule = shut.slice(0, shut.indexOf('}'));
+  assert.ok(/transition:[^;]*max-width/.test(rule), 'the room it took still closes gradually');
+  assert.ok(!/opacity/.test(rule), 'but the text itself does not linger on the way out');
 });
 
 check('no rung ever hides something you can press', () => {
@@ -1557,14 +1828,108 @@ check('onDoubleTap survives being handed nothing', () => {
   assert.equal(typeof onDoubleTap(document.createElement('div'), null), 'function');
 });
 
-check('the library row is wired to it, and looks pressable', () => {
-  const code = $read('src/pdf/pdf-workspace-ui.js');
-  assert.ok(code.includes("onDoubleTap(row, openDoc, { ignore: '.pdf-library-actions' })"));
-  assert.ok(/openingId === doc\.id/.test(code), 'a second activation mid-open is ignored');
+check('one tap opens a book, and a second one mid-open is ignored', () => {
+  // The library was a list of rows and a row took a DOUBLE tap, because a row
+  // also carried three buttons and one tap had to be able to mean "not those".
+  // A book on a shelf carries nothing: tapping it is the only thing it does, so
+  // it opens on the first tap and everything else moved into its ⋯.
+  const code = $code('src/pdf/pdf-workspace-ui.js');
+  assert.ok(!/onDoubleTap/.test(code), 'no double-tap left on the shelf');
+  assert.ok(/openingId === item\.id/.test(code),
+    'a second activation while the first is still in flight is ignored');
+
+  const shelf = $code('src/pdf/book-shelf.js');
+  assert.ok(/addEventListener\('click', \(\) => this\.onOpen/.test(shelf),
+    'the whole book is the target, not a button inside it');
+  assert.ok(/e\.stopPropagation\(\)/.test(shelf),
+    'and a tap on the ⋯ is a tap on IT, not on the book around it');
+
   const css = $read('src/styles/pdf.css');
-  const rule = css.match(/\.pdf-library-row\s*\{[^}]*cursor:\s*pointer[^}]*\}/);
-  assert.ok(rule, 'a row that opens has to look like it can be pressed');
-  assert.ok(/user-select:\s*none/.test(rule[0]), 'or the second tap selects the name instead');
+  const rule = css.match(/\.pdf-book-hit\s*\{[^}]*\}/);
+  assert.ok(rule && /cursor:\s*pointer/.test(rule[0]),
+    'a book that opens has to look like it can be pressed');
+});
+
+// ═══════════════════════════════════════════════════════════════
+group('6b. 缩放时报一下当前比例');
+
+/** 一栏，和它那块只在缩放时露面的牌子。 */
+function zoomSlot() {
+  document.body.innerHTML =
+    '<div class="pdf-ws-slot"><div data-role="zoom-badge"></div></div>';
+  const el = document.querySelector('.pdf-ws-slot');
+  const ws = Object.create(PdfWorkspace.prototype);
+  ws.elSlots = { [SLOTS.PRIMARY]: el };
+  return { ws, badge: el.querySelector('[data-role="zoom-badge"]') };
+}
+
+const shown = (badge) => badge.classList.contains('is-visible');
+
+check('比例变了就报，报的是变成了多少', () => {
+  const { ws, badge } = zoomSlot();
+  ws._flashZoom(SLOTS.PRIMARY, 100, 'e1');
+  assert.ok(!shown(badge), '刚打开不是一次缩放');
+  ws._flashZoom(SLOTS.PRIMARY, 122, 'e1');
+  assert.ok(shown(badge));
+  assert.equal(badge.textContent, '122%');
+});
+
+check('翻页、落笔不报——那些也走同一条路', () => {
+  // _syncSlotChrome 在翻页、撤销、笔迹变化时都会被叫到。比例没变就不该出声，
+  // 否则这块牌子会在人根本没缩放的时候一直冒出来。
+  const { ws, badge } = zoomSlot();
+  ws._flashZoom(SLOTS.PRIMARY, 100, 'e1');
+  ws._flashZoom(SLOTS.PRIMARY, 122, 'e1');
+  badge.classList.remove('is-visible');
+  ws._flashZoom(SLOTS.PRIMARY, 122, 'e1');
+  assert.ok(!shown(badge), '同一个数不该再报一遍');
+});
+
+check('换一本书不报——那不是一次缩放，是一次打开', () => {
+  // 新书有自己的比例，几乎必然和上一本不同。把它当成缩放，就会变成每次切换
+  // 都在页面正中间闪一个数。
+  const { ws, badge } = zoomSlot();
+  ws._flashZoom(SLOTS.PRIMARY, 122, 'e1');
+  ws._flashZoom(SLOTS.PRIMARY, 100, 'e2');
+  assert.ok(!shown(badge));
+  ws._flashZoom(SLOTS.PRIMARY, 140, 'e2');
+  assert.ok(shown(badge), '换过去之后再缩放，照报');
+});
+
+check('两栏各报各的', () => {
+  document.body.innerHTML =
+    '<div class="a"><div data-role="zoom-badge"></div></div>'
+    + '<div class="b"><div data-role="zoom-badge"></div></div>';
+  const ws = Object.create(PdfWorkspace.prototype);
+  ws.elSlots = {
+    [SLOTS.PRIMARY]: document.querySelector('.a'),
+    [SLOTS.SECONDARY]: document.querySelector('.b'),
+  };
+  const a = document.querySelector('.a [data-role="zoom-badge"]');
+  const b = document.querySelector('.b [data-role="zoom-badge"]');
+  ws._flashZoom(SLOTS.PRIMARY, 100, 'e1');
+  ws._flashZoom(SLOTS.SECONDARY, 100, 'e2');
+  ws._flashZoom(SLOTS.PRIMARY, 150, 'e1');
+  assert.ok(shown(a) && a.textContent === '150%');
+  assert.ok(!shown(b), '缩放是这一栏自己的事');
+});
+
+check('没有装东西的栏不报', () => {
+  const { ws, badge } = zoomSlot();
+  ws._flashZoom(SLOTS.PRIMARY, 122, 'e1');
+  badge.classList.remove('is-visible');
+  ws._flashZoom(SLOTS.PRIMARY, null, null);
+  assert.ok(!shown(badge));
+});
+
+check('横杠上那个读数和这块牌子是同一个数算出来的', () => {
+  // 算两遍的话，它们迟早会在某个边界上各说各的——而人会同时看到两个数。
+  const src = $code('src/pdf/pdf-workspace.js');
+  const at = src.indexOf('const zoomPercent =');
+  assert.ok(at > 0, '读数只该算一次');
+  const after = src.slice(at, at + 500);
+  assert.ok(/zoom-label[\s\S]*zoomPercent/.test(after), '横杠上的小字用它');
+  assert.ok(/_flashZoom\(slot, zoomPercent/.test(after), '牌子也用它');
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -1659,7 +2024,9 @@ function chromePage({ topHidden = false, bottomHidden = false } = {}) {
   box(q('.pdf-page-bar'), topHidden ? [0, -44, 1200, 0] : [0, 8, 1200, 52]);
   box(q('.bar-peek'), topHidden ? [0, 0, 1148, 64] : [0, 0, 0, 0]);
   box(q('.bottom-nav'), bottomHidden ? [0, 700, 1200, 766] : [0, 634, 1200, 700]);
-  box(q('[data-role="dock-peek"]'), bottomHidden ? [200, 620, 1000, 700] : [0, 0, 0, 0]);
+  // 200px, centred on a 1200px viewport — the handle the dock is called back
+  // from. It used to run 200-1000, and everything it covered stopped being page.
+  box(q('[data-role="dock-peek"]'), bottomHidden ? [500, 620, 700, 700] : [0, 0, 0, 0]);
   // Measured off the tablet: the capsules fill the bar but for five pixels
   // either side, which is the whole reason the bar is not a grab any more.
   box(q('[data-page="pdf"]'), [365, 640, 600, 696]);
@@ -1684,10 +2051,10 @@ let chromeOff = null;
  * from: a press on a capsule and a press on the glass beside it are the same
  * coordinates as far as a box test goes, and must not be the same gesture.
  */
-function swipe(x, y, dy, { steps = 8, on = null } = {}) {
+function swipe(x, y, dy, { steps = 8, on = null, pointerType = 'touch' } = {}) {
   const target = on || document;
   const fire = (type, cy) => target.dispatchEvent(new window.PointerEvent(type, {
-    clientX: x, clientY: cy, pointerId: 1, pointerType: 'touch', isPrimary: true,
+    clientX: x, clientY: cy, pointerId: 1, pointerType, isPrimary: true,
     bubbles: true, cancelable: true,
   }));
   fire('pointerdown', y);
@@ -1828,6 +2195,61 @@ check('a drag that starts above the dock still moves it', () => {
   chromePage();
   swipe(500, 610, 70);
   assert.ok(hidden('bottom'), 'the reach above the dock is over the page, not over a capsule');
+});
+
+/*
+ * The way back to the dock, and the writing it used to eat.
+ *
+ * The peek strip is z-index 999 and takes pointer events while the dock is
+ * away, so everything it covers stops being page: a press there lands on the
+ * strip and never reaches the ink canvas. It ran 200-1000 across the bottom of
+ * a 1200px workspace, which is why a line of working along the foot of a page
+ * could not be written, and why trying kept pulling the dock back out from
+ * under the hand. It is now a 200px handle in the middle — over the divider
+ * and its gutter in a split workspace, which costs neither page any room.
+ */
+check('a stylus writing along the bottom does not summon the dock', () => {
+  chromePage({ bottomHidden: true });
+  swipe(250, 660, -70, { pointerType: 'pen' });
+  assert.ok(hidden('bottom'), 'left of the handle, the pen is writing and nothing else');
+
+  chromePage({ bottomHidden: true });
+  swipe(950, 660, -70, { pointerType: 'pen' });
+  assert.ok(hidden('bottom'), 'and the same to the right of it');
+});
+
+check('a stylus calls the dock back from the middle', () => {
+  chromePage({ bottomHidden: true });
+  swipe(600, 660, -70, { pointerType: 'pen' });
+  assert.ok(!hidden('bottom'), 'the centre is the handle, and the pen still reaches it');
+});
+
+check('the hand uses the same handle, and nothing beyond it', () => {
+  chromePage({ bottomHidden: true });
+  swipe(600, 660, -70);
+  assert.ok(!hidden('bottom'), 'a finger on the handle brings it back');
+
+  // The other end of the old strip is page again, for the hand as well. This
+  // is the deliberate narrowing: what the strip covers, nobody can write on.
+  chromePage({ bottomHidden: true });
+  swipe(250, 660, -70);
+  assert.ok(hidden('bottom'), 'and away from the handle it no longer answers');
+});
+
+check('putting the dock away is unchanged, for the pen as much as the hand', () => {
+  // The narrowing is on the way BACK only. Hiding keeps the whole 76px band
+  // above the dock, so a deliberate downward drag still works from anywhere.
+  chromePage();
+  swipe(500, 600, 70, { pointerType: 'pen' });
+  assert.ok(hidden('bottom'), 'a pen drag down still puts it away');
+
+  chromePage();
+  swipe(250, 600, 70, { pointerType: 'pen' });
+  assert.ok(hidden('bottom'), 'from off to one side as much as from the middle');
+
+  chromePage();
+  swipe(250, 600, 70);
+  assert.ok(hidden('bottom'), 'and the hand is untouched');
 });
 
 check('a press on an import button does not move the row', () => {

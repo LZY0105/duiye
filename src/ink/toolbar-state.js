@@ -149,10 +149,41 @@ export const DEFAULT_SWATCHES = Object.freeze(['#111827', '#dc2626', '#2563eb', 
 
 const clamp01 = (v) => Math.min(1, Math.max(0, Number(v) || 0));
 
+/**
+ * What each drawing tool was last set to.
+ *
+ * A pen is not a marker with a different name: someone who sets the pen to 1.2
+ * and the highlighter to 20 has said two things, and picking one up again
+ * should bring back what they said about IT. Selecting a tool used to overwrite
+ * the width and opacity with that tool's factory defaults, so every adjustment
+ * survived exactly until the next time another tool was touched.
+ *
+ * Kept for the four stroke tools only: the eraser has its own `eraserWidth`,
+ * and the lasso has no size at all.
+ */
+function toolMemory(initial = {}) {
+  const remembered = {};
+  for (const tool of Object.values(INK_TOOLS)) {
+    const defaults = TOOL_DEFAULTS[tool] || TOOL_DEFAULTS[INK_TOOLS.PEN];
+    const saved = initial?.[tool] || {};
+    remembered[tool] = Object.freeze({
+      width: Number.isFinite(saved.width) ? saved.width : defaults.width,
+      opacity: Number.isFinite(saved.opacity) ? saved.opacity : defaults.opacity,
+    });
+  }
+  return Object.freeze(remembered);
+}
+
 export function createToolbarState(initial = {}) {
   const tool = initial.tool || INK_TOOLS.PEN;
-  const defaults = TOOL_DEFAULTS[tool] || TOOL_DEFAULTS[INK_TOOLS.PEN];
+  const byTool = toolMemory(initial.byTool);
+  // The live width and opacity start from what THIS tool was last set to, so a
+  // restart comes back holding the same pen it was put down with.
+  const defaults = byTool[tool] || TOOL_DEFAULTS[INK_TOOLS.PEN];
   return Object.freeze({
+    /** Per-tool width and opacity; see toolMemory. */
+    byTool,
+
     // ── placement ──
     edge: Object.values(EDGES).includes(initial.edge) ? initial.edge : EDGES.LEFT,
     offset: clamp01(initial.offset ?? 0.35),
@@ -163,6 +194,12 @@ export function createToolbarState(initial = {}) {
     corner: Object.values(CORNERS).includes(initial.corner) ? initial.corner : null,
     /** Transient token position while dragging, in viewport pixels. */
     dragPoint: null,
+    /**
+     * Set only while the bar has been folded away for something else — a deck
+     * list it was covering. Holds the placement to give back, so a yield the
+     * reader never asked for cannot become the placement they are left with.
+     */
+    yielded: null,
 
     // ── ink tool state (must survive placement changes) ──
     tool,
@@ -268,6 +305,59 @@ export function undock(state) {
   return next(state, { phase: TOOLBAR_PHASE.EXPANDED, corner: null });
 }
 
+/**
+ * Folds the bar into a corner to get it off something else, remembering where
+ * it was so it can be handed back.
+ *
+ * This is NOT docking. Docking is a choice the reader made with a drag, and it
+ * is theirs to keep; this is the bar stepping aside for a panel that opened
+ * over it, and it owes the reader their placement back the moment that panel
+ * closes. The two look identical on screen — the same circle in the same
+ * corner — and differ in the only way that matters: one is remembered, the
+ * other is repaid.
+ *
+ * A drag is never interrupted: a reader with the token under their stylus is
+ * placing it, and a panel opening underneath must not take it out of their
+ * hand.
+ */
+export function yieldToCorner(state, corner) {
+  if (!Object.values(CORNERS).includes(corner)) return state;
+  if (state.phase === TOOLBAR_PHASE.DRAGGING) return state;
+  // Already stepped aside: only the corner may still change, and the debt
+  // recorded the first time is the one that stands.
+  if (state.yielded) {
+    return state.corner === corner ? state : next(state, { corner });
+  }
+  return next(state, {
+    phase: TOOLBAR_PHASE.DOCKED,
+    corner,
+    openCard: CARDS.NONE,
+    yielded: Object.freeze({
+      phase: state.phase,
+      corner: state.corner,
+      edge: state.edge,
+      offset: state.offset,
+    }),
+  });
+}
+
+/** Gives back exactly the placement `yieldToCorner` borrowed. */
+export function unyield(state) {
+  const owed = state.yielded;
+  if (!owed) return state;
+  return next(state, {
+    phase: owed.phase,
+    corner: owed.corner,
+    edge: owed.edge,
+    offset: owed.offset,
+    yielded: null,
+  });
+}
+
+export function isYielded(state) {
+  return !!state.yielded;
+}
+
 export function isDocked(state) {
   return state.phase === TOOLBAR_PHASE.DOCKED;
 }
@@ -352,7 +442,13 @@ export function cornerOf(point, viewport) {
 
 // ── tool state ──────────────────────────────────────────────────────────────
 
-/** Selecting a stroke tool adopts that tool's default width. */
+/**
+ * Picks up a tool, in the state it was last put down in.
+ *
+ * NOT its factory defaults. Adopting the defaults meant a width the user had
+ * chosen lasted only until they touched another tool and came back — every
+ * adjustment silently undone by the act of using the eraser.
+ */
 export function selectTool(state, tool) {
   if (tool === ERASER_TOOL) {
     return next(state, { tool: ERASER_TOOL, openCard: CARDS.NONE });
@@ -361,12 +457,30 @@ export function selectTool(state, tool) {
     return next(state, { tool: LASSO_TOOL, openCard: CARDS.NONE });
   }
   if (!Object.values(INK_TOOLS).includes(tool)) return state;
-  const defaults = TOOL_DEFAULTS[tool];
+  const remembered = state.byTool?.[tool] || TOOL_DEFAULTS[tool];
   return next(state, {
     tool,
-    width: defaults.width,
-    opacity: defaults.opacity,
+    width: remembered.width,
+    opacity: remembered.opacity,
     openCard: CARDS.NONE,
+  });
+}
+
+/**
+ * Files a change against the tool it was made for.
+ *
+ * The live value and the remembered one are written together, so there is no
+ * window in which the toolbar is showing something it has not recorded.
+ */
+function remember(state, patch) {
+  if (!Object.values(INK_TOOLS).includes(state.tool)) return next(state, patch);
+  const current = state.byTool?.[state.tool] || TOOL_DEFAULTS[state.tool];
+  return next(state, {
+    ...patch,
+    byTool: Object.freeze({
+      ...state.byTool,
+      [state.tool]: Object.freeze({ ...current, ...patch }),
+    }),
   });
 }
 
@@ -377,12 +491,12 @@ export function setColor(state, color) {
 
 export function setWidth(state, width) {
   const value = Math.max(0.2, Math.min(40, Number(width) || state.width));
-  return value === state.width ? state : next(state, { width: value });
+  return value === state.width ? state : remember(state, { width: value });
 }
 
 export function setOpacity(state, opacity) {
   const value = clamp01(opacity);
-  return value === state.opacity ? state : next(state, { opacity: value });
+  return value === state.opacity ? state : remember(state, { opacity: value });
 }
 
 export function setEraserMode(state, mode) {
@@ -433,14 +547,22 @@ export function isEraser(state) {
 
 /** The subset worth persisting; placement and tool choice both survive restart. */
 export function serializeToolbarState(state) {
+  // A yield is on loan. Writing the borrowed corner would let a list that
+  // happened to be open at the last save decide where the bar lives next
+  // launch — so what goes to disk is always the placement it is owed.
+  const placed = state.yielded || state;
   return {
-    edge: state.edge,
-    offset: state.offset,
-    corner: state.corner,
+    edge: placed.edge,
+    offset: placed.offset,
+    corner: placed.corner,
     tool: state.tool,
     color: state.color,
     width: state.width,
     opacity: state.opacity,
+    // Every tool's own size and opacity, so they survive a restart and not just
+    // a change of tool.
+    byTool: Object.fromEntries(Object.entries(state.byTool || {})
+      .map(([tool, v]) => [tool, { width: v.width, opacity: v.opacity }])),
     eraserMode: state.eraserMode,
     eraserWidth: state.eraserWidth,
     lassoShape: state.lassoShape,

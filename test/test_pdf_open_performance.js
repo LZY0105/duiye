@@ -195,8 +195,16 @@ assert.equal(workspace._outlines[SLOTS.PRIMARY], null,
   'replacement open clears the previous document outline immediately');
 assert.equal(outlinePanel.hidden, true,
   'replacement open closes the previous document outline panel');
+// Disabled here because there is no DOCUMENT — the old one has been unloaded
+// and the replacement has not arrived. That is the only reason it is ever
+// disabled now.
+//
+// It used to be disabled whenever the OUTLINE was missing or still parsing,
+// and that was wrong once the same control started opening the thumbnails and
+// the bookmarks too: it switched off the one way into a book that has no table
+// of contents, which is most scanned ones.
 assert.equal(outlineButton.disabled, true,
-  'outline navigation stays disabled until the replacement outline is ready');
+  'nothing to find pages in while no document is open');
 assert.equal(outlinePanel.innerHTML, '',
   'old bookmark controls are removed before replacement parsing finishes');
 workspace.closeSlot(SLOTS.PRIMARY);
@@ -287,5 +295,217 @@ assert.equal(liveOutlineButton.disabled, false,
 assert.equal(livePanel.hidden, true,
   'background extraction does not force the outline panel open');
 
+/*
+ * Turning a page, and what it costs.
+ *
+ * Every page change used to rasterise from scratch — a second of work on the
+ * tablet for a dense maths page — with nothing on screen changing until it
+ * landed. Paging through a chapter meant paying that over and over, and the
+ * page counter ran ahead of the picture the whole way. The pane now keeps the
+ * pages it has drawn and draws the neighbours ahead of time, so the common
+ * case costs nothing at all.
+ */
+function cachePane({ pageNumber = 1, zoom = 1, fitMode = 'page', pageCount = 10 } = {}) {
+  const rasterised = [];
+  const pane = Object.create(PdfPane.prototype);
+  Object.assign(pane, {
+    rasterised,
+    doc: {
+      async pageSize() { return { width: 600, height: 800 }; },
+      async renderPage(page, scale) {
+        rasterised.push({ page, scale });
+        return {
+          canvas: { width: 600 * scale, height: 800 * scale, style: {}, className: '' },
+        };
+      },
+    },
+    state: { pageNumber, pageCount, zoom, fitMode, scrollX: 0, scrollY: 0 },
+    pageSize: { width: 600, height: 800 },
+    _renderToken: 0,
+    _pageCache: new Map(),
+    _prefetchTimer: null,
+    _renderBusy: false,
+    _previewScale: 1,
+    elHolder: { style: {}, replaceChildren() {} },
+    _viewport: () => ({ width: 600, height: 800 }),
+    _position() {},
+  });
+  return pane;
+}
+
+/** Long enough for the prefetch timer (260ms) to have run. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 340));
+
+const paging = cachePane();
+await paging._render();
+assert.equal(paging.rasterised.length, 1, 'the page being read is drawn once');
+
+await paging._render();
+assert.equal(paging.rasterised.length, 1,
+  'drawing the same page at the same zoom again comes out of the cache');
+
+await settle();
+assert.deepEqual(paging.rasterised.map(r => r.page).sort((a, b) => a - b), [1, 2],
+  'and the page ahead is drawn before the reader gets there (there is no page 0)');
+
+// The turn itself: state moves, _render runs, and nothing is rasterised.
+paging.state = { ...paging.state, pageNumber: 2 };
+await paging._render();
+assert.equal(paging.rasterised.length, 2,
+  'turning to a page already drawn costs no rasterise at all — this is the fix');
+await settle();
+assert.deepEqual(paging.rasterised.map(r => r.page).sort((a, b) => a - b), [1, 2, 3],
+  'and the next one is made ready while the reader is on page 2');
+
+// Prefetch must stay CHEAP. pdf.js has one worker and a page costs about half
+// a second on the tablet; drawing several pages nobody asked for puts the page
+// they did ask for behind them. Measured on the device: two-ahead prefetching
+// at a short delay took a page turn from 8ms to a median of 1191ms.
+const cheap = cachePane({ pageNumber: 50, pageCount: 400 });
+await cheap._render();
+cheap.rasterised.length = 0;
+await settle();
+assert.ok(cheap.rasterised.length <= 2,
+  `one settle may queue at most a couple of pages, got ${cheap.rasterised.length}`);
+
+// Direction matters: a reader going backwards is served the pages behind them.
+// Reading forward and prefetching forward is the same thing; reading backward
+// and prefetching forward is work for pages they are walking away from.
+const back = cachePane({ pageNumber: 20, pageCount: 40 });
+await back._render();
+await settle();
+back.rasterised.length = 0;
+back.state = { ...back.state, pageNumber: 19 };
+back._pageStep = -1;                       // what _apply() records on a back-turn
+await back._render();
+await settle();
+const drawnBack = back.rasterised.map(r => r.page).sort((a, b) => a - b);
+assert.ok(drawnBack.includes(18),
+  `going backwards must draw the page behind: got ${JSON.stringify(drawnBack)}`);
+assert.ok(!drawnBack.includes(21),
+  'and not the page the other way, which the reader has already left');
+
+// A different zoom is a different bitmap, so it is a different entry.
+const zoomed = cachePane();
+await zoomed._render();
+zoomed.state = { ...zoomed.state, zoom: 2, fitMode: 'none' };
+await zoomed._render();
+assert.equal(zoomed.rasterised.length, 2, 'a new zoom needs a new bitmap');
+zoomed.state = { ...zoomed.state, zoom: 1, fitMode: 'page' };
+await zoomed._render();
+assert.equal(zoomed.rasterised.length, 2, 'and going back to the old one does not');
+
+// Zoomed in, the reader is studying one page rather than flipping through it.
+// Rasterising its neighbours at that scale buys nothing and costs a great deal.
+const studying = cachePane({ zoom: 3, fitMode: 'none' });
+assert.equal(studying._zoomedPastTurning(), true);
+await studying._render();
+await settle();
+assert.equal(studying.rasterised.length, 1, 'no neighbours are drawn at deep zoom');
+
+// The ceiling. 600x800 at zoom 6 is 17.3M pixels, over the 8M budget, so the
+// scale comes down — the canvas is still stretched to the full CSS size, so
+// only sharpness is lost, and the alternative is an allocation that kills the
+// WebView.
+const deep = cachePane({ zoom: 6, fitMode: 'none' });
+await deep._render();
+const [{ scale }] = deep.rasterised;
+assert.ok(scale < 6, `raster scale ${scale} must be capped below the requested 6`);
+assert.ok(600 * scale * 800 * scale <= 8e6 + 1, 'and capped to the pixel budget');
+assert.equal(deep._renderedZoom, 6,
+  'the LOGICAL zoom is untouched, so layout and the pinch preview still agree');
+
+// A page whose render is superseded is still worth keeping: it is exactly what
+// a reader who turned one too far is about to come back to.
+const superseded = cachePane();
+await superseded._render();
+superseded.rasterised.length = 0;
+superseded.state = { ...superseded.state, pageNumber: 7 };
+const inFlight = superseded._render();
+superseded._renderToken += 1;                      // something newer starts
+await inFlight;
+assert.equal(superseded._pageCache.has('7@1.0000'), true,
+  'the discarded render is banked rather than thrown away');
+
+// Bitmaps are keyed by page and zoom, NOT by document. A cache carried across
+// a load would answer for the wrong book — page 3 of the exercise book shown
+// as page 3 of the answer key, silently and confidently.
+const reused = cachePane();
+await reused._render();
+assert.ok(reused._pageCache.size > 0, 'precondition: the first book left bitmaps behind');
+Object.assign(reused, {
+  elBody: { hidden: true }, elEmpty: { hidden: false },
+  ink: { setEnabled() {}, loadLayer() {} },
+  handlers: {},
+  _syncInk() {},
+});
+// `meta.id` is left undefined so loadLayer short-circuits instead of reaching
+// for IndexedDB, which does not exist here.
+await reused.loadDocument({ numPages: 9, ...reused.doc }, {}, { pageNumber: 1 });
+assert.equal(reused._pageCache.size, 1,
+  'opening a document starts from an empty cache — only the page it just drew');
+
+// Both bounds are enforced: the count, and a total the device can actually
+// hold. Five pages at reading zoom is one thing; five at 1.5x is twice that.
+const budget = cachePane();
+for (let page = 1; page <= 8; page++) {
+  budget.state = { ...budget.state, pageNumber: page };
+  await budget._render();
+}
+const total = [...budget._pageCache.values()].reduce((sum, e) => sum + e.pixels, 0);
+assert.ok(budget._pageCache.size <= 5, `kept ${budget._pageCache.size} pages, cap is 5`);
+assert.ok(total <= 10e6, `kept ${total} pixels, budget is 10M`);
+assert.ok(budget._pageCache.has('8@1.0000'), 'and the page being read is one of them');
+
+// A page and the notes written on it arrive together, or not at all.
+//
+// The two used to be raced: the bitmap landed in one frame from cache and the
+// ink some tens of milliseconds later, so every turn flashed a blank page. The
+// render now waits for the page's own annotations before installing anything.
+{
+  const waiting = cachePane();
+  await waiting._render();                       // page 1, warms nothing else
+  waiting.state = { ...waiting.state, pageNumber: 2 };
+  let releaseInk;
+  const inkReady = new Promise((r) => { releaseInk = r; });
+  let shown = null;
+  waiting._showCanvas = function (canvas, zoom) { shown = { at: Date.now(), zoom }; };
+
+  const rendering = waiting._render(inkReady);
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(shown, null,
+    'the page must not be installed while its annotations are still coming');
+  releaseInk();
+  await rendering;
+  assert.ok(shown, 'and it is installed once they have');
+}
+
+{
+  // But a page turn may not be held hostage by the annotation store. If the
+  // ink never resolves the page still appears, after a bounded wait.
+  const stuck = cachePane();
+  await stuck._render();
+  stuck.state = { ...stuck.state, pageNumber: 2 };
+  let shown = false;
+  stuck._showCanvas = function () { shown = true; };
+  const t0 = Date.now();
+  await stuck._render(new Promise(() => {}));    // never resolves
+  const waited = Date.now() - t0;
+  assert.ok(shown, 'the page turns even when the ink store never answers');
+  assert.ok(waited >= 350 && waited < 1500,
+    `and it waits a bounded time first, waited ${waited}ms`);
+}
+
+{
+  // A rejected ink swap must not take the page down with it.
+  const failed = cachePane();
+  await failed._render();
+  failed.state = { ...failed.state, pageNumber: 2 };
+  let shown = false;
+  failed._showCanvas = function () { shown = true; };
+  await failed._render(Promise.reject(new Error('ink store is on fire')));
+  assert.ok(shown, 'a failed ink read still lets the page through');
+}
+
 delete globalThis.document;
-console.log('PASS: large PDF opening, outline deferral, and cancellation are regression-tested');
+console.log('PASS: large PDF opening, outline deferral, cancellation and page caching are regression-tested');

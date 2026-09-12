@@ -83,6 +83,12 @@
 .ink-toolbar.no-motion,
 .ink-toolbar.no-motion * { transition: none !important; animation: none !important; }
 
+/* One frame with no size transition, set by _undock(): the bar reaches full
+   size at once so the clamp that positions it measures the settled height, not
+   one still easing its padding open. The travel from the puck is a WAAPI
+   transform animation and is unaffected. */
+.ink-toolbar.is-instant { transition: none; }
+
 .ink-tools,
 .ink-swatches {
   display: flex;
@@ -158,7 +164,9 @@
 .ink-overflow .ink-icon { --ink-icon: calc(20px * var(--ink-scale)); }
 .ink-swatch.is-custom .ink-icon { --ink-icon: calc(18px * var(--ink-scale)); }
 
-.ink-handle:hover { opacity: 0.85; color: var(--fg); background: rgba(15, 23, 42, 0.05); }
+@media (hover: hover) and (pointer: fine) {
+  .ink-handle:hover { opacity: 0.85; color: var(--fg); background: rgba(15, 23, 42, 0.05); }
+}
 .ink-handle:active { cursor: grabbing; scale: 0.94; }
 /* ── tools ────────────────────────────────────────────────────────────────── */
 
@@ -204,10 +212,15 @@
   pointer-events: none;
 }
 
-.ink-tool:hover,
-.ink-overflow:hover {
-  color: var(--fg);
-  background: rgba(15, 23, 42, 0.05);
+/* 触摸屏上 Chrome 会把 :hover 留在最后点过的元素上，直到你点别处。于是点开
+   收起的球之后，手指落到的那个工具会一直挂着一块底色——看上去像被选中了，
+   而它并没有。悬停样式只给真的能悬停的设备。 */
+@media (hover: hover) and (pointer: fine) {
+  .ink-tool:hover,
+  .ink-overflow:hover {
+    color: var(--fg);
+    background: rgba(15, 23, 42, 0.05);
+  }
 }
 .ink-tool:active,
 .ink-overflow:active { scale: 0.92; }
@@ -282,7 +295,9 @@
   transition: box-shadow 180ms cubic-bezier(0.32, 0.72, 0, 1),
               scale 180ms cubic-bezier(0.32, 0.72, 0, 1);
 }
-.ink-swatch:hover .ink-swatch-fill { scale: 1.1; }
+@media (hover: hover) and (pointer: fine) {
+  .ink-swatch:hover .ink-swatch-fill { scale: 1.1; }
+}
 .ink-swatch:active { scale: 0.94; }
 
 /* The selected colour is marked by a gap and a ring, so the mark survives
@@ -305,8 +320,10 @@
   opacity: 0.55;
   border-radius: 50%;
 }
-.ink-swatch.is-custom:hover { opacity: 1; }
-.ink-swatch.is-custom:hover { color: var(--accent); background: rgba(15, 23, 42, 0.05); }
+@media (hover: hover) and (pointer: fine) {
+  .ink-swatch.is-custom:hover { opacity: 1; }
+  .ink-swatch.is-custom:hover { color: var(--accent); background: rgba(15, 23, 42, 0.05); }
+}
 /* Keyboard focus, in the palette rather than the browser's blue. This bar had
    no visible focus state at all: the outline that the reset removed was never
    replaced, so a keyboard or switch user could not see where they were. */
@@ -382,7 +399,9 @@
   cursor: pointer;
   transition: transform 200ms var(--spring-rebound, cubic-bezier(0.32, 0.72, 0, 1));
 }
-.ink-toolbar.is-docked .ink-token:hover { transform: scale(1.06); }
+@media (hover: hover) and (pointer: fine) {
+  .ink-toolbar.is-docked .ink-token:hover { transform: scale(1.06); }
+}
 .ink-toolbar.is-docked .ink-token:active { transform: scale(0.92); }
 .ink-toolbar.is-docked .ink-token:focus-visible {
   outline: 2px solid var(--accent);
@@ -517,8 +536,10 @@
   transition: scale 180ms cubic-bezier(0.32, 0.72, 0, 1),
               box-shadow 180ms cubic-bezier(0.32, 0.72, 0, 1);
 }
-.ink-card-swatches .ink-swatch:hover,
-.ink-palette-dot:hover { scale: 1.08; }
+@media (hover: hover) and (pointer: fine) {
+  .ink-card-swatches .ink-swatch:hover,
+  .ink-palette-dot:hover { scale: 1.08; }
+}
 .ink-card-swatches .ink-swatch:active,
 .ink-palette-dot:active { scale: 0.95; }
 
@@ -572,7 +593,9 @@
   transition: color var(--transition-fast), background var(--transition-fast);
 }
 
-.ink-seg-btn:hover { color: var(--fg); }
+@media (hover: hover) and (pointer: fine) {
+  .ink-seg-btn:hover { color: var(--fg); }
+}
 
 .ink-seg-btn.is-selected {
   background: var(--card-bg, #fff);
@@ -614,7 +637,9 @@
   transition: background var(--transition-fast), color var(--transition-fast),
               scale 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
-.ink-danger:hover { background: #d70015; color: #fff; }
+@media (hover: hover) and (pointer: fine) {
+  .ink-danger:hover { background: #d70015; color: #fff; }
+}
 .ink-danger:active { scale: 0.98; }
 
 .ink-note {
@@ -911,4 +936,95 @@
   background: transparent;
   border-color: transparent;
   box-shadow: none;
+}
+
+/* 套住一片字迹之后，浮在套索线旁的那两个动作。
+ *
+ * 定位用 transform 而不是 left/top：它每一帧都会跟着重排（缩放、平移、搬完选区
+ * 都会走 render），而 transform 不触发重排。
+ *
+ * 它是 DOM 不是画上去的——画上去的按钮不能被点，要么自己做一套命中检测，要么把
+ * 整块画布的指针事件重新分流一遍，而套索、橡皮、笔都在抢那条路。 */
+.ink-selection-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border-radius: var(--pill-radius, 999px);
+  background: rgba(20, 20, 24, 0.86);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border: 0.5px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  /* 收起来的时候也不能挡路：选区旁边正是人下一笔要落的地方。 */
+  pointer-events: none;
+  transition: opacity 0.14s ease;
+  white-space: nowrap;
+}
+
+.ink-selection-bar.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* 动作一行，换色那排收在它下面。两行装在同一块玻璃里，展开时它往下长，位置
+   不动——往上长的话，人刚点的那个「颜色」会在手指底下跑掉。 */
+.ink-selection-row {
+  display: flex;
+  gap: 2px;
+}
+
+.ink-selection-palette {
+  display: flex;
+  gap: 6px;
+  padding: 8px 6px 4px;
+  justify-content: center;
+}
+
+.ink-selection-dot {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.55);
+  padding: 0;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.ink-selection-dot:active { transform: scale(0.9); }
+
+.ink-selection-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  /* 44px 是手指的尺寸，这条规矩在笔迹栏里也是同一个数。 */
+  min-height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--pill-radius, 999px);
+  background: transparent;
+  color: #fff;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.ink-selection-btn:active { background: rgba(255, 255, 255, 0.16); }
+.ink-selection-btn.is-danger { color: #ff8f8a; }
+.ink-selection-btn.is-danger:active { background: rgba(255, 69, 58, 0.28); }
+
+.ink-selection-glyph { font-size: 0.95rem; line-height: 1; }
+
+@media (hover: hover) and (pointer: fine) {
+  .ink-selection-btn:hover { background: rgba(255, 255, 255, 0.12); }
+  .ink-selection-btn.is-danger:hover { background: rgba(255, 69, 58, 0.24); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ink-selection-bar { transition: none; }
 }

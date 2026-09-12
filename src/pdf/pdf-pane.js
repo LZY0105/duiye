@@ -24,7 +24,8 @@ import {
 } from './pdf-view-state.js';
 import { hydrateViewState } from './document-session.js';
 import { InkSurface } from '../ink/ink-surface.js';
-import { loadLayer, saveLayer } from '../ink/ink-store.js';
+import { loadLayer, prefetchInk, saveLayer } from '../ink/ink-store.js';
+import { notifyPeers, releaseLayer, shareLayer } from '../ink/ink-shared.js';
 import Logger from '../core/logger.js';
 
 /** A flick must travel this far, and finish this fast, to turn a page. */
@@ -85,6 +86,114 @@ const TURN_CORNER_BAND = 1 / 3;
  */
 const TURN_BACK = '#ffffff';
 
+/**
+ * How many rasterised pages a pane keeps.
+ *
+ * Enough for the page being read, the one either side of it, and a couple more
+ * behind — which covers turning back to check something and turning forward
+ * again, the way a book is actually used. Bounded because these are bitmaps:
+ * see CACHE_MAX_PIXELS for what is allowed in at all.
+ */
+const PAGE_CACHE_SIZE = 5;
+
+/**
+ * Biggest single bitmap worth keeping, in pixels (~24MB at four bytes each).
+ *
+ * One page may not take the whole budget below. A deep-zoom page would evict
+ * everything else and then sit there unused, because a reader at that zoom is
+ * studying one page rather than turning them.
+ */
+const CACHE_MAX_PIXELS = 6e6;
+
+/**
+ * Total the cache may hold, in pixels (~40MB at four bytes each).
+ *
+ * The count above is not a bound on its own — five pages at reading zoom is
+ * about 36MB on this tablet, but five at 1.5x would be twice that. Whichever
+ * limit bites first is the one that trims.
+ */
+const CACHE_TOTAL_PIXELS = 10e6;
+
+/**
+ * Hard ceiling on what a single rasterise may allocate (~32MB).
+ *
+ * `zoom * devicePixelRatio` at ZOOM_MAX on a 2x tablet asks for roughly
+ * seventy million pixels of canvas, and that allocation does not fail
+ * politely. Past this the scale is reduced and the smaller bitmap is stretched
+ * to the same CSS size: softer at extreme zoom, which is a trade worth making
+ * against a WebView that dies.
+ */
+const RASTER_MAX_PIXELS = 8e6;
+
+/**
+ * How long the screen must be still before neighbouring pages are drawn.
+ *
+ * Long enough to stay out of a fast run's way. This was tried at 90ms with two
+ * pages ahead, on the theory that flipping quickly is when prefetching helps
+ * most. It is the opposite: pdf.js has ONE worker, a page costs about half a
+ * second on this tablet, and a reader flipping every 150ms cannot be kept ahead
+ * of by any amount of prefetching. All the eager version achieved was to queue
+ * the page the reader was actually waiting for behind two they had not asked
+ * for — measured on the device at a median 1191ms per turn, against 8ms here,
+ * and it starved the main thread badly enough to delay the ink reads and the
+ * animation frames with it.
+ *
+ * So prefetching is for READING, where there is a pause between pages. A fast
+ * run gets out of its own way instead, and says it is loading.
+ */
+const PREFETCH_DELAY = 260;
+
+/**
+ * How many pages ahead are drawn, in the direction the reader is going.
+ *
+ * One. Each page costs a worker slot the foreground render may need, and the
+ * direction is the useful part, not the depth.
+ */
+const PREFETCH_AHEAD = 1;
+
+/**
+ * The most a page may be enlarged and still be turned with one finger.
+ *
+ * A little over the whole-page fit is still reading, not studying: at 110% or
+ * 125% there is barely anywhere to slide the page to, and a sideways drag can
+ * only sensibly mean "next page". Past this the reader has leaned in on a
+ * particular working, one finger is how they move around it, and turning is
+ * the ‹ › buttons' job.
+ *
+ * 1.3 is the reader's number, not the renderer's: `displayZoom()` counts from
+ * the whole page, so this is exactly the 130% shown in the pane's toolbar.
+ */
+const TURN_MAX_ZOOM = 1.3;
+
+/**
+ * The longest a page will wait for its own annotations before showing anyway.
+ *
+ * Reads are 2-15ms on the tablet, so this is never reached in practice. It is
+ * here so a page turn cannot be held hostage by the ink store: a reader must
+ * never be stuck on one page because of what is written on the next.
+ */
+const INK_WAIT_MAX = 400;
+
+/**
+ * How long a page may take before the pane admits it is still working.
+ *
+ * Under this, saying nothing is right: a flicker of "loading" on a page that
+ * arrives in 80ms is noise. Over it, the pane is showing the PREVIOUS page
+ * under the new page's number, and staying silent about that is the thing the
+ * tablet run objected to.
+ */
+const LOADING_GRACE = 140;
+
+/**
+ * How long a burst of zoom presses is gathered before the page is redrawn.
+ *
+ * Each press is shown at once by scaling the bitmap already on screen, exactly
+ * as a pinch does; only the real rasterise waits. Tapping + four times is then
+ * one render instead of four, and the four it is not doing were each blocking
+ * the very thread that has to answer the next press.
+ */
+const ZOOM_SETTLE = 180;
+
 
 export class PdfPane {
   /**
@@ -103,6 +212,12 @@ export class PdfPane {
     // page N+1's if the user pages quickly, which would paint a stale page.
     this._renderToken = 0;
     this._pendingRender = null;
+    /** Rasterised pages, keyed by page and zoom. Insertion order is the LRU. */
+    this._pageCache = new Map();
+    this._prefetchTimer = null;
+    this._zoomSettleTimer = null;
+    /** True while a foreground rasterise is in flight, so prefetch stands off. */
+    this._renderBusy = false;
 
     this._buildDom();
 
@@ -328,8 +443,12 @@ export class PdfPane {
           // rest of it. What the gesture means is decided ONCE, on the first
           // real movement, and does not change under the hand — deciding per
           // frame would turn a page the moment a pan ran out of room.
+          //
+          // Enlarged past TURN_MAX_ZOOM (130%), one finger only ever pans: a
+          // turn there is the ‹ › buttons' job. At or below it, _roomToPan
+          // decides — a page with nowhere to slide still turns.
           if (!swipe.turning && !swipe.mode && Math.hypot(dx, dy) >= PAN_GRAB) {
-            swipe.mode = this._roomToPan(dx, dy) ? 'pan' : 'turn';
+            swipe.mode = (this._zoomedPastTurning() || this._roomToPan(dx, dy)) ? 'pan' : 'turn';
             swipe.lx = e.clientX;
             swipe.ly = e.clientY;
           }
@@ -404,10 +523,11 @@ export class PdfPane {
      * A finger dragged sideways turns the page.
      *
      * Direction and speed only — no check for whether the page has room left
-     * to pan, because one finger no longer pans. That rule existed to stop one
-     * gesture meaning two things, and the two meanings are gone.
+     * to pan, because at reading zoom one finger does not pan. Enlarged past
+     * TURN_MAX_ZOOM it does nothing but pan, so a flick is not a turn either.
      */
     const maybeTurnPage = (from, e) => {
+      if (this._zoomedPastTurning()) return false;
       const dx = e.clientX - from.x;
       const dy = e.clientY - from.y;
       const dt = (e.timeStamp || performance.now()) - from.at;
@@ -482,7 +602,9 @@ export class PdfPane {
       this.handlers.onFocus?.();
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        this._apply(e.deltaY < 0 ? zoomIn(this.state) : zoomOut(this.state), true);
+        // A wheel emits far faster than a page can be drawn, so these are
+        // gathered the same way the buttons are.
+        this._zoomTo(e.deltaY < 0 ? zoomIn(this.state) : zoomOut(this.state));
       } else {
         const content = this._contentSize();
         const viewport = this._viewport();
@@ -528,7 +650,34 @@ export class PdfPane {
       sheet = document.createElement('canvas');
       sheet.width = source.width;
       sheet.height = source.height;
-      sheet.getContext('2d').drawImage(source, 0, 0);
+      const ctx = sheet.getContext('2d');
+      ctx.drawImage(source, 0, 0);
+
+      // The handwriting turns with the page it is written on.
+      //
+      // This photographed the PDF canvas and nothing else, and the ink lives on
+      // a separate surface — so the sheet that curled away was the printed page
+      // with every stroke stripped off it. On a worked page that is four
+      // hundred strokes disappearing the instant the turn begins, which is
+      // exactly what "the notes vanish when I flip pages" looks like from the
+      // reading side. It was invisible while turns were slow and janky enough
+      // to hide it.
+      //
+      // The ink surface spans the whole viewport in CSS pixels and the page
+      // covers only part of it, so the page's own region is cut out and scaled
+      // onto the sheet. drawImage clips a source rectangle that runs past the
+      // edges, which is what happens whenever the page is zoomed past the pane.
+      const ink = this.elInk;
+      if (ink?.width && ink?.height && box.width > 0 && box.height > 0) {
+        const kx = ink.width / box.width;
+        const ky = ink.height / box.height;
+        ctx.drawImage(
+          ink,
+          (rect.left - box.left) * kx, (rect.top - box.top) * ky,
+          rect.width * kx, rect.height * ky,
+          0, 0, sheet.width, sheet.height,
+        );
+      }
     } catch (_) {
       return null;                          // a tainted or zero-sized canvas
     }
@@ -717,10 +866,10 @@ export class PdfPane {
    *
    * Read along the drag's dominant axis, and against the direction of travel:
    * dragging the page RIGHT reveals what is off to its left, which needs the
-   * view to be scrolled away from the left edge. At the whole-page fit there is
-   * no room on either axis, so nothing changes for a reader who has not zoomed
-   * — a sideways swipe still turns the page. Zoomed in, the swipe slides the
-   * page until it reaches the edge, and the swipe after that turns.
+   * view to be scrolled away from the left edge. Only consulted at the
+   * whole-page fit, where there is no room on either axis, so nothing changes
+   * for a reader who has not zoomed — a sideways swipe still turns the page.
+   * Past TURN_MAX_ZOOM, `_zoomedPastTurning()` takes over and one finger only pans.
    */
   _roomToPan(dx, dy) {
     if (!this.state) return false;
@@ -732,6 +881,25 @@ export class PdfPane {
     return Math.abs(dx) > Math.abs(dy)
       ? (dx > 0 ? this.state.scrollX > EDGE : this.state.scrollX < maxX - EDGE)
       : (dy > 0 ? this.state.scrollY > EDGE : this.state.scrollY < maxY - EDGE);
+  }
+
+  /**
+   * Whether the page is enlarged past the point where a swipe turns it.
+   *
+   * The gate for one-finger page turns. Up to TURN_MAX_ZOOM a sideways drag
+   * turns the page; past it one finger only pans and the page is turned with
+   * the ‹ › buttons. It was the whole-page fit exactly, which made a page
+   * nudged to 110% unturnable by hand for no reason a reader would recognise.
+   *
+   * Keyed on the fit MODE as well as the number — a fit-to-width page taller
+   * than its pane reads well above 1 but is still one swipe from turning,
+   * because there is no width to slide it across; `_roomToPan` decides that
+   * one. A manual zoom (pinch or the +/- buttons) drops the mode to NONE,
+   * which is the state this is really asking about.
+   */
+  _zoomedPastTurning() {
+    return this.state?.fitMode === FIT_MODES.NONE
+      && (this.displayZoom() ?? 1) > TURN_MAX_ZOOM + 1e-3;
   }
 
   /** How far across the page the crease has travelled, 0..1. */
@@ -932,14 +1100,21 @@ export class PdfPane {
     if (nextState === this.state) return;
     const previousPage = this.state?.pageNumber;
     const pageChanged = nextState.pageNumber !== previousPage;
+    if (pageChanged && previousPage) {
+      // Which way the reader is going, so the pages drawn ahead are the ones
+      // they are about to reach rather than the ones they just left.
+      this._pageStep = Math.sign(nextState.pageNumber - previousPage) || 1;
+    }
     this.state = nextState;
+    let inkReady = null;
     if (pageChanged) {
       // Ink belongs to a page, so leaving one commits its strokes and arriving
       // at the next loads that page's own layer.
-      this._swapInkPage(nextState.pageNumber);
+      inkReady = this._swapInkPage(nextState.pageNumber);
     }
     if (needsRepaint || pageChanged) {
-      this._render();
+      // The page waits for its own annotations — see _render.
+      this._render(inkReady);
     } else {
       this._position();
     }
@@ -989,8 +1164,29 @@ export class PdfPane {
    * (installed layer, its page) is never inconsistent.
    */
   _swapInkPage(toPage) {
+    // The outgoing page and its layer are taken as a PAIR, here, synchronously,
+    // and the surface is blanked in the same breath.
+    //
+    // The bitmap now lands in a single frame on a cached page, while ink is a
+    // database round trip behind it. That left the previous page's annotations
+    // drawn over the new page for as long as the read took — measured at 44ms
+    // on the tablet, and over a second on a cold jump. Wrong ink on a page is
+    // worse than no ink on it, and both read as "my notes disappeared".
+    //
+    // `_inkPage` is set to null at the same moment, which disowns the cleared
+    // layer: a `_flushInkSave` arriving now — from the autosave timer, or from
+    // unload — finds no page to write to and returns, instead of saving the
+    // blank surface over the very strokes captured on the line above.
+    const fromPage = this._inkPage;
+    const outgoing = (this.meta && fromPage) ? this.ink.getLayer() : null;
+    this._dropInk(this.meta?.id, fromPage);
+    this._inkPage = null;
+    clearTimeout(this._inkSaveTimer);
+    this._inkSaveTimer = null;
+    this.ink.loadLayer(null);
+
     this._inkSwap = this._inkSwap
-      .then(() => this._performInkSwap(toPage))
+      .then(() => this._performInkSwap(toPage, fromPage, outgoing))
       .catch((error) => {
         // One failed swap must not break the chain for every later page turn.
         Logger.warn('INK', `page swap to ${toPage} failed: ${error.message}`);
@@ -998,14 +1194,26 @@ export class PdfPane {
     return this._inkSwap;
   }
 
-  async _performInkSwap(toPage) {
-    // Commit the current layer to ITS OWN page before anything is replaced.
-    await this._flushInkSave();
+  async _performInkSwap(toPage, fromPage, outgoing) {
+    // Commit the layer that came off, to the page it came off — the pair the
+    // caller captured together, so no interleaving can redirect either half.
+    //
+    // NOT awaited. The two touch different keys, and the pair is already
+    // captured, so nothing about the incoming page's ink depends on the
+    // outgoing page's write having finished. Awaiting it put a database write
+    // in front of the read that decides whether the reader sees their notes,
+    // and on a page turn that is the wrong way round.
+    if (this.meta && fromPage && outgoing) {
+      saveLayer(this.meta.id, fromPage, outgoing).catch(() => {
+        // Losing one write must not break the chain; the next visit re-reads
+        // what is stored, and the strokes are still in the layer object.
+      });
+    }
     if (!this.meta) {
       this._inkPage = toPage;
       return;
     }
-    const layer = await loadLayer(this.meta.id, toPage);
+    const layer = this._takeInk(this.meta.id, toPage, await loadLayer(this.meta.id, toPage));
     // Installed and recorded together — never one without the other.
     this.ink.loadLayer(layer);
     this._inkPage = toPage;
@@ -1014,27 +1222,35 @@ export class PdfPane {
 
   /** Debounced so a long stroke sequence does not write on every sample. */
   _scheduleInkSave() {
+    // 同一页也开在另一栏时，那一栏画的就是这同一层——它已经变了，只是还没重画。
+    // 落盘可以攒 400ms 再写，重画不能：人一笔下去，另一边要立刻看见。
+    notifyPeers(this.meta?.id, this._inkPage, this);
     clearTimeout(this._inkSaveTimer);
     this._inkSaveTimer = setTimeout(() => this._flushInkSave(), 400);
-    this.handlers.onDirtyChange?.(true);
+  }
+
+  /**
+   * 同一页的笔迹，两栏共用一份。
+   *
+   * 读出来的那一份交给登记处，换回「该用的那一份」：已经有人拿着同一页，就用他
+   * 那一份。不然两边各拿各的副本，而存盘是整层盲写——后写的那一边会把先写的整个
+   * 盖掉，人看到的是「我刚画的没了」，还是在另一栏里没的。
+   */
+  _takeInk(documentId, page, layer) {
+    return shareLayer(documentId, page, layer, this, () => {
+      // 另一栏改了这一层。这一栏手里是同一个对象，所以只要重画。
+      this.ink.render();
+    });
+  }
+
+  /** 不看这一页了。最后一个人走了，登记处才把它撤掉。 */
+  _dropInk(documentId, page) {
+    releaseLayer(documentId, page, this);
   }
 
   /** True while an edit has been made but not yet written to storage. */
   hasUnsavedInk() {
     return this._inkSaveTimer !== null;
-  }
-
-  /**
-   * Writes pending annotations now, instead of waiting out the autosave.
-   *
-   * Annotation is already saved on a 400ms debounce, so this is not what makes
-   * the work durable — it is what lets someone SEE that it is. Closing a book
-   * on a tablet you are about to put down should not require trusting an
-   * invisible timer.
-   */
-  async saveNow() {
-    await this._flushInkSave();
-    this.handlers.onDirtyChange?.(false);
   }
 
   /**
@@ -1049,14 +1265,13 @@ export class PdfPane {
   async _flushInkSave() {
     clearTimeout(this._inkSaveTimer);
     this._inkSaveTimer = null;
-    if (!this.meta || !this._inkPage) { this.handlers.onDirtyChange?.(false); return; }
+    if (!this.meta || !this._inkPage) return;
     // Captured together, so a swap completing mid-await cannot redirect them.
     const documentId = this.meta.id;
     const page = this._inkPage;
     const layer = this.ink.getLayer();
     try {
       await saveLayer(documentId, page, layer);
-      this.handlers.onDirtyChange?.(false);
     } catch (_) {
       // Losing one autosave must not break drawing; the next one retries.
     }
@@ -1064,6 +1279,16 @@ export class PdfPane {
 
   async loadDocument(doc, meta, restoredView, isCurrent = () => true) {
     if (!isCurrent()) return false;
+    // Bitmaps are keyed by page and zoom, not by document, so anything left
+    // over from a previous book would answer for this one — page 3 of the
+    // exercise book shown as page 3 of the answer key. The workspace unloads
+    // before it replaces, which already clears these; this is the guarantee
+    // rather than the assumption, because the failure is silent and wrong.
+    this._clearPageCache();
+    // 同理：旧那一页的那一份共用的层也归还登记处。工作区换书前会先 unload，那里已
+    // 经还过一次；这里是把「还过了」变成保证而不是假设——漏还的后果是那一页永远
+    // 留在表里，下一个人翻到它拿到的是一份早就没人看的旧对象。
+    this._dropInk(this.meta?.id, this._inkPage);
     this.doc = doc;
     this.meta = meta;
     // Built lazily on first answer lookup; cleared here so a newly opened
@@ -1123,8 +1348,13 @@ export class PdfPane {
     this.elEmpty.hidden = true;
 
     const inkPage = this.state.pageNumber;
-    const inkLayer = await loadLayer(meta.id, inkPage);
-    if (!isCurrent() || this.doc !== doc) return false;
+    const inkLayer = this._takeInk(meta.id, inkPage, await loadLayer(meta.id, inkPage));
+    if (!isCurrent() || this.doc !== doc) {
+      // 读这一层的工夫里这一栏换了人。登记是刚才领的，这里不还就永远挂着——而且
+      // 挂的是这一栏，等于替一个已经不在的人占着位子。
+      this._dropInk(meta.id, inkPage);
+      return false;
+    }
     this._inkPage = inkPage;
     this.ink.setEnabled(true);
     this.ink.loadLayer(inkLayer);
@@ -1138,6 +1368,9 @@ export class PdfPane {
     // Commit ink before tearing down, or the last strokes drawn before closing
     // would be lost with the pending debounce.
     this._flushInkSave();
+    // 这一页的那一份共用的层，也交还登记处。另一栏要是还停在同一页，它仍然拿着，
+    // 表里那一项不会因为这一栏先走就作废。
+    this._dropInk(this.meta?.id, this._inkPage);
     if (this.doc) {
       try { this.doc.destroy(); } catch (_) { /* already gone */ }
     }
@@ -1155,8 +1388,15 @@ export class PdfPane {
     // The pair verdict belongs to a PAIR, so a new book on either side voids
     // it. Carried over, it would gate the new pair with the old one's answer.
     this.pairVerdict = null;
-    this.exerciseLabel = '';
     this._renderToken++;
+    // Bitmaps of a book that is no longer open, and the timers that would go on
+    // drawing more of them. Both belong to the document, not to the pane.
+    this._clearPageCache();
+    this._clearLoading();
+    clearTimeout(this._zoomSettleTimer);
+    this._zoomSettleTimer = null;
+    this._renderedZoom = undefined;
+    this._previewScale = 1;
     this.ink.setEnabled(false);
     this.ink.loadLayer(null);
     this.elHolder.innerHTML = '';
@@ -1164,31 +1404,309 @@ export class PdfPane {
     this.elEmpty.hidden = false;
   }
 
-  async _render() {
+  /** One page at one zoom, as it goes into and comes out of the cache. */
+  _cacheKey(pageNumber, zoom) {
+    return `${pageNumber}@${zoom.toFixed(4)}`;
+  }
+
+  /**
+   * The cache, made on demand.
+   *
+   * A pane is not always built by its constructor: the workspace tests stand
+   * one up from the prototype with only the fields they exercise, and this is
+   * reached from `loadDocument`, which is the first thing they call. Same
+   * lesson as `_syncOverlayState` — a thing that runs during setup and teardown
+   * has to cope with the half of the object that is not there yet.
+   */
+  _cache() {
+    if (!this._pageCache) this._pageCache = new Map();
+    return this._pageCache;
+  }
+
+  /** Reads an entry and marks it most-recently-used. */
+  _cacheTake(key) {
+    const cache = this._cache();
+    const entry = cache.get(key);
+    if (!entry) return null;
+    cache.delete(key);
+    cache.set(key, entry);                 // a Map keeps insertion order: LRU
+    return entry;
+  }
+
+  /**
+   * Keeps a rendered page, evicting the least recently used.
+   *
+   * Big bitmaps are declined rather than evicting three small ones to hold one
+   * enormous one: at high zoom the reader is studying a page, not flipping
+   * through, so a cache of deep zooms costs tens of megabytes to serve a turn
+   * that is not coming.
+   */
+  _cachePut(key, entry) {
+    if (!entry?.canvas) return;
+    const pixels = entry.canvas.width * entry.canvas.height;
+    if (pixels > CACHE_MAX_PIXELS) return;
+    this._cache().set(key, { ...entry, pixels });
+    this._evictDown();
+  }
+
+  /** Trims to both bounds — a page count, and a total the device can hold. */
+  _evictDown() {
+    const cache = this._cache();
+    let total = 0;
+    for (const entry of cache.values()) total += entry.pixels || 0;
+    while (cache.size > 1
+        && (cache.size > PAGE_CACHE_SIZE || total > CACHE_TOTAL_PIXELS)) {
+      const oldest = cache.keys().next().value;
+      const dropped = cache.get(oldest);
+      cache.delete(oldest);
+      total -= dropped?.pixels || 0;
+      this._releaseCanvas(dropped?.canvas);
+    }
+  }
+
+  /**
+   * Hands an evicted bitmap's memory back now rather than eventually.
+   *
+   * Dropping the reference is enough for the collector in its own time, but
+   * these are megabytes each on a device with few to spare, and its own time
+   * tends to be the middle of the next page turn. Zeroing frees the backing
+   * store at once.
+   *
+   * Never the canvas on screen. It can fall out of the cache while still being
+   * the page the reader is looking at, and zeroing that one blanks the pane.
+   */
+  _releaseCanvas(canvas) {
+    if (!canvas || canvas.parentNode) return;
+    try { canvas.width = 0; canvas.height = 0; } catch (_) { /* not a real canvas */ }
+  }
+
+  _clearPageCache() {
+    const cache = this._cache();
+    for (const entry of cache.values()) this._releaseCanvas(entry.canvas);
+    cache.clear();
+    clearTimeout(this._prefetchTimer);
+    this._prefetchTimer = null;
+  }
+
+  /** Installs a bitmap as the page on screen, at the zoom the state is at. */
+  _showCanvas(canvas, zoom) {
+    const content = this._contentSize();
+    canvas.style.width = `${content.width}px`;
+    canvas.style.height = `${content.height}px`;
+    canvas.className = 'pdf-pane-canvas';
+    // What zoom this bitmap stands for, so a pinch can scale it in place of a
+    // zoom it has not been rasterised at yet.
+    this._renderedZoom = zoom;
+    this._previewScale = 1;
+    this.elHolder.replaceChildren(canvas);
+    this._position();
+  }
+
+  /**
+   * Rasterises one page and returns it, without touching what is on screen.
+   *
+   * The scale is capped against a pixel budget: `zoom * dpr` at ZOOM_MAX on a
+   * 2x tablet asks for a canvas of some seventy million pixels, which does not
+   * fail politely. Capping costs sharpness at extreme zoom — the canvas is
+   * still stretched to the full CSS size, so the geometry is unchanged — and
+   * that is a far better trade than the tab dying.
+   */
+  async _rasterise(pageNumber, zoom) {
+    const pageSize = await this.doc.pageSize(pageNumber);
+    const wanted = zoom * devicePixelRatioSafe();
+    const asked = pageSize.width * pageSize.height * wanted * wanted;
+    const scale = asked > RASTER_MAX_PIXELS
+      ? wanted * Math.sqrt(RASTER_MAX_PIXELS / asked)
+      : wanted;
+    const { canvas } = await this.doc.renderPage(pageNumber, scale);
+    return { canvas, pageSize };
+  }
+
+  /**
+   * Draws the current page.
+   *
+   * `inkReady` is the page's own annotations, still on their way. The bitmap
+   * waits for them.
+   *
+   * A page and the notes written on it are one thing, and showing either
+   * without the other is wrong in both directions. Before, the ink lingered
+   * from the previous page and was briefly drawn over this one — wrong notes,
+   * on the wrong page. Clearing it instead made that honest but no better to
+   * look at: the page arrived in 5ms and its notes 60ms later, so every turn
+   * flashed blank paper. Both readings of "the notes disappear when I turn the
+   * page" are the same defect, which is that the two halves were raced against
+   * each other at all.
+   *
+   * The wait is bounded. If the ink cannot be read the page must still turn —
+   * navigation is not allowed to depend on the annotation store answering.
+   */
+  async _render(inkReady = null) {
     if (!this.doc || !this.state) return;
+    // Drawing the page is exactly what a pending zoom settle was waiting to do,
+    // and whatever asked for this render has superseded it. Left armed it fires
+    // mid-await, resets the preview scale and starts a second render of the
+    // same state — most visibly during a 整页 or 适合宽度 press that lands
+    // inside the settle window.
+    clearTimeout(this._zoomSettleTimer);
+    this._zoomSettleTimer = null;
     const token = ++this._renderToken;
     const { pageNumber, zoom } = this.state;
+    const key = this._cacheKey(pageNumber, zoom);
+
+    // Already drawn, at this page and this zoom. Paging back and forth through
+    // a chapter is the common case and it should cost nothing: the bitmap goes
+    // straight back on screen in this frame, with no await to flash through.
+    const hit = this._cacheTake(key);
+    if (hit) {
+      if (inkReady) await this._awaitInk(inkReady, token);
+      if (token !== this._renderToken) return;
+      this._clearLoading();
+      this.pageSize = hit.pageSize;
+      this._showCanvas(hit.canvas, zoom);
+      this._schedulePrefetch();
+      return;
+    }
 
     try {
-      this.pageSize = await this.doc.pageSize(pageNumber);
-      const { canvas } = await this.doc.renderPage(pageNumber, zoom * devicePixelRatioSafe());
+      this._renderBusy = true;
+      this._markLoading();
+      const { canvas, pageSize } = await this._rasterise(pageNumber, zoom);
       // A newer render started while this one was in flight — discard it rather
-      // than painting a page the user has already navigated away from.
+      // than painting a page the user has already navigated away from. It is
+      // still worth keeping: it is exactly the page a reader who turned one too
+      // far is about to come back to.
+      if (token !== this._renderToken) {
+        this._cachePut(key, { canvas, pageSize });
+        return;
+      }
+
+      // A rasterise takes far longer than an ink read, so this has almost
+      // always already resolved; it costs nothing to be sure.
+      if (inkReady) await this._awaitInk(inkReady, token);
       if (token !== this._renderToken) return;
 
-      const content = this._contentSize();
-      canvas.style.width = `${content.width}px`;
-      canvas.style.height = `${content.height}px`;
-      canvas.className = 'pdf-pane-canvas';
-      // What zoom this bitmap is, so a pinch can scale it to stand in for the
-      // zoom it has not been rendered at yet.
-      this._renderedZoom = zoom;
-      this._previewScale = 1;
-      this.elHolder.replaceChildren(canvas);
-      this._position();
+      this.pageSize = pageSize;
+      this._showCanvas(canvas, zoom);
+      this._cachePut(key, { canvas, pageSize });
+      this._schedulePrefetch();
     } catch (error) {
       if (token !== this._renderToken) return;
       this.elHolder.replaceChildren(errorNode(error));
+    } finally {
+      this._renderBusy = false;
+      this._clearLoading();
+    }
+  }
+
+  /**
+   * Says the pane is still working, once it has been working long enough to
+   * be worth saying so.
+   *
+   * `_render` keeps the outgoing page on screen while it rasterises, which is
+   * kinder than a white rectangle — but the page NUMBER has already changed,
+   * so for as long as that takes the pane is showing one page under another
+   * one's number and claiming nothing. On this tablet a cold page took a
+   * second and a half. The grace period keeps the common, fast case silent.
+   */
+  /**
+   * Waits for a page's annotations, but not indefinitely.
+   *
+   * The store answers in a couple of milliseconds from cache and a dozen or so
+   * from the database. INK_WAIT_MAX is far past either, and exists only so a
+   * page still turns if the annotation store stops answering — a reader must
+   * never be stuck on a page because of what is written on the next one.
+   */
+  async _awaitInk(inkReady, token) {
+    let timer;
+    try {
+      await Promise.race([
+        inkReady,
+        new Promise((resolve) => { timer = setTimeout(resolve, INK_WAIT_MAX); }),
+      ]);
+    } catch (_) {
+      // A failed swap is the swap's own problem to log; the page still turns.
+    } finally {
+      clearTimeout(timer);
+    }
+    return token === this._renderToken;
+  }
+
+  _markLoading() {
+    clearTimeout(this._loadingTimer);
+    this._loadingTimer = setTimeout(() => {
+      this._loadingTimer = null;
+      this.root?.classList.add('is-page-loading');
+    }, LOADING_GRACE);
+  }
+
+  _clearLoading() {
+    clearTimeout(this._loadingTimer);
+    this._loadingTimer = null;
+    this.root?.classList.remove('is-page-loading');
+  }
+
+  /**
+   * Draws the pages either side of this one, once the screen has settled.
+   *
+   * This is what makes a page turn instant rather than a second of blank paper:
+   * by the time the finger arrives, the next page is already a bitmap. It runs
+   * on a timer so it never competes with the page the reader is waiting for,
+   * and only while the book is being READ — zoomed in past the whole page the
+   * reader is studying one page, and rasterising its neighbours at that scale
+   * buys nothing and costs a great deal of memory.
+   */
+  _schedulePrefetch() {
+    clearTimeout(this._prefetchTimer);
+    // The annotations either side, straight away.
+    //
+    // These are a few hundred bytes read from IndexedDB; they cost nothing and,
+    // crucially, they do not touch the single pdf.js worker that the page
+    // itself needs. So unlike the bitmaps below they are fetched eagerly — the
+    // ink cache stays warm even through a fast run, where drawing pages ahead
+    // is deliberately skipped.
+    if (this.meta?.id && this.state) {
+      const step = this._pageStep || 1;
+      for (const page of [this.state.pageNumber + step, this.state.pageNumber - step]) {
+        if (page >= 1 && page <= this.state.pageCount) prefetchInk(this.meta.id, page);
+      }
+    }
+    if (this._zoomedPastTurning()) return;
+    this._prefetchTimer = setTimeout(() => this._prefetchNeighbours(), PREFETCH_DELAY);
+  }
+
+  async _prefetchNeighbours() {
+    this._prefetchTimer = null;
+    if (!this.doc || !this.state || this._renderBusy) return;
+    const doc = this.doc;
+    const token = this._renderToken;
+    const { pageNumber, zoom, pageCount } = this.state;
+
+    // The way the reader is going first, and further that way than back.
+    const step = this._pageStep || 1;
+    const wanted = [];
+    for (let i = 1; i <= PREFETCH_AHEAD; i++) wanted.push(pageNumber + step * i);
+    wanted.push(pageNumber - step);
+
+    for (const page of wanted) {
+      if (page < 1 || page > pageCount) continue;
+      // One at a time, and abandoned the moment the reader moves: a prefetch
+      // that outlives its page is work done for a screen nobody is looking at,
+      // and pdf.js is the same worker the foreground render needs.
+      if (this.doc !== doc || this._renderToken !== token || this._renderBusy) return;
+      const key = this._cacheKey(page, zoom);
+      // The annotations too, and first: they are small and a database read is
+      // what used to leave the page on screen without its notes.
+      if (this.meta?.id) prefetchInk(this.meta.id, page);
+      if (this._cache().has(key)) continue;
+      try {
+        const { canvas, pageSize } = await this._rasterise(page, zoom);
+        if (this.doc !== doc || this._renderToken !== token) return;
+        this._cachePut(key, { canvas, pageSize });
+      } catch (_) {
+        // A page that will not rasterise ahead of time is not an error worth
+        // reporting; the reader will meet it properly if they turn to it.
+        return;
+      }
     }
   }
 
@@ -1253,10 +1771,40 @@ export class PdfPane {
    * it, and the real refit lands immediately after.
    */
   previewScale(factor) {
+    // A divider preview supersedes a zoom preview, and the settle timer would
+    // otherwise land in the middle of the drag: it resets the scale and starts
+    // a render, and the next drag frame has to put the preview back. Rare —
+    // it needs a zoom press and a divider grab inside 180ms — but the cure is
+    // to drop the timer the moment something else takes over the transform.
+    clearTimeout(this._zoomSettleTimer);
+    this._zoomSettleTimer = null;
     const k = Number(factor);
     this._previewScale = Number.isFinite(k) && k > 0 ? k : 1;
     this.elHolder.style.transformOrigin = 'top left';
     this._position();
+  }
+
+  /**
+   * A zoom step: shown at once, rasterised once the presses stop.
+   *
+   * The same stand-in a pinch uses — the bitmap already on screen is scaled to
+   * the new zoom by the GPU, so the press answers in the frame it happened —
+   * and only the real render is delayed. Rasterising on every press queued a
+   * full page render behind each of them, so stepping 100% → 300% paid for five
+   * renders and spent the whole way there watching an older one arrive. This is
+   * the "zoom is slow" the tablet run reported.
+   *
+   * A pane with nothing drawn yet has nothing to scale, so it renders outright.
+   */
+  _zoomTo(nextState) {
+    if (!(this._renderedZoom > 0)) { this._apply(nextState, true); return; }
+    this._apply(nextState, false);
+    this._previewZoom();
+    clearTimeout(this._zoomSettleTimer);
+    this._zoomSettleTimer = setTimeout(() => {
+      this._zoomSettleTimer = null;
+      this._commitPreviewZoom();
+    }, ZOOM_SETTLE);
   }
 
   /**
@@ -1389,8 +1937,8 @@ export class PdfPane {
   goToPage(n) { if (this.doc) this._apply(goToPage(this.state, n), true); }
   next() { if (this.doc) this._apply(nextPage(this.state), true); }
   previous() { if (this.doc) this._apply(previousPage(this.state), true); }
-  zoomIn() { if (this.doc) this._apply(zoomIn(this.state), true); }
-  zoomOut() { if (this.doc) this._apply(zoomOut(this.state), true); }
+  zoomIn() { if (this.doc) this._zoomTo(zoomIn(this.state)); }
+  zoomOut() { if (this.doc) this._zoomTo(zoomOut(this.state)); }
   fitWidth() {
     if (!this.doc) return;
     this._apply(applyFit(this.state, FIT_MODES.WIDTH, this._viewport(), this.pageSize), true);
