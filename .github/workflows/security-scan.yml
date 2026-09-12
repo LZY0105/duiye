@@ -25,7 +25,7 @@ jobs:
     name: 密钥泄漏
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # 扫全部历史，不只是工作树。密钥最常见的泄漏方式是「提交了，发现了，
           # 下一个提交删掉」—— 工作树是干净的，历史里那份仍然人人可取。
@@ -45,9 +45,9 @@ jobs:
     name: 依赖
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
@@ -86,7 +86,7 @@ jobs:
     name: 源码
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # 动态执行。
       #
@@ -105,7 +105,7 @@ jobs:
           fi
           echo "没有"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
