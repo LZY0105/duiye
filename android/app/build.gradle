@@ -11,7 +11,7 @@ if (keystorePropsFile.exists()) {
     // CI: use environment variables (GitHub Secrets)
     keystoreProperties['storeFile'] = 'release.keystore'
     keystoreProperties['storePassword'] = System.getenv('KEYSTORE_PASSWORD')
-    keystoreProperties['keyAlias'] = System.getenv('KEY_ALIAS') ?: 'latexsnipper'
+    keystoreProperties['keyAlias'] = System.getenv('KEY_ALIAS') ?: 'duiye'
     keystoreProperties['keyPassword'] = System.getenv('KEY_PASSWORD') ?: System.getenv('KEYSTORE_PASSWORD')
 }
 

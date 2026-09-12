@@ -1,1 +1,9 @@
-# Git LFS for large ONNX model files
+# 行尾：仓库里统一 LF，检出时交给各自平台。
+* text=auto
+
+# 这些是二进制，别让 Git 去猜。
+*.png binary
+*.woff2 binary
+*.bcmap binary
+*.ttf binary
+*.jar binary

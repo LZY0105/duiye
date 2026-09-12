@@ -1,88 +1,88 @@
 # 安全政策 / Security Policy
 
-## 支持的版本 / Supported Versions
+## 支持的版本
 
-| Version | Supported          |
-| ------- | ------------------ |
-| latest  | :white_check_mark: |
-| < latest| :x:                |
+只为最新发布版出安全补丁。请使用 [最新 Release](https://github.com/LZY0105/duiye/releases/latest)。
 
-我们只维护最新发布版的安全补丁。请始终使用 [最新 Release](https://github.com/strangelion/LaTeXSnipper_mobile/releases/latest)。
-
----
-
-## 报告漏洞 / Reporting a Vulnerability
-
-### 请勿公开披露
-
-如果发现安全漏洞，**请勿创建公开 Issue**。公开披露可能被恶意利用，危及所有用户的安全。
-
-### 报告方式
-
-请通过以下渠道之一私下报告：
-
-1. **GitHub Security Advisory（推荐）**
-   前往 [https://github.com/strangelion/LaTeXSnipper_mobile/security/advisories/new](https://github.com/strangelion/LaTeXSnipper_mobile/security/advisories/new) 提交私人安全公告。
-
-2. **直接联系维护者**
-   如有紧急问题，请通过 GitHub 联系仓库所有者：[@strangelion](https://github.com/strangelion)
-
-### 报告时请包含
-
-- 漏洞的简要描述
-- 复现步骤（代码、配置、操作流程等）
-- 受影响的版本 / 平台（Android 版本、WebView 版本等）
-- 预期的安全影响
-- 可选的修复建议或 PoC
+| 版本 | 是否支持 |
+| --- | --- |
+| 最新发布版 | ✅ |
+| 更早的 | ❌ |
 
 ---
 
-## 响应时间 / Response Timeline
+## 报告漏洞
 
-| 阶段 | 预计时间 |
-|------|----------|
+**请不要开公开 Issue。** 漏洞在修好之前公开，受影响的是还在用旧版本的人。
+
+私下报告的两条路：
+
+1. **GitHub Security Advisory（推荐）** —— 到
+   [本仓库的安全公告页](https://github.com/LZY0105/duiye/security/advisories/new)
+   提交，只有仓库协作者看得到。
+2. **直接联系仓库所有者** —— 通过 GitHub 找 [@LZY0105](https://github.com/LZY0105)。
+
+报告里有这几样会快很多：
+
+- 怎么触发的（步骤、样例文件、设备型号和 Android 版本）
+- 你认为会造成什么后果
+- 如果有，一个最小的复现或者修复思路
+
+### 大概多久有回音
+
+| 阶段 | 时间 |
+| --- | --- |
 | 确认收到 | 2 个工作日内 |
-| 初步评估 | 5 个工作日内 |
-| 修复计划 | 10 个工作日内 |
-| 发布修复 | 根据严重程度（通常 14–30 天） |
+| 初步判断 | 5 个工作日内 |
+| 给出修复计划 | 10 个工作日内 |
+| 发布修复 | 视严重程度，通常 14–30 天 |
 
 ---
 
-## 安全范畴 / Scope
+## 这个程序会碰到什么
 
-### 涵盖范围
+对页是一个**离线的教材批注应用**：把 PDF 存在设备上，用笔在上面写字，并在练习册
+和答案册之间对题。想清楚它的攻击面，得先知道它实际接触什么。
 
-- ONNX 模型或推理管线中的缓冲区溢出 / 拒绝服务
-- 跨站脚本 (XSS) 或代码注入（通过输入公式 / 文档内容）
-- 隐私泄露（本地 OCR 结果、历史记录、图片数据意外暴露）
-- Android WebView 安全配置缺陷
+**数据全部在本地。** PDF 的字节、每一页的笔迹、草稿纸、书签、阅读位置，都在
+IndexedDB 和 localStorage 里，不上传任何服务器。教材本身不随软件分发。
+
+**只有两个网络出口：**
+
+- 启动时（或手动点「查看更新」时）问一次 GitHub 的 Releases API，看有没有新版。
+  自动检查**默认关闭**。
+- Agent 面板走本机的 C++ 代理（`native/agent-proxy/`），那是 localhost。
+
+**申请的权限：** 联网、网络状态，以及两条为 Android 9 及更早版本保留的存储权限
+（导出诊断日志走浏览器下载，旧系统上需要）。不申请相机、位置、通讯录、通知。
+
+### 在范畴内
+
+- 打开一份恶意构造的 PDF 能做到什么（pdf.js 的解析路径、字体、嵌入的脚本）
+- 通过 PDF 内容或批注内容注入脚本（XSS）
+- 更新检查那条路：从 GitHub 取回的文本被塞进界面
+- WebView 的配置缺陷（scheme、CORS 头、文件访问）
+- 原生代理层（JNI 边界、C++ 那一侧的内存安全）
+- 本地数据在不该暴露的地方暴露（备份、日志导出、其它应用能读到）
 - 依赖库的已知 CVE
 
-### 不在范围内
+### 不在范畴内
 
-- 需要物理接触设备、已 root/Jailbreak 的设备才可利用的问题
-- 第三方服务（GitHub Pages、Capacitor 框架自身）的安全问题
-- Social engineering 攻击
-- 通过修改 APK / 绕过签名验证进行的功能解锁
-
----
-
-## 安全最佳实践 / Security Best Practices
-
-LaTeXSnipper Mobile 的设计原则：
-
-- **所有模型和计算均在本地设备执行**，无需网络权限即可完成 OCR 识别
-- **不收集用户数据**：识别结果仅存储于本地 IndexedDB，不上传任何服务器
-- **简单的权限模型**：仅申请相机（拍照识别）权限，不申请存储 / 位置 / 联系人等敏感权限
-- **依赖最小化**：避免引入不必要的第三方依赖减少攻击面
-- **定期更新依赖**：通过 Dependabot 跟踪 npm/Capactior/Android 依赖的安全更新
+- 需要物理接触设备，或设备已 root 才能利用的
+- 第三方框架自身的问题（Capacitor、Android WebView、pdf.js）——那些请报给它们
+- 社会工程
+- 改 APK、绕过签名校验之类的功能解锁
 
 ---
 
-## 致谢 / Acknowledgments
+## 设计上的几条约束
 
-我们感谢所有负责任披露安全问题的研究者。贡献者的名字（经同意后）将列在此处。
+- **能离线就离线**：除了更新检查，没有任何功能需要网络。
+- **不收集数据**：没有遥测，没有分析，没有账号。
+- **依赖尽量少**：运行时依赖只有五个——三个 Capacitor 插件、idb、pdfjs-dist。
+- **原文件不可写**：批注按页单独存储，永远不改写导入的那份 PDF。删掉批注也不会
+  损伤原文件。
 
 ---
 
-*最后更新：2026-06-06*
+*最后更新：2026-09-12*

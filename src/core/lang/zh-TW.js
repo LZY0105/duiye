@@ -29,25 +29,14 @@ export default {
   "check.failed": "沒查到，待會兒再試",
   "settings.skin": "主題",
 
-  // ── Render engine ──
-
   // ── Toast ──
   "toast.savedToDownload": "存到「下載」資料夾了",
-  // ── Export ──
 
   // ── Settings tabs ──
   "settings.tabProviders": "服務商",
   "settings.aiProviders": "AI 服務商",
   "settings.appearance": "外觀",
   "settings.about": "關於",
-
-  // ── PDF ──
-
-  // ── Status ──
-
-  // ── Recognition ──
-
-  // ── Model management ──
 
   // ── Buttons ──
 

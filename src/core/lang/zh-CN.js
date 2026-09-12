@@ -9,19 +9,6 @@ export default {
   "pdf.close": "关闭",
   "pdf.paneEmpty": "未打开文档",
   "pdf.noOutline": "此文档没有目录",
-  // ── Theme ──
-
-  // ── Recognize page ──
-
-  // ── Camera ──
-
-  // ── Handwriting ──
-
-  // ── Editor ──
-
-  // ── History ──
-
-  // ── PDF ──
 
   // ── Settings ──
   "settings.tabProviders": "服务商",
@@ -36,14 +23,11 @@ export default {
   "dev.showLogs": "查看日志",
   "dev.exportLogs": "导出日志",
 
-  // ── Acceleration ──
-
   // ── Update ──
   "update.available": "可以更新到 v{{version}}",
   "update.download": "现在更新",
   "update.later": "以后再说",
   "update.checking": "正在查看…",
-  // ── Render engine ──
 
   // ── Common ──
   "common.ok": "确定",
@@ -51,11 +35,6 @@ export default {
 
   // ── Status bar ──
   "status.initializing": "正在准备…",
-  // ── Errors ──
-
-  // ── Camera overlay ──
-
-  // ── PDF ──
 
   // ── Buttons (dynamic text) ──
   "btn.saveSettings": "保存设置",
@@ -68,9 +47,6 @@ export default {
 
   // ── Toast ──
   "toast.savedToDownload": "存到「下载」文件夹了",
-  // ── Export ──
-
-  // ── Model Management ──
 
   // ── Buttons ──
 

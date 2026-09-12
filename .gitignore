@@ -49,15 +49,11 @@ __pycache__/
 pp-ocr-train/
 
 # Test scripts (local only, not for production)
-test_onnx_local.py
 .claude/test-before-deploy
 test_48h.png
 test_detect.js
 test_upload.png
 test_output/
-
-# 56MB pandoc WASM binary (copied from node_modules at build time)
-public/pandoc.wasm
 
 # Real-book corpora for the matcher regression suites.
 #

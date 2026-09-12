@@ -9,19 +9,6 @@ export default {
   "pdf.close": "Close",
   "pdf.paneEmpty": "No document open",
   "pdf.noOutline": "This document has no table of contents",
-  // ── Theme ──
-
-  // ── Recognize page ──
-
-  // ── Camera ──
-
-  // ── Handwriting ──
-
-  // ── Editor ──
-
-  // ── History ──
-
-  // ── PDF ──
 
   // ── Settings ──
   "settings.tabProviders": "Providers",
@@ -36,14 +23,11 @@ export default {
   "dev.showLogs": "View Logs",
   "dev.exportLogs": "Export Logs",
 
-  // ── Acceleration ──
-
   // ── Update ──
   "update.available": "v{{version}} is out",
   "update.download": "Update now",
   "update.later": "Not now",
   "update.checking": "Looking…",
-  // ── Render engine ──
 
   // ── Common ──
   "common.ok": "OK",
@@ -51,11 +35,6 @@ export default {
 
   // ── Status bar ──
   "status.initializing": "Getting ready…",
-  // ── Errors ──
-
-  // ── Camera overlay ──
-
-  // ── PDF ──
 
   // ── Buttons (dynamic text) ──
   "btn.saveSettings": "Save Settings",
@@ -68,9 +47,6 @@ export default {
 
   // ── Toast ──
   "toast.savedToDownload": "Saved in Downloads",
-  // ── Export ──
-
-  // ── Model Management ──
 
   // ── Buttons ──
 

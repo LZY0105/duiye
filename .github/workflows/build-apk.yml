@@ -61,18 +61,18 @@ jobs:
             echo "$KEYSTORE_B64" | base64 -d > release.keystore
             echo "storeFile=release.keystore" > keystore.properties
             echo "storePassword=${KEYSTORE_PASSWORD}" >> keystore.properties
-            echo "keyAlias=${KEY_ALIAS:-latexsnipper}" >> keystore.properties
+            echo "keyAlias=${KEY_ALIAS:-duiye}" >> keystore.properties
             echo "keyPassword=${KEY_PASSWORD:-${KEYSTORE_PASSWORD}}" >> keystore.properties
             echo "Using user-provided keystore"
           else
             keytool -genkey -v -keystore release.keystore \
-              -storepass latexsnipper -alias latexsnipper -keypass latexsnipper \
+              -storepass duiye -alias duiye -keypass duiye \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=LaTeXSnipper,O=LaTeXSnipper,C=CN"
             echo "storeFile=release.keystore" > keystore.properties
-            echo "storePassword=latexsnipper" >> keystore.properties
-            echo "keyAlias=latexsnipper" >> keystore.properties
-            echo "keyPassword=latexsnipper" >> keystore.properties
+            echo "storePassword=duiye" >> keystore.properties
+            echo "keyAlias=duiye" >> keystore.properties
+            echo "keyPassword=duiye" >> keystore.properties
             echo "Using CI-generated keystore (no Secrets set)"
           fi
         env:

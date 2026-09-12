@@ -1,6 +1,6 @@
 {
   "appId": "com.latexsnipper.app",
-  "appName": "LaTeXSnipper",
+  "appName": "对页",
   "webDir": "dist",
   "backgroundColor": "#f2f3f7",
   "server": {
