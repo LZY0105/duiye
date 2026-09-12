@@ -9,7 +9,7 @@
 // which language to speak, whether to look for updates, and a way to get logs
 // off the device when something goes wrong.
 
-import { t, currentLang, setLang } from '../core/i18n.js';
+import { t, currentLang, onLangChange, setLang } from '../core/i18n.js';
 import Logger from '../core/logger.js';
 import { saveText } from '../export/save-file.js';
 
@@ -73,12 +73,23 @@ function initLanguage() {
 function initDevTools() {
   const devOptions = document.getElementById('devOptions');
   const devGroupTitle = document.getElementById('devGroupTitle');
+
+  // 标签走词表，箭头是状态不是文字。两者由同一个地方写，否则换语言时
+  // translateDOM 会把整行文本换掉，箭头就没了——它只认词条，不知道后面那个符号
+  // 还有意思。
+  const paintDevTitle = () => {
+    if (!devGroupTitle) return;
+    const open = devOptions && devOptions.style.display !== 'none';
+    devGroupTitle.textContent = `${t('settings.devOptions')} ${open ? '▾' : '▸'}`;
+  };
+
   devGroupTitle?.addEventListener('click', () => {
     if (!devOptions) return;
-    const visible = devOptions.style.display !== 'none';
-    devOptions.style.display = visible ? 'none' : 'block';
-    devGroupTitle.textContent = visible ? '开发者选项 ▸' : '开发者选项 ▾';
+    devOptions.style.display = devOptions.style.display !== 'none' ? 'none' : 'block';
+    paintDevTitle();
   });
+  paintDevTitle();
+  onLangChange(paintDevTitle);
 
   const devMode = document.getElementById('setDevMode');
   const devContent = document.getElementById('devOptionsContent');

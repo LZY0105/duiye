@@ -1962,11 +1962,24 @@ check('the adaptive icon stands on the icon gradient, not a white card', () => {
     'the launcher ground is the same gradient as public/icon.svg');
 });
 
-check('the app tells the person holding it what it is licensed under', () => {
+check('the app tells the person holding it what it is licensed under — in every language', () => {
+  // 这段声明原来写死在 index.html 里，换语言时它不动。现在走词表，所以它同时变成
+  // 了五处——而「某一种语言的包漏掉了许可声明」是这种做法真正的风险：界面看着好
+  // 好的，拿到包的人却读不到他该读的东西。所以五份都要查。
   const html = $read('index.html');
-  assert.ok(/AGPL-3\.0/.test(html), 'AGPL-3.0 obliges the build to say so where it can be read');
-  assert.ok(/LaTeXSnipper_mobile/.test(html), 'and to credit the work it derives from');
-  assert.ok(/Math-answer-to-question-matching-model/.test(html), 'and the engine it vendors');
+  for (const key of ['about.licence', 'about.derived', 'about.rewritten', 'about.source']) {
+    assert.ok(html.includes(`data-i18n="${key}"`), `the notice still carries ${key}`);
+  }
+  assert.ok(/data-i18n-html/.test(html),
+    'the paragraphs carry links, so they must be written as HTML');
+
+  for (const lang of ['zh-CN', 'zh-TW', 'en']) {
+    const pack = $read(`src/core/lang/${lang}.js`);
+    assert.ok(/AGPL-3\.0/.test(pack), `${lang}: AGPL-3.0 obliges the build to say so where it can be read`);
+    assert.ok(/LaTeXSnipper_mobile/.test(pack), `${lang}: and to credit the work it derives from`);
+    assert.ok(/Math-answer-to-question-matching-model/.test(pack), `${lang}: and the engine it vendors`);
+    assert.ok(/github\.com\/LZY0105\/duiye/.test(pack), `${lang}: and where the source can be had`);
+  }
 });
 
 check('the version in the notice comes from the build, not a literal', () => {

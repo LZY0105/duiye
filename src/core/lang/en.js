@@ -369,4 +369,16 @@ export default {
   "guide.pad.t": "Scratchpads",
   "guide.pad.a": "\"New scratchpad\" opens a sheet with no edges — squared, ruled, or character grid, your choice.",
   "guide.pad.b": "It goes into a pane like any book, so a half-finished derivation is still there when you come back.",
+
+  // ── 关于 / 外观 / 安装 ──
+  "skin.liquid": "Duiye · Liquid Glass",
+  "skin.paper": "Duiye · Paper",
+  "settings.autoUpdate": "Check for updates automatically",
+  "settings.devOptions": "Developer options",
+  "install.hint": "Install it and use it offline",
+  "install.action": "Install",
+  "about.licence": "© 2026 Duiye · Released under the <a href=\"https://www.gnu.org/licenses/agpl-3.0.html\" target=\"_blank\" rel=\"noopener\">GNU AGPL-3.0</a>.",
+  "about.derived": "This app was built from <a href=\"https://github.com/strangelion/LaTeXSnipper_mobile\" target=\"_blank\" rel=\"noopener\">LaTeXSnipper Mobile</a> and is legally a derivative work of it. Its copyright and licence notices are kept in LICENSE and THIRD_PARTY_NOTICES.md.",
+  "about.rewritten": "The app itself has been largely rewritten: the two-pane workspace, the vector ink layer, the endless scratchpads, the bookshelf library and the page gestures were all written for this project. The answer-matching engine comes from the same author’s <a href=\"https://github.com/LZY0105/Math-answer-to-question-matching-model\" target=\"_blank\" rel=\"noopener\">Math-answer-to-question-matching-model</a>, released under MIT.",
+  "about.source": "As the AGPL-3.0 requires, the complete source of this program is available at <a href=\"https://github.com/LZY0105/duiye\" target=\"_blank\" rel=\"noopener\">github.com/LZY0105/duiye</a>. The textbook PDFs, and the questions and answers inside them, belong to their respective owners and are not distributed with this app.",
 }

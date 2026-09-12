@@ -346,4 +346,16 @@ export default {
   "guide.pad.t": "草稿紙",
   "guide.pad.a": "「新增草稿紙」開一張沒有邊的紙，方格、橫線、田字格隨你挑。",
   "guide.pad.b": "它和書一樣能放進任一欄，算一半的算式留在上面，回頭還在。",
+
+  // ── 关于 / 外观 / 安装 ──
+  "skin.liquid": "對頁 · 液態玻璃",
+  "skin.paper": "對頁 · 紙",
+  "settings.autoUpdate": "自動檢查更新",
+  "settings.devOptions": "開發者選項",
+  "install.hint": "裝到桌面，離線也能用",
+  "install.action": "安裝",
+  "about.licence": "© 2026 對頁 · 依 <a href=\"https://www.gnu.org/licenses/agpl-3.0.html\" target=\"_blank\" rel=\"noopener\">GNU AGPL-3.0</a> 授權發布。",
+  "about.derived": "本軟體基於 <a href=\"https://github.com/strangelion/LaTeXSnipper_mobile\" target=\"_blank\" rel=\"noopener\">LaTeXSnipper Mobile</a> 開發，在法律上是它的衍生作品，其版權與授權聲明保留在 LICENSE 與 THIRD_PARTY_NOTICES.md 中。",
+  "about.rewritten": "應用本身已大幅重寫：雙欄工作區、向量筆跡層、無限草稿紙、書架式文件庫與手勢翻頁均為本專案所寫；答案比對引擎來自同一作者的 <a href=\"https://github.com/LZY0105/Math-answer-to-question-matching-model\" target=\"_blank\" rel=\"noopener\">Math-answer-to-question-matching-model</a>，以 MIT 發布。",
+  "about.source": "依 AGPL-3.0 的要求，本程式的完整原始碼可供取得，見 <a href=\"https://github.com/LZY0105/duiye\" target=\"_blank\" rel=\"noopener\">github.com/LZY0105/duiye</a>；教材 PDF 與其中的題目、答案文字屬於各自權利人，不隨本軟體散布。",
 }

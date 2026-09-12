@@ -24,7 +24,7 @@ function test(name, fn) {
 
 const $read = (f) => readFileSync(new URL('../' + f, import.meta.url), 'utf-8');
 
-const LANGS = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'];
+const LANGS = ['zh-CN', 'zh-TW', 'en'];
 const dicts = {};
 for (const lang of LANGS) {
   dicts[lang] = (await import(`../src/core/lang/${lang}.js`)).default;
@@ -69,7 +69,7 @@ for (const lang of LANGS) {
 test('没有哪一门语言是照抄简体中文的', () => {
   // 抄一份过去，测试就绿了，而用户看到的还是中文。至少标题那几条得是各说各的。
   const sample = ['guide.name', 'guide.title', 'guide.panes.t'];
-  for (const lang of ['en', 'ja', 'ko']) {
+  for (const lang of ['en']) {
     for (const key of sample) {
       assert.notEqual(dicts[lang][key], dicts['zh-CN'][key], `${lang} 的 ${key} 还是中文`);
     }

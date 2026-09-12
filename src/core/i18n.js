@@ -14,8 +14,6 @@ const LANGUAGES = {
   'zh-CN': () => import('./lang/zh-CN.js'),
   'zh-TW': () => import('./lang/zh-TW.js'),
   en: () => import('./lang/en.js'),
-  ja: () => import('./lang/ja.js'),
-  ko: () => import('./lang/ko.js'),
 };
 
 const FALLBACK = 'zh-CN';
@@ -42,8 +40,6 @@ function detect() {
   if (tag.startsWith('zh')) {
     return /hant|hk|mo|tw/.test(tag) ? 'zh-TW' : 'zh-CN';
   }
-  if (tag.startsWith('ja')) return 'ja';
-  if (tag.startsWith('ko')) return 'ko';
   if (tag.startsWith('en')) return 'en';
   return FALLBACK;
 }

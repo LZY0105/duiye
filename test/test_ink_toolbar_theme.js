@@ -294,7 +294,7 @@ ok(
 // The label is a key now, so the promise it makes lives in the dictionaries.
 // It is the one control here that destroys work, and every language has to say
 // so — that it clears THIS page, and that the PDF is untouched.
-for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
+for (const lang of ['zh-CN', 'zh-TW', 'en']) {
   const dict = $read(`src/core/lang/${lang}.js`);
   ok(/"ink\.clearPage":\s*"[^"]+"/.test(dict) && /"ink\.clearNote":\s*"[^"]+"/.test(dict),
     `${lang} states what clearing does, and what it does not touch`);
@@ -306,7 +306,7 @@ for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
 // 那个按钮画的。后来按钮改成了书签形状，这句话没人跟着改，于是屏幕上指着一个
 // 并不存在的星星。指路的文字和被指的图标分在两个文件里，它们迟早会走散，所以
 // 不让它们发生关系：说「书签按钮」，按钮长什么样就都不影响它。
-for (const lang of ['zh-CN', 'zh-TW', 'en', 'ja', 'ko']) {
+for (const lang of ['zh-CN', 'zh-TW', 'en']) {
   const dict = $read(`src/core/lang/${lang}.js`);
   const line = dict.match(/"panel\.noMarks":\s*"([^"]+)"/);
   ok(line, `${lang} 得告诉人书签从哪儿来`);
