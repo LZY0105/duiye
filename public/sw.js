@@ -34,10 +34,7 @@ const PRE_CACHE = [
   '/icon.svg',
   '/vendor/pdf.min.js',
   '/vendor/pdf.worker.min.js',
-  '/vendor/katex.min.js',
   '/vendor/katex.min.css',
-  '/vendor/mathlive/mathlive.min.js',
-  '/vendor/mathlive/mathlive-fonts.css',
 ];
 
 // Install — put the starting set in the cache

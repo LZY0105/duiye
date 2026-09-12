@@ -17,18 +17,17 @@
   <link rel="icon" type="image/svg+xml" href="/icon.svg">
   <link rel="apple-touch-icon" href="/icon.svg">
   <link rel="manifest" href="/manifest.json">
-  <link rel="stylesheet" href="/vendor/mathlive/mathlive-fonts.css">
 </head>
 <body>
   <canvas id="mathBg" aria-hidden="true"></canvas>
   <div class="bg-overlay"></div>
 
-  <!-- ═══ Top Nav ═══ -->
+  <!-- 状态栏那一条的占位。这里没有导航——两个标签在屏幕底下。 -->
 
   <!-- The title bar is gone; this holds only the status-bar inset. -->
   <div class="spacer-top"></div>
 
-  <!-- ═══ Splash / Loading Screen ═══ -->
+  <!-- 启动图。原生那张（values-v31/styles.xml）交接到这里，同底色同记号。 -->
   <div class="splash" id="splash">
     <div class="splash-inner">
       <div class="splash-icon">
@@ -45,11 +44,10 @@
     </div>
   </div>
 
-  <!-- ═══ App Container ═══ -->
+  <!-- 一屏一页，同时只有一页带 active -->
   <div id="app">
 
-    <!-- ── Tab 1: OCR ── -->
-    <!-- ── Tab 2: Editor (MathLive created by JS) ── -->
+      <!-- ── Tab 2: Editor (MathLive created by JS) ── -->
     <!-- ── Tab: PDF learning workspace (dual document) ── -->
     <div class="page" id="page-pdf">
       <!-- The import row and the dock are put away by swiping them off, and
@@ -85,17 +83,12 @@
       </div>
     </div>
 
-    <!-- ── Tab 4: History ── -->
-    <!-- ── Tab 4: Settings ── -->
+    <!-- 设定页 -->
     <div class="page" id="page-settings">
       <div class="settings-body">
 
-        <!-- Settings sub-tabs -->
-        <!-- ═══ Tab: AI 服务商 ═══ -->
-        <!-- ═══ Tab: 识别 ═══ -->
-        <!-- ═══ Tab: 模型 ═══ -->
-        <!-- ═══ Tab: 通用 ═══ -->
-        <div class="settings-panel" data-panel="general">
+          <!-- ═══ Tab: AI 服务商 ═══ -->
+              <div class="settings-panel" data-panel="general">
           <div class="set-group">
             <div class="set-group-title" data-i18n="settings.appearance">外观</div>
 
@@ -176,7 +169,7 @@
 
   </div>
 
-  <!-- ═══ Bottom Tab Navigation ═══ -->
+  <!-- 底部两个标签：练习、设定 -->
   <!-- Where each bar is taken hold of once it has slid away. Inert until then. -->
   <div class="bar-peek" data-role="bar-peek" aria-hidden="true"></div>
   <div class="dock-peek" data-role="dock-peek" aria-hidden="true"></div>
@@ -259,17 +252,18 @@
     </defs>
   </svg>
 
-  <!-- ═══ Install banner ═══ -->
+  <!-- 装到桌面那条横幅 -->
   <div class="install-banner" id="installBanner">
     <span data-i18n="install.hint">安装到桌面，离线使用</span>
     <button id="installBtn" data-i18n="install.action">安装</button>
     <button class="close-banner" id="dismissInstall">&times;</button>
   </div>
 
-  <!-- ═══ KaTeX CSS (vendor, local) ═══ -->
+  <!-- 这份 CSS 留着不是为了排公式——公式编辑器早就不在了。它声明的
+       KaTeX_Math 是设定页背景那层数学符号用的字体，见 particles.js。 -->
   <link rel="stylesheet" href="/vendor/katex.min.css">
 
-  <!-- ═══ Libraries (bundled, local, no CDN) ═══ -->
+  <!-- 第三方库，钉在仓库里，不走 CDN -->
   <!-- No ONNX Runtime script here. It referenced /vendor/ort.all.min.js, a
        file that has never existed in this repository: not in public/vendor,
        not in dist, not in the Android assets, and never tracked in git. The
@@ -287,9 +281,6 @@
     pdfjsLib.GlobalWorkerOptions.workerSrc = '/vendor/pdf.worker.min.js';
   </script>
 
-  <!-- ═══ KaTeX (replaces MathJax) ═══ -->
-  <script src="/vendor/katex.min.js"></script>
-  <script src="/vendor/mathlive/mathlive.min.js"></script>
 
   <!-- The Liquid Glass skin used to inject an SVG <defs> block of five filters
        here — displacement lenses, Sobel normal maps and specular point lights.
@@ -311,7 +302,7 @@
        src/ui/liquid-glass.js keeps on the pointer. -->
 
 
-  <!-- ═══ Entry point ═══ -->
+  <!-- 入口 -->
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>
