@@ -1,16 +1,24 @@
-/* mobile.css — Apple Tablet and Mobile Responsive layout */
+/* mobile.css — 屏幕形状变了之后要跟着改的那几处。
+ *
+ * 这份表不是通用的响应式样式：这个 app 实际只在一种形态下被用——横着拿的平板，
+ * 加一支笔。所以这里管的是安全区、触屏没有 hover、以及窄到某个宽度之后两栏该
+ * 怎么让。手机竖屏能开，但不是它被设计出来要待的地方。 */
 
-/* ── Safe areas ── */
-.top-nav { padding-top: var(--safe-t); }
+/* 安全区。
+ *
+ * 底栏往下让出手势条那一条，否则最后一排按钮会被系统的横杠压住——而那一排正是
+ * 切换练习和设定的地方。 */
 .bottom-nav { padding-bottom: var(--safe-b); }
 
-/* ── PWA standalone mode ── */
+/* 已经装到桌面的，不必再被问一次要不要装。 */
 @media (display-mode: standalone) {
-  .top-nav { padding-top: calc(var(--safe-t) + 4px); }
-  .install-banner { display: none !important; }
+    .install-banner { display: none !important; }
 }
 
-/* ── Touch devices ── */
+/* 触屏上没有 hover。
+ *
+ * :hover 在触屏上会「粘」住——手指点完抬起，那一格还留着悬停的样子，直到点了别
+ * 处。所以把 hover 的效果整个关掉，改成按下时缩一下：那是有反馈而且不会粘的。 */
 @media (hover: none) {
   .ocr-btn:hover, .snippet-btn:hover, .hw-tool-btn:hover, .pdf-bar-btn:hover {
     transform: none; opacity: 1;
@@ -24,22 +32,17 @@
 @media (min-width: 769px) and (max-width: 1024px) {
   .page { padding: 1.25rem 1.25rem calc(5.5rem + var(--safe-b)); }
   .pdf-workspace { gap: 4px; }
-  .snippet-panel { grid-template-columns: repeat(5, 1fr); }
-}
+  }
 
 @media (max-width: 768px) {
   .page { padding: 1rem 0.75rem calc(5rem + var(--safe-b)); }
-  .snippet-panel { grid-template-columns: repeat(4, 1fr); }
-}
+  }
 
 /* ── Responsive: Phone (<= 640px) ── */
 @media (max-width: 640px) {
   .page { padding: 0.6rem 0.6rem calc(5rem + var(--safe-b)); }
   .spacer-top { height: calc(48px + var(--safe-t)); }
-  .top-nav .inner { height: 42px; padding: 0 0.85rem; }
-  .top-nav .brand-link { font-size: 0.92rem; }
-  .top-nav a { font-size: 0.8rem; }
-  .status-bar { position: sticky; top: calc(48px + var(--safe-t)); z-index: 10; padding: 0.65rem 1rem; }
+        .status-bar { position: sticky; top: calc(48px + var(--safe-t)); z-index: 10; padding: 0.65rem 1rem; }
   .mode-tab { padding: 6px 16px; font-size: 0.84rem; }
   .drop-zone { padding: 2.2rem 1.2rem; border-radius: 18px; }
   .hw-toolbar { gap: 3px; }
@@ -50,13 +53,12 @@
   .cam-modal video { max-width: 100vw; max-height: 60vh; }
   .cam-btn { padding: 10px 22px; font-size: 0.92rem; }
   .math-preview { padding: 0.85rem; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  .snippet-panel { grid-template-columns: repeat(3, 1fr); }
-  .bottom-nav button { font-size: 0.68rem; }
+    .bottom-nav button { font-size: 0.68rem; }
   .bottom-nav button svg { width: 21px; height: 21px; }
   .settings-tab { padding: 8px 0; font-size: 0.82rem; }
 }
 
-/* ── Landscape handwriting mode ── */
+/* 横过来写字的时候：屏幕矮，能省的竖向空间都要省。 */
 @media (orientation: landscape) and (max-height: 500px) {
   .hw-canvas-wrap { max-height: calc(100vh - 180px); }
   .hw-toolbar { position: sticky; bottom: 0; background: var(--glass-bg); backdrop-filter: var(--glass-blur); padding: 0.5rem; }
@@ -68,36 +70,6 @@
    layout. Both controls collapse to a square icon button at the 44px touch
    target, and their text is moved out of view rather than removed, so a screen
    reader still announces "数学真玻璃" and "System" as the button's name. */
-@media (max-width: 430px) {
-  .top-nav .skin-badge-text,
-  .top-nav .theme-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-    border: 0;
-  }
-
-  .top-nav .skin-quick-toggle,
-  .top-nav .theme-toggle {
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
-    padding: 0;
-    justify-content: center;
-    gap: 0;
-    border-radius: 50%;
-  }
-
-  .top-nav .skin-badge-icon { font-size: 1.05rem; }
-  .top-nav-actions { gap: 6px; }
-  .top-nav .inner { gap: 0.6rem; }
-  [data-skin="liquid-math"] .top-nav .inner { padding: 0 0.6rem; }
-}
 
 /* ══════════════════════════════════════════════════════════════════════════
    Tablet
@@ -115,8 +87,7 @@
 .pdf-slot-toolbar,
 .ink-toolbar,
 .ink-card,
-.bottom-nav,
-.top-nav {
+.bottom-nav {
   -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
   user-select: none;

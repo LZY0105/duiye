@@ -816,82 +816,14 @@ a:hover { color: var(--accent-hover); }
    than deleted, so a device that really does put content under a notch has
    somewhere to say so. */
 .spacer-top { height: 0; }
-.top-nav .inner {
-  max-width: var(--max-w); margin: 0 auto;
-  padding: 0 1.5rem; height: 50px;
-  display: flex; align-items: center; gap: 1.25rem;
-}
-.top-nav .brand-link { font-weight: 700; font-size: 1.05rem; letter-spacing: -0.02em; display: flex; align-items: center; gap: 8px; }
-
-.brand-math-symbol {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  background: var(--glass-bg-subtle);
-  border: var(--glass-border-subtle);
-  color: var(--accent);
-  font-size: 0.9rem;
-  font-family: "KaTeX_Math", "Times New Roman", serif;
-  font-weight: 800;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.04), inset 0 1px 0.5px #fff;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
-
-.skin-quick-toggle,
-.theme-toggle {
-  flex: 0 0 auto;
-  white-space: nowrap;
-}
 
 /* The brand is the one part of the bar that may yield, and it truncates rather
    than wraps for the same reason. */
-.top-nav .brand-link { min-width: 0; }
-.top-nav .brand-link > span:not(.brand-math-symbol) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
-.skin-quick-toggle {
-  background: var(--glass-bg-subtle);
-  border: var(--glass-border-subtle);
-  border-radius: var(--pill-radius);
-  padding: 5px 12px; cursor: pointer; font-size: 0.8rem; font-weight: 600;
-  display: flex; align-items: center; gap: 5px;
-  color: var(--fg);
-  transition: all var(--transition-fast);
-  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.5);
-  font-family: inherit;
-}
-.skin-quick-toggle:hover {
-  background: var(--glass-bg);
-  border-color: var(--accent);
-  transform: translateY(-1px);
-  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.081);
-}
-.skin-quick-toggle:active { transform: scale(0.94); }
-.skin-quick-toggle .skin-badge-icon { font-size: 0.85rem; }
-
-[data-skin="liquid-math"] .top-nav .inner {
-  height: 48px;
-  padding: 0 1.1rem;
-}
 [data-skin="liquid-math"] .spacer-top {
   /* Was 70px, to clear a title bar that no longer exists. */
   height: 0;
-}[data-skin="liquid-math"] .skin-quick-toggle,
-[data-skin="liquid-math"] .theme-toggle {
-  background: rgba(255, 255, 255, 0.65);
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04), inset 0 1px 0.5px #fff;
-  color: var(--fg);
-}
-/* ── 页面骨架：一屏一页，同时只有一页在场 ───────────────────────── */
+}/* ── 页面骨架：一屏一页，同时只有一页在场 ───────────────────────── */
 #app { max-width: var(--max-w); margin: 0 auto; }
 /* Top and bottom are set against what is actually there, rather than a round
    number: 12px of air above the import row, and below, just enough to clear the

@@ -150,9 +150,6 @@
    `.mode-tab` / `.settings-tab` / `.pdf-preset-btn` keep whatever background
    their skin gives them: in the glass skin the sliding lens underneath is the
    sole background owner, and in the flat skins the active tile is. */
-.theme-toggle,
-.skin-quick-toggle,
-.brand-math-symbol,
 .calc-btn,
 .mode-tab,
 .settings-tab,
@@ -168,15 +165,11 @@
 
 /* Controls resting on chrome glass need a fill of their own once the blur is
    gone, or they vanish into the pane they sit on. */
-.calc-btn,
-.theme-toggle,
-.skin-quick-toggle {
+.calc-btn {
   background: var(--mat-on-glass) !important;
   box-shadow: none;
 }
-.calc-btn:hover,
-.theme-toggle:hover,
-.skin-quick-toggle:hover { background: var(--mat-on-glass-hover) !important; }
+.calc-btn:hover { background: var(--mat-on-glass-hover) !important; }
 .calc-btn:active { background: var(--mat-on-glass-active) !important; }
 
 /* ── Buttons stay clear glass ─────────────────────────────────────────────────
@@ -211,30 +204,29 @@
    goes near-opaque and the blur — the expensive part — comes off with it. The
    app previously had no such fallback anywhere. */
 @media (prefers-reduced-transparency: reduce) {
-  .top-nav,
   .bottom-nav,
-  .ink-toolbar,
-  .ink-token,
-  .ink-card,
-  .calc-toolbar,
-  .hw-toolbar,
-  .mode-tabs,
-  .recog-tabs,
-  .settings-tabs,
-  .pdf-split-presets,
-  .pdf-page-bar,
-  .pdf-slot-toolbar,
-  .pdf-outline-panel,
-  .pdf-library,
-  .pdf-answer-panel,
-  .pdf-ws-ratio-badge,
-  .pdf-ws-divider-grip,
-  .set-select-dropdown,
-  .export-dropdown-list,
-  .toast-popup,
-  .install-banner,
-  .pdf-role-dialog,
-  .pdf-range-dialog {
+.ink-toolbar,
+.ink-token,
+.ink-card,
+.calc-toolbar,
+.hw-toolbar,
+.mode-tabs,
+.recog-tabs,
+.settings-tabs,
+.pdf-split-presets,
+.pdf-page-bar,
+.pdf-slot-toolbar,
+.pdf-outline-panel,
+.pdf-library,
+.pdf-answer-panel,
+.pdf-ws-ratio-badge,
+.pdf-ws-divider-grip,
+.set-select-dropdown,
+.export-dropdown-list,
+.toast-popup,
+.install-banner,
+.pdf-role-dialog,
+.pdf-range-dialog {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
     background: var(--mat-content) !important;
@@ -294,14 +286,12 @@
 
 @media (prefers-reduced-motion: reduce) {
   .result-card,
-  .history-item,
-  .ocr-btn,
-  .calc-btn,
-  .mode-tab,
-  .settings-tab,
-  .theme-toggle,
-  .skin-quick-toggle,
-  .pdf-library-row {
+.history-item,
+.ocr-btn,
+.calc-btn,
+.mode-tab,
+.settings-tab,
+.pdf-library-row {
     transition: none !important;
     animation: none !important;
   }
@@ -319,8 +309,6 @@
 .calc-btn,
 .mode-tab,
 .settings-tab,
-.theme-toggle,
-.skin-quick-toggle,
 .bottom-nav button {
   min-height: var(--tap-min);
 }
@@ -336,8 +324,6 @@
 .calc-btn:focus-visible,
 .mode-tab:focus-visible,
 .settings-tab:focus-visible,
-.theme-toggle:focus-visible,
-.skin-quick-toggle:focus-visible,
 .bottom-nav button:focus-visible,
 .pdf-library-row:focus-visible {
   outline: 2px solid var(--accent);
@@ -771,8 +757,6 @@
     box-shadow 220ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 .pdf-ws-swap[hidden] { display: none; }
-
-
 
 /* It comes up to full when the divider is approached or held — the split is
    the common action, swapping is the occasional one. */
