@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 12 起，启动屏不再由 windowBackground 那张图决定。
+
+    系统自己画：拿 android:icon 摆在正中，底色取 windowSplashScreenBackground。
+    没设这一项时它会退到 Material You 的动态取色——也就是跟着用户的壁纸走。真机
+    上量到的是 #FAE7E5，一层粉；紧接着是一瞬 #FDFBF9，然后才是应用自己的
+    #F2F3F7。一次启动闪三种底色，而且其中两种不是这个 app 的颜色。
+
+    所以这里把它钉死成和网页那张启动图同一个值。values/ 里那 11 张 splash.png
+    留着给 Android 11 及更早的机器，它们仍然走老路。
+-->
+<resources>
+
+    <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splashBackground</item>
+        <!-- 老路那张图也留着：系统启动屏退场之后、WebView 画出第一帧之前，窗口
+             背景还会露一下，那一下也该是同一个颜色。 -->
+        <item name="android:background">@color/splashBackground</item>
+    </style>
+
+</resources>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    启动那一下的底色。
+
+    和网页里 base.css 那个 bg 变量是同一个值。原生启动图、系统启动屏、以及 WebView
+    画出第一帧之前的那个窗口背景，三处都用它——启动一次不该闪三种颜色。
+-->
+<resources>
+    <color name="splashBackground">#F2F3F7</color>
+</resources>
