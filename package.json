@@ -11,6 +11,7 @@
     "build:android": "npm run build && npm run sync:android",
     "preview": "vite preview",
     "check:licenses": "node scripts/check-licenses.mjs",
+    "check:upstream": "node scripts/upstream-survival.mjs",
     "test:answers": "node test/test_answer_matching.js",
     "test:pdf-open": "node test/test_pdf_open_performance.js",
     "test:ink-drag": "node test/test_ink_toolbar_drag_dom.js",

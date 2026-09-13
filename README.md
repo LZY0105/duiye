@@ -143,3 +143,8 @@ Java 实现一并删除。
 本仓库是 https://github.com/strangelion/LaTeXSnipper_mobile 的衍生作品，按 AGPL 要求保留原许可证与版权声明并公开完整源代码。
 
 答案匹配引擎来自 https://github.com/LZY0105/Math-answer-to-question-matching-model ，以 MIT 许可证发布，其版权与许可声明保留在相应源文件中。
+
+上游代码清理到哪一步了、剩下的是什么、为什么不再往下清，记在
+[docs/上游代码清理.md](docs/上游代码清理.md)。那个数字不抄在文档里，`npm run check:upstream` 现算。
+
+依赖的许可证相容性由 `npm run check:licenses` 守着：每一个会被打进 APK 的依赖都必须与 AGPL-3.0 相容。
