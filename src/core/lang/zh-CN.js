@@ -353,8 +353,8 @@ export default {
   "settings.devOptions": "开发者选项",
   "install.hint": "装到桌面，离线也能用",
   "install.action": "安装",
-  "about.licence": "© 2026 对页 · 依 <a href=\"https://www.gnu.org/licenses/agpl-3.0.html\" target=\"_blank\" rel=\"noopener\">GNU AGPL-3.0</a> 授权发布。",
-  "about.derived": "本软件基于 <a href=\"https://github.com/strangelion/LaTeXSnipper_mobile\" target=\"_blank\" rel=\"noopener\">LaTeXSnipper Mobile</a> 开发，在法律上是它的衍生作品，其版权与许可声明保留在 LICENSE 与 THIRD_PARTY_NOTICES.md 中。",
-  "about.rewritten": "应用本身已大幅重写：双栏工作区、矢量笔迹层、无限草稿纸、书架式文档库与手势翻页均为本项目所写；答案匹配引擎来自同一作者的 <a href=\"https://github.com/LZY0105/Math-answer-to-question-matching-model\" target=\"_blank\" rel=\"noopener\">Math-answer-to-question-matching-model</a>，以 MIT 发布。",
-  "about.source": "按 AGPL-3.0 的要求，本程序的完整源代码可供取得，见 <a href=\"https://github.com/LZY0105/duiye\" target=\"_blank\" rel=\"noopener\">github.com/LZY0105/duiye</a>；教材 PDF 与其中的题目、答案文本属于各自权利人，不随本软件分发。",
+  "about.licence": "© 2026 对页 · 依 <a href=\"https://opensource.org/licenses/MIT\" target=\"_blank\" rel=\"noopener\">MIT 许可证</a> 授权发布。",
+  "about.derived": "本项目最初从 <a href=\"https://github.com/strangelion/LaTeXSnipper_mobile\" target=\"_blank\" rel=\"noopener\">LaTeXSnipper Mobile</a> 分出，此后核心部分整体重写：上游的代码现已不在其中，许可证也随之由 AGPL-3.0 改为 MIT。改动的来龙去脉记在仓库的 docs/许可证变更.md，分界之前的版本仍然适用 AGPL-3.0。",
+  "about.rewritten": "双栏工作区、矢量笔迹层、无限草稿纸、书架式文档库与手势翻页均为本项目所写；答案匹配引擎来自同一作者的 <a href=\"https://github.com/LZY0105/Math-answer-to-question-matching-model\" target=\"_blank\" rel=\"noopener\">Math-answer-to-question-matching-model</a>，以 MIT 发布；Agent 面板与本机代理由 @WangJiyi 所写。",
+  "about.source": "完整源代码见 <a href=\"https://github.com/LZY0105/duiye\" target=\"_blank\" rel=\"noopener\">github.com/LZY0105/duiye</a>。教材 PDF 与其中的题目、答案文本属于各自权利人，不随本软件分发。",
 }

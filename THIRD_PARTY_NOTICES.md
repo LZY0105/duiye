@@ -7,4 +7,11 @@ links against either any more. The history is on `feature/with-ocr-preserved`.
 
 ## LaTeXSnipper Mobile base
 
-This repository is based on `strangelion/LaTeXSnipper_mobile` and remains under GNU AGPL-3.0. The original license and copyright notices are retained in `LICENSE`.
+This repository began as a fork of `strangelion/LaTeXSnipper_mobile`, which is
+licensed under the GNU AGPL-3.0. Its core has since been rewritten in full and
+the project is now released under the MIT licence; see `docs/许可证变更.md` for
+the cut-over point and the reasoning, and `LICENSE.AGPL-3.0` for the text that
+still governs every revision before it.
+
+Crediting where this started is a matter of fact, not of licence obligation, and
+it stays here either way.

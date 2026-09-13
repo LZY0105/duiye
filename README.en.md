@@ -28,7 +28,7 @@ The application is based on **LaTeXSnipper Mobile**:
 
 The upstream project is a local OCR and formula-editing application. It provided the Capacitor/Android shell, PDF rendering, settings, internationalization, and other basic capabilities. This repository is a **derivative work** of that project.
 
-The upstream project is licensed under the **GNU AGPL-3.0**. This repository therefore uses the same license and retains the original license and copyright notices.
+This repository began as a fork of that project, which is licensed under the **GNU AGPL-3.0**. Its core has since been rewritten in full — none of the upstream code remains — and the licence changed to **MIT** along with it. The cut-over point and the reasoning are in [docs/许可证变更.md](docs/许可证变更.md).
 
 ### 2. Answer matching engine
 
@@ -40,7 +40,7 @@ The engine used for side-by-side question and answer matching comes from a separ
 
 The engine solves this problem: when two PDFs share no identifier other than their printed content, determine which entry in the answer key belongs to each exercise, or refuse to answer. It evaluates the least expensive signals first: hierarchical question numbers from bookmarks, table-of-contents alignment, math-weighted similarity, and bounded sequence alignment. It will not return an automatic answer until the two books have been verified as a matching pair.
 
-The engine is released under the **MIT License** (© 2026 LZY0105), which is compatible with this repository's AGPL-3.0 license.
+The engine is released under the **MIT License** (© 2026 LZY0105), the same as this repository.
 
 ---
 
@@ -122,8 +122,21 @@ The Gradle project previously referenced two dependencies that were missing from
 
 ## License
 
-This project follows the upstream **GNU AGPL-3.0** license. See [LICENSE](LICENSE).
+This project is released under the **MIT License**. See [LICENSE](LICENSE).
 
-This repository is a derivative work of https://github.com/strangelion/LaTeXSnipper_mobile. It retains the original license and copyright notices and publishes the complete source code as required by the AGPL.
+It began as a fork of https://github.com/strangelion/LaTeXSnipper_mobile and inherited that
+project’s AGPL-3.0. After the core was rewritten the licence changed to MIT —
+**every revision before the cut-over remains under AGPL-3.0**, whose text is kept in
+[LICENSE.AGPL-3.0](LICENSE.AGPL-3.0). History was not rewritten. Where the cut-over
+is, what it rests on, and what did not change with it: [docs/许可证变更.md](docs/许可证变更.md).
 
-The answer matching engine comes from https://github.com/LZY0105/Math-answer-to-question-matching-model and is released under the MIT License. Its copyright and license notices remain in the corresponding source files.
+How far the upstream cleanup got, what is left and why it stops there:
+[docs/上游代码清理.md](docs/上游代码清理.md). The figure is not copied into the docs —
+`npm run check:upstream` computes it.
+
+The answer matching engine comes from https://github.com/LZY0105/Math-answer-to-question-matching-model
+and is released under the MIT License too. Its copyright and license notices remain in
+the corresponding source files.
+
+The Agent panel and its local proxy were written by [@WangJiyi](https://github.com/WangJiyi),
+who holds the copyright to them.

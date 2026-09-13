@@ -6,7 +6,7 @@
 // tells the reader to do next, and whether a row opens on a double-tap.
 
 import assert from 'node:assert/strict';
-import { readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 import { join, dirname } from 'node:path';
@@ -1975,7 +1975,7 @@ check('the app tells the person holding it what it is licensed under — in ever
 
   for (const lang of ['zh-CN', 'zh-TW', 'en']) {
     const pack = $read(`src/core/lang/${lang}.js`);
-    assert.ok(/AGPL-3\.0/.test(pack), `${lang}: AGPL-3.0 obliges the build to say so where it can be read`);
+    assert.ok(/MIT/.test(pack), `${lang}: 拿到包的人有权在界面上读到它的许可证`);
     assert.ok(/LaTeXSnipper_mobile/.test(pack), `${lang}: and to credit the work it derives from`);
     assert.ok(/Math-answer-to-question-matching-model/.test(pack), `${lang}: and the engine it vendors`);
     assert.ok(/github\.com\/LZY0105\/duiye/.test(pack), `${lang}: and where the source can be had`);
@@ -1987,6 +1987,18 @@ check('the version in the notice comes from the build, not a literal', () => {
   assert.ok(/__APP_VERSION__/.test(js),
     'a notice that names the wrong version is worse than one that names none');
   assert.ok(/aboutVersion/.test($read('index.html')));
+});
+
+check('换了许可证，旧的那一份原文仍然留着', () => {
+  // AGPL 不是「以前用过的东西」——分界点之前的每一个版本现在仍然适用它，而那些
+  // 版本就在这个仓库的历史里。原文一删，那些版本就成了没有许可证的代码。
+  assert.ok(existsSync(join(ROOT, 'LICENSE.AGPL-3.0')),
+    'LICENSE.AGPL-3.0 管着分界点之前的所有版本，不能删');
+  assert.ok(/GNU AFFERO GENERAL PUBLIC LICENSE/.test($read('LICENSE.AGPL-3.0')),
+    '而且要是原文，不是一句说明');
+  assert.ok(/MIT License/.test($read('LICENSE')), '现在的 LICENSE 是 MIT');
+  assert.ok(existsSync(join(ROOT, 'docs/许可证变更.md')),
+    '分界点在哪、凭什么可以改，要写下来——这是将来唯一拿得出的东西');
 });
 
 check('the notices file no longer credits what was deleted', () => {

@@ -1,9 +1,16 @@
 #!/usr/bin/env node
-// 检查每一个会被打进 APK 的依赖，许可证是否与本项目的 AGPL-3.0 相容。
+// 检查每一个会被打进 APK 的依赖，许可证是否与本项目的 MIT 相容。
 //
-// 为什么这件事值得有一个检查：AGPL 是 copyleft，整份作品必须以 AGPL 发布。
-// 往里混进一个不相容的依赖，不是「有个警告」，是整个分发行为失去许可 —— 而这
-// 种错误极难在别处被发现，它不会让构建失败，也不会让测试变红，装出来的包跑得
+// 方向和 AGPL 时代**反过来**了，这一点值得写清楚，否则下一个人会照着旧的直觉
+// 改错：
+//
+//   AGPL 时代  本作品条款更严，宽松许可的东西都能并进来，要挡的是「比 AGPL
+//              还严或条款冲突」的那几个（GPL-2.0-only、SSPL、BUSL）。
+//   MIT 时代   本作品条款最宽松，于是**copyleft 的东西一个都不能并进来**。
+//              混进一个 GPL/AGPL 依赖，整份作品就必须以 GPL/AGPL 发布，而
+//              LICENSE 写的是 MIT —— 那是一份没有履行的许可，分发行为失去依据。
+//
+// 这种错误极难在别处被发现：它不会让构建失败，不会让测试变红，装出来的包跑得
 // 好好的。
 //
 // 只看**会分发的**那些。devDependencies（vite、jsdom、sharp……）在构建机上跑完
@@ -17,11 +24,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-// 可以并入 AGPL-3.0 作品的许可证。
+// 可以并入 MIT 作品的许可证。
 //
-// 判断标准是单向的：这些许可证允许把代码并入一个以更严格条款分发的作品。
-// 宽松许可证（MIT/BSD/ISC/Apache-2.0）都可以；弱 copyleft（MPL-2.0、LGPL）
-// 按文件/按库隔离，也可以；GPL-3.0 与 AGPL-3.0 之间 FSF 明确规定可以互相链接。
+// 判断标准：这些许可证不要求「衍生作品必须以同样条款发布」。宽松许可
+// （MIT/BSD/ISC/Apache-2.0）当然可以；公有领域式的（0BSD、Unlicense、CC0）
+// 可以；MPL-2.0 是**按文件**的弱 copyleft —— 它只要求被修改的那些文件保持
+// MPL，不传染到整份作品，所以作为不加修改的依赖使用是可以的。
 //
 // 不在这张表上的不等于一定不行，而是「我没想过，先停下来让人看一眼」。这比
 // 维护一张「禁止」的表安全 —— 漏写一个禁止项是静默放行，漏写一个允许项只是
@@ -31,18 +39,28 @@ const COMPATIBLE = new Set([
   'BSD-2-Clause', 'BSD-3-Clause', 'BSD-3-Clause-Clear',
   'BlueOak-1.0.0', 'Unlicense', 'CC0-1.0', 'Python-2.0', 'Zlib',
   'MPL-2.0',
-  'LGPL-2.1-or-later', 'LGPL-3.0-or-later', 'LGPL-3.0-only',
-  'GPL-3.0-or-later', 'AGPL-3.0-only', 'AGPL-3.0-or-later',
 ]);
 
-// GPL-2.0-only 是最容易被放过去的一个：它和 AGPL-3.0 **不**相容 —— GPL-2 没有
-// 「或更新版本」这一句时，无法升到 GPL-3 系列。所以这里单独点名，报错时给出
-// 的理由要说得出口，而不是一句「不在白名单里」。
+// copyleft 的那些。它们不是「质量不好」，是**方向不对**：把它们并进来，整份
+// 作品就得跟着它们走，而 LICENSE 写的是 MIT。
+//
+// LGPL 单独说一句：动态链接的情况下它允许被更宽松的作品调用，但这个项目把
+// 依赖打进同一个 JS 包里，那是静态链接，条件就不成立了。所以这里一律拦下，
+// 真遇到了再人工判断具体那一个是怎么用的。
 const KNOWN_INCOMPATIBLE = new Map([
-  ['GPL-2.0-only', 'GPL-2.0 不带「or later」时无法升级到 GPL-3 系列，与 AGPL-3.0 不相容'],
-  ['GPL-2.0', '同上（旧写法）'],
-  ['SSPL-1.0', 'SSPL 不是 OSI 认可的自由软件许可证，条款与 AGPL 冲突'],
-  ['BUSL-1.1', '商用源代码许可证，限制使用场景，不能并入 AGPL 作品'],
+  ['GPL-2.0-only', 'GPL 是 copyleft：并入之后整份作品必须以 GPL 发布，而 LICENSE 是 MIT'],
+  ['GPL-2.0', 'GPL 是 copyleft：并入之后整份作品必须以 GPL 发布，而 LICENSE 是 MIT'],
+  ['GPL-2.0-or-later', 'GPL 是 copyleft：并入之后整份作品必须以 GPL 发布，而 LICENSE 是 MIT'],
+  ['GPL-3.0-only', 'GPL 是 copyleft：并入之后整份作品必须以 GPL 发布，而 LICENSE 是 MIT'],
+  ['GPL-3.0-or-later', 'GPL 是 copyleft：并入之后整份作品必须以 GPL 发布，而 LICENSE 是 MIT'],
+  ['AGPL-3.0-only', 'AGPL 比 GPL 更进一步，连网络访问都触发源码义务；不能并入 MIT 作品'],
+  ['AGPL-3.0-or-later', 'AGPL 比 GPL 更进一步，连网络访问都触发源码义务；不能并入 MIT 作品'],
+  ['LGPL-2.1-only', 'LGPL 的宽松只在动态链接时成立，而这里依赖是打进同一个 JS 包的'],
+  ['LGPL-2.1-or-later', 'LGPL 的宽松只在动态链接时成立，而这里依赖是打进同一个 JS 包的'],
+  ['LGPL-3.0-only', 'LGPL 的宽松只在动态链接时成立，而这里依赖是打进同一个 JS 包的'],
+  ['LGPL-3.0-or-later', 'LGPL 的宽松只在动态链接时成立，而这里依赖是打进同一个 JS 包的'],
+  ['SSPL-1.0', 'SSPL 不是 OSI 认可的自由软件许可证'],
+  ['BUSL-1.1', '商用源代码许可证，限制使用场景'],
 ]);
 
 const root = process.cwd();
@@ -123,7 +141,7 @@ for (const row of shipped) {
   if (!isCompatible(row.license)) bad.push(row);
 }
 
-console.log('本项目以 AGPL-3.0 分发，以下是会被打进 APK 的依赖：\n');
+console.log('本项目以 MIT 分发，以下是会被打进 APK 的依赖：\n');
 for (const [lic, n] of [...byLicense].sort((a, b) => b[1] - a[1])) {
   const mark = lic === 'UNKNOWN' ? '?' : isCompatible(lic) ? '✓' : '✗';
   console.log(`  ${mark} ${String(n).padStart(3)}  ${lic}`);
@@ -143,7 +161,7 @@ let failed = false;
 
 if (bad.length) {
   failed = true;
-  console.log('\n与 AGPL-3.0 不相容：');
+  console.log('\n与 MIT 不相容（copyleft 会把整份作品拉过去）：');
   for (const r of bad) {
     const why = KNOWN_INCOMPATIBLE.get(r.license.replace(/[()]/g, '').trim());
     console.log(`  ✗ ${r.name}@${r.version} —— ${r.license}`);
@@ -155,11 +173,9 @@ if (unknown.length) {
   failed = true;
   console.log('\n没写许可证，得人工确认：');
   for (const r of unknown) console.log(`  ? ${r.name}@${r.version}`);
+  console.log('\n没写许可证 ≠ 可以随便用。默认是「保留所有权利」，也就是默认不许分发。');
 }
 
-if (failed) {
-  console.log('\n没写许可证 ≠ 可以随便用。默认是「保留所有权利」，也就是默认不许分发。');
-  process.exit(1);
-}
+if (failed) process.exit(1);
 
 console.log('\n全部相容。');
