@@ -403,7 +403,9 @@
   border-radius: var(--nav-radius);
   border: 0;
   background: var(--glass-bg);
-  backdrop-filter: var(--nav-blur);
+  /* 不磨砂——理由见下面 .bottom-nav 那条规则上的注释。
+     这一条才是真正生效的那个：`[data-skin="liquid-math"] .bottom-nav` 的
+     特异性高过底下那条光秃秃的 `.bottom-nav`，只改那边不起作用。 */
   box-shadow: var(--glass-shadow);
   padding: 6px 10px;
   padding-bottom: max(6px, var(--safe-b));
@@ -773,12 +775,23 @@ a:hover { color: var(--accent-hover); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ── Bottom tab bar: Liquid Glass Capsule / Bar ── */
+/* ── 底部标签栏：半透，但不磨砂 ──
+ *
+ * 别处的玻璃留着——页码条、栏工具条、缩放牌都浮在自己那一栏的边缘，糊掉的是
+ * 页边空白。底栏不一样：它横跨屏幕最底下一条，而那里正是正在读的那几行字。
+ * 磨砂一加，底下那行手写就认不出来了。
+ *
+ * 这是在真机上看出来的。此前 lightningcss 把无前缀的 backdrop-filter 丢掉了
+ * （见 test_ink_toolbar_theme.js 里那条断言），玻璃从来没生效，底栏一直是纯
+ * 半透的；修好之后两张截图一对照，反而是原来那个更好用——底栏后面那行
+ * 「从而由行列式定义可知」，磨砂版读不出来。
+ *
+ * 所以这里**故意**不要 blur，不是又坏了一次。一个看手写内容的软件，清楚比
+ * 好看要紧。半透的底色、描边和阴影都留着，它照样读得出是一层浮起来的东西。 */
 .bottom-nav {
   position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
   background: var(--hdr-bg);
   border-radius: var(--nav-radius) var(--nav-radius) 0 0;
-  backdrop-filter: var(--nav-blur);
   border-top: var(--nav-border);
   box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.6);
   display: flex; justify-content: space-around;
