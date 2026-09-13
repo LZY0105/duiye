@@ -57,7 +57,7 @@
 
 围绕识别栈的周边设施也一并清掉了：模型打包脚本 `scripts/package-models.js` 与调用它的 `package-models.yml`、ONNX 量化脚本 `scripts/quantize.py`、七个 Python 模型测试与它们共用的 `test_utils.py`，以及运行这些测试的 `test/run_tests.sh`。它们全部来自上游，而识别功能删掉之后，它们指向的东西一个都不在了：打包脚本读的 `public/models/` 目录不存在，量化脚本里写死的是另一台机器上的绝对路径，`run_tests.sh` 点名 22 个测试文件、其中 8 个在这次清理之前就已经不在仓库里。测试的唯一入口是 `npm test`。
 
-上游留下的代码也在逐步换掉。整份工程约五万两千行手写代码里，还逐字保留着上游原文的是 **约 700 行、1.3%**（`npm run check:upstream` 现算）（不含 `LICENSE`，也不含 Gradle wrapper、Capacitor 模板、`package-lock.json` 这些换谁跑都一样的生成物）。`src/core/logger.js`、`i18n.js`、`update-checker.js`、下拉选择器与背景动效都已重写，`status.js`、`splash.js`、`constants.js` 因为无人调用而直接删除，iOS 构建那一套（两个脚本加两份 `ExportOptions.plist`）因为在这个工程里从来就跑不起来而整套移除。
+上游留下的代码也在逐步换掉。整份工程约五万两千行手写代码里，还逐字保留着上游原文的是 **约 700 行、1.3%**——不含 `LICENSE`，也不含 Gradle wrapper、Capacitor 模板、`package-lock.json` 这些换谁跑都一样的生成物。这个数不抄在文档里，`npm run check:upstream` 现算。`src/core/logger.js`、`i18n.js`、`update-checker.js`、下拉选择器与背景动效都已重写，`status.js`、`splash.js`、`constants.js` 因为无人调用而直接删除，iOS 构建那一套（两个脚本加两份 `ExportOptions.plist`）因为在这个工程里从来就跑不起来而整套移除。
 
 重写最初不是为了摆脱许可证，而是因为逐个读过去之后，其中好几处本来就是坏的（清到后来上游的表达确实归零了，许可证也随之改为 MIT，见 [docs/许可证变更.md](docs/许可证变更.md)）：`exportAsZip` 调用了从未加载的 JSZip，「检查更新」查的是上游仓库的发布，下拉菜单的选项文字只在初始化时抄一份、语言一换就停在旧语言上，CI 里那一步用 `sed` 把算好的 `versionCode` 覆盖成一个小两个数量级的值、于是 CI 出的包装不到本地装过的机器上。
 
@@ -106,13 +106,27 @@
 | 离线 | Service Worker（`public/sw.js`） |
 | 多语言 | 自研扁平词表（`src/core/i18n.js`），简体 / 繁体 / English |
 
-多语言目前覆盖设定页与浮动笔迹栏；「练习」这一屏的其余部分（工作区外壳、答案面板、匹配理由）词条已经写好——五个语言文件各 380 条——但接线还没做完，那部分文字暂时仍是硬编码的中文。
+多语言目前覆盖设定页与浮动笔迹栏；「练习」这一屏的其余部分（工作区外壳、答案面板、匹配理由）词条已经写好——三个语言文件各 324 条——但接线还没做完，那部分文字暂时仍是硬编码的中文。日文与韩文撤掉了，i18n 那一层没动：把词表放回 `src/core/lang/`、在 `LANGUAGES` 里加一行就回来。
 
 有一类中文明确不会翻译：`question-id`、`body-structure`、`outline-classify`、`pair-verifier`、`toc-filter`、`glyph-map` 六个文件里的中文是正则——「例题|习题|第X题」「答案|解答|证明」「目录|索引」——它们是引擎用来解析中文教材的模式，不是显示给人看的文字。翻译掉它们，题号识别与配套判定会当场失效。
 
-预缓存的只有 index.html 每次启动都按名字要的那 9 个文件，外加 pdf.js 打开文档时立刻拉起的 worker。刻意不在其中的有两类：一是 Vite 产出的应用包，文件名带内容哈希、每次构建都变，本来就没法静态列出（fetch 走网络优先，顺手写进缓存——对一个应用包来说这也是更正确的策略，陈旧的包比慢的包更糟）；二是 168 个字符映射表、标准 PDF 字体和 KaTeX / MathLive 的字形文件共 245 个，只有文档真的用到时才取，预缓存它们等于把首次启动花在多数人永远不会打开的文件上。
+预缓存的只有 6 项：首页、manifest、图标、pdf.js 及其 worker、KaTeX 的样式表。刻意不在其中的有两类：一是 Vite 产出的应用包，文件名带内容哈希、每次构建都变，本来就没法静态列出（fetch 走网络优先，顺手写进缓存——对一个应用包来说这也是更正确的策略，陈旧的包比慢的包更糟）；二是 168 个字符映射表、16 个标准 PDF 字体和 20 个 KaTeX 字形共 204 个文件，只有文档真的用到时才取，预缓存它们等于把首次启动花在多数人永远不会打开的文件上。
+
+这张表出过一次真实故障：它曾经有 17 项，其中 13 项指向已经随识别栈删掉的文件（ONNX 运行时、公式识别模型）。每一项都被单独 catch 并警告，所以没有报错，只是每次安装打印十三条警告然后缓存了四个文件——而没有人读安装日志。现在 `test_ui_interactions.js` 盯着它：表里每一项都必须在源码树里真的存在。
 
 `/vendor/` 下的东西是缓存优先的：它们是钉在仓库里的第三方构建，在同一个应用版本内不会变，缓存里的副本永远是对的答案。
+
+## 原生层与 Agent 的现状
+
+仓库里有 `src/agent/`、`src/native/`、`native/agent-proxy/` 和 `android/app/src/main/cpp/`，看起来像两套已经接好的东西。**它们都还没有工作，而且是两套互不相通的机制**——先说清楚，免得往错的那一套上加代码。
+
+**① 进程内的 JNI 桥**（`libduiye_proxy.so`，随 APK 走）。三个位置：`agent`、`ocr`、`match`，都还空着——问它，它诚实地回 `UNIMPLEMENTED`。开机会探测一次并写进日志（设定 → 开发者选项 → 查看日志），所以「这一层还活着吗」在真机上看得见，不用连调试器。
+
+`match` 那一位和另外两位不一样：答案匹配**现在就有实现**，在 JS 那边。那个位置是留给以后把计算搬到 C++ 的，JS 这一侧的口子已经开好（`preparePair({ matcher })`，契约在 `src/pdf/native-matcher.js`）。**闸门不经过那一层**——角色判定、配对身份、OCR 上限、区域选择都留在 `matching-engine.js`，而且它会对交回来的每一条结论再钳一次。换句话说：交出去的是计算，不是判断。
+
+**② 本机 HTTP 代理**（`agent-client.js` → `127.0.0.1:8787` → `native/agent-proxy/`）。Agent 面板走的是这一条。但那个 C++ 程序**没有被打进 APK**——Android 的 CMake 只编 JNI 那两个源文件，`native/agent-proxy/` 是另一个 CMake 工程，没有构建步骤打包它、也没有代码启动它。所以平板上那个端口没人在听，Agent 面板按下去总是「无法连接本地 Agent 代理」。它是开发期的原型：在电脑上跑起来，再 `adb reverse tcp:8787 tcp:8787` 转过去。
+
+要接 OCR，走 ①。
 
 ## 开发与测试
 
@@ -120,7 +134,24 @@
 npm install
 npm run dev
 npm run build
-npm test
+npm test              # 38 个测试文件，一条命令，全绿或者不绿
+```
+
+另有两个检查，都是一次真实故障留下来的：
+
+```bash
+npm run check:licenses   # 会进 APK 的依赖，许可证是否与 MIT 相容
+npm run check:upstream   # 还有多少行逐字来自上游，按可改写程度分档
+```
+
+`check:licenses` 挡的是 copyleft 依赖：混进来一个，整份作品就得跟着它走，而 `LICENSE` 写的是 MIT。这种错误不会让构建失败、不会让测试变红、装出来的包跑得好好的——只有专门去查才看得见。
+
+`check:upstream` 需要一个指向上游的远端；没有就先加，push 地址故意设成无效值防手滑：
+
+```bash
+git remote add upstream https://github.com/strangelion/LaTeXSnipper_mobile.git
+git remote set-url --push upstream no-push-to-upstream
+git fetch upstream
 ```
 
 真实教材语料（`corpus/`）属于受版权保护的教材文本，**不随仓库分发**；缺少语料时相关测试会自动跳过，`npm test` 仍然通过。若要跑全量回归，将语料放在 `corpus/data.json`，或用 `FIND_ENGINE_CORPUS` 指向它。
