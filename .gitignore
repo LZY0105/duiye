@@ -12,7 +12,7 @@ Thumbs.db
 keystore.properties
 !debug.keystore
 
-# Android / iOS
+# Android
 android/app/build/
 android/build/
 android/.gradle/
@@ -22,11 +22,7 @@ android/local.properties
 .gradle-local/
 .gradle-hybrid*/
 .build-temp/
-ios/build/
-ios/Pods/
-ios/*.xcworkspace
 *.apk
-*.ipa
 *.aab
 keystore_b64.txt
 keystore_b64_clean.txt

@@ -5,7 +5,6 @@
   "backgroundColor": "#f2f3f7",
   "server": {
     "androidScheme": "http",
-    "iosScheme": "http",
     "hostname": "localhost",
     "headers": {
       "Cross-Origin-Opener-Policy": "same-origin",
