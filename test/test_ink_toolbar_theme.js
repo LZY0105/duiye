@@ -389,6 +389,22 @@ for (const f of sheets) {
     !/\[data-theme\s*=\s*["']?dark/.test(selectors),
     `${f} carries no dark-theme selector`,
   );
+
+  // 不许手写 -webkit-backdrop-filter。
+  //
+  // 这不是风格洁癖，是一次真实故障：Vite 用 lightningcss 压缩 CSS，而它把
+  // -webkit-backdrop-filter 和 backdrop-filter 当成同一个逻辑属性的两种写法，
+  // 看到同值的两条声明就按「后写的赢」去重——这些文件里手写的前缀都在后面。
+  // 于是压缩产物里只剩前缀版，而平板的 WebView（Chrome 138）支持无前缀、
+  // **不认** -webkit-backdrop-filter。
+  //
+  // 实测后果：整个应用 25 处玻璃在真机上一处都没生效，而 dev server 不压缩，
+  // 所以在电脑上看一切正常。改法是只写无前缀那条，前缀交给 lightningcss 按
+  // targets 生成——它会两条都输出。
+  ok(
+    !/-webkit-backdrop-filter/.test(selectors),
+    `${f} 不该手写 -webkit-backdrop-filter：压缩器会因此丢掉无前缀那条`,
+  );
 }
 
 ok(

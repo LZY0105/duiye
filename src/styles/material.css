@@ -103,7 +103,6 @@
 .status-bar,
 #mathField {
   backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
   background: var(--mat-content) !important;
   border: 1px solid var(--mat-content-hairline);
   box-shadow: var(--mat-content-shadow);
@@ -113,7 +112,6 @@
    than a card — it is asking to receive something. */
 .drop-zone {
   backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
   background: var(--mat-content-sunken) !important;
   border: 1.5px dashed var(--mat-content-hairline);
   box-shadow: none;
@@ -124,7 +122,6 @@
    fill and a divider, which is what this now is. */
 .pdf-library-row {
   backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
   background: transparent !important;
   border: 0;
   border-bottom: 1px solid var(--mat-content-hairline);
@@ -137,7 +134,6 @@
    behind it does nothing except allocate a compositing layer. */
 .cam-rotate-track canvas {
   backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -160,7 +156,6 @@
 .ink-seg-btn,
 .ink-tool.is-selected::before {
   backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
 }
 
 /* Controls resting on chrome glass need a fill of their own once the blur is
@@ -228,7 +223,6 @@
 .pdf-role-dialog,
 .pdf-range-dialog {
     backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
     background: var(--mat-content) !important;
     border-color: var(--mat-content-hairline) !important;
   }
@@ -238,7 +232,6 @@
   .nav-glass-lens,
   .segmented-glass-lens {
     backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
     background: var(--accent-light) !important;
   }
 
@@ -249,7 +242,6 @@
   .pdf-role-overlay,
   .pdf-range-overlay {
     backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
     background: rgba(15, 23, 42, 0.55) !important;
   }
 }
@@ -362,7 +354,6 @@
   .pdf-ws-divider.is-dragging .pdf-ws-divider-grip,
   .draggable-glass-capsule.is-glass-dragging {
     backdrop-filter: url(#lg-refract) blur(3px) saturate(180%);
-    -webkit-backdrop-filter: url(#lg-refract) blur(3px) saturate(180%);
   }
 }
 
@@ -375,7 +366,6 @@
   .pdf-ws-divider.is-dragging .pdf-ws-divider-grip,
   .draggable-glass-capsule.is-glass-dragging {
     backdrop-filter: var(--glass-blur, blur(20px) saturate(180%));
-    -webkit-backdrop-filter: var(--glass-blur, blur(20px) saturate(180%));
   }
 }
 
@@ -536,7 +526,6 @@
      the work of the outline. What is left transmits. */
   background: transparent !important;
   backdrop-filter: saturate(125%) !important;
-  -webkit-backdrop-filter: saturate(125%) !important;
   /* Cast and bevel only — no inner white to muddy the transmission. The lower
      inset is a thin occlusion notch, not a highlight: it is what makes the
      bottom edge read as thickness. */
@@ -560,7 +549,6 @@
 @supports (backdrop-filter: url(#lg-refract-soft)) {
   .segmented-glass-lens {
     backdrop-filter: url(#lg-refract-soft) !important;
-    -webkit-backdrop-filter: url(#lg-refract-soft) !important;
   }
 }
 
@@ -602,7 +590,6 @@
   .nav-glass-lens,
   .segmented-glass-lens {
     backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
     box-shadow: none !important;
   }
   .nav-glass-lens::before,
@@ -638,7 +625,6 @@
      sheet reads as lit from the front rather than as a hole in the page. */
   background: rgba(15, 23, 42, 0.28) !important;
   backdrop-filter: blur(10px) saturate(120%) !important;
-  -webkit-backdrop-filter: blur(10px) saturate(120%) !important;
 }
 
 .pdf-role-dialog {
@@ -648,7 +634,6 @@
      clear for the lens. */
   background: linear-gradient(rgba(255, 255, 255, 0.97), rgba(255, 255, 255, 0.97)) padding-box !important;
   backdrop-filter: saturate(150%) !important;
-  -webkit-backdrop-filter: saturate(150%) !important;
   box-shadow:
     /* the rim, drawn inside the border box so it sits on the bevel */
     inset 0 1px 0 rgba(255, 255, 255, 0.95),
@@ -660,7 +645,6 @@
 @supports (backdrop-filter: url(#lg-refract)) {
   .pdf-role-dialog {
     backdrop-filter: url(#lg-refract) saturate(150%) !important;
-    -webkit-backdrop-filter: url(#lg-refract) saturate(150%) !important;
   }
 }
 
@@ -692,12 +676,10 @@
 @media (prefers-reduced-transparency: reduce) {
   .pdf-role-overlay {
     backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
   }
   .pdf-role-dialog {
     border-color: rgba(15, 23, 42, 0.18) !important;
     backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
   }
 }
 
@@ -848,7 +830,6 @@
 /* The panel is content, not chrome: it is what the reader came to read. */
 .pdf-answer-panel {
   backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
   background: var(--mat-content) !important;
   border-top: 1px solid var(--mat-content-hairline);
 }
@@ -990,7 +971,6 @@
     0 4px 12px -6px rgba(15, 23, 42, 0.14),
     inset 0 -4px 6px -6px rgba(15, 23, 42, 0.12);
   backdrop-filter: saturate(125%);
-  -webkit-backdrop-filter: saturate(125%);
   transition:
     transform 180ms cubic-bezier(0.32, 0.72, 0, 1),
     box-shadow 180ms cubic-bezier(0.32, 0.72, 0, 1),
