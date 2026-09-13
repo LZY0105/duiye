@@ -19,12 +19,16 @@
 import { t } from '../core/i18n.js';
 import {
   ENTRY_KINDS,
+  kindKeyFor,
   activeEntry,
   activePosition,
   canCycle,
   deckLength,
   entryAtOffset,
 } from './deck-state.js';
+
+/** 摞里这一项叫什么 —— 键在 deck-state，文案在这里。 */
+const kindLabelFor = (kind) => t(kindKeyFor(kind));
 
 /** Within this much travel the press is still a tap. */
 const TAP_SLOP = 6;
@@ -169,7 +173,7 @@ export class DeckStrip {
     if (!entry) return;
 
     const described = this.handlers.describe?.(entry) || {};
-    const kindLabel = entry.kind === ENTRY_KINDS.SCRATCH ? t('deck.scratch') : t('deck.pdf');
+    const kindLabel = kindLabelFor(entry.kind);
     const set = (role, fn) => {
       const node = this.el.querySelector(`[data-role="${role}"]`);
       if (node) fn(node);
@@ -246,7 +250,7 @@ export class DeckStrip {
       select.setAttribute('role', 'menuitemradio');
       select.setAttribute('aria-checked', String(active));
       select.innerHTML = `
-        <span class="deck-row-kind">${entry.kind === ENTRY_KINDS.SCRATCH ? t('deck.scratch') : t('deck.pdf')}</span>
+        <span class="deck-row-kind">${kindLabelFor(entry.kind)}</span>
         <span class="deck-row-name"></span>
         <span class="deck-row-meta"></span>`;
       select.querySelector('.deck-row-name').textContent = described.name || t('deck.untitled');

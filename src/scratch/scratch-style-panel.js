@@ -124,7 +124,14 @@ export function paintTile(canvas, style, { width = TILE_W, height = TILE_H } = {
  *   `onApplied` receives the committed record.
  * @returns {Promise<{applied: boolean, pad?: Object}>}
  */
-export function openScratchStylePanel({ pad, onPreview, onApplied, onNotice, compact = false }) {
+/**
+ * @param {Function} [save] 写回样式的那一下。默认写草稿纸；笔记本传自己的
+ *   （见 note-store.setNotebookStyle）。两边的记录形状一样 —— 都有 id、
+ *   style 和 revision —— 所以这个面板只需要换一个写入口，不需要第二份。
+ */
+export function openScratchStylePanel({
+  pad, onPreview, onApplied, onNotice, compact = false, save = setScratchpadStyle,
+}) {
   return new Promise((resolve) => {
     // Bound to the resource and the revision the panel opened on. If the pad
     // changed by another route in the meantime, the write is refused rather
@@ -190,7 +197,7 @@ export function openScratchStylePanel({ pad, onPreview, onApplied, onNotice, com
       busy = true;
       render();
       try {
-        const saved = await setScratchpadStyle(resourceId, draft, {
+        const saved = await save(resourceId, draft, {
           expectedRevision: openedRevision === pad.revision ? undefined : openedRevision,
         });
         // The preference is a separate write, and a separate outcome. If only it

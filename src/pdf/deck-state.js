@@ -23,11 +23,42 @@
 // always names an entry that exists (or is null for an empty deck); no two
 // entries in ONE deck reference the same resource.
 
-/** What an entry points at. A scratchpad is never matched against a PDF. */
+/**
+ * What an entry points at. A scratchpad is never matched against a PDF.
+ *
+ * NOTE 是笔记本。它和 PDF 一样是一份分页文档，在同一个 PdfPane 里翻 —— 差别只在
+ * 从哪儿取：一本书从 pdf-library，一本本子从 note-store（见 note-document.js）。
+ * 所以下面凡是「不是草稿纸就当 PDF」的地方，对笔记本大多是对的；真正要分开的是
+ * 取资源和「这东西能不能拿去对题」这两件事。
+ */
 export const ENTRY_KINDS = Object.freeze({
   PDF: 'pdf',
   SCRATCH: 'scratch',
+  NOTE: 'note',
 });
+
+/**
+ * 摞里这一项在界面上叫什么。
+ *
+ * 原来三处 UI 各写了一遍「不是草稿纸就是 PDF」。加进笔记本之后那句话就错了 ——
+ * 一本本子会被标成 PDF，三个地方都是，而且都不报错。同一个问题只该有一个答案。
+ *
+ * 文案键从这里回去，而不是在这里翻译：这个文件是 DOM-free 也 i18n-free 的，
+ * 顺序和类型是数据的性质。
+ */
+export function kindKeyFor(kind) {
+  if (kind === ENTRY_KINDS.SCRATCH) return 'deck.scratch';
+  if (kind === ENTRY_KINDS.NOTE) return 'deck.note';
+  return 'deck.pdf';
+}
+
+/** 在 PdfPane 里翻的那些 —— 笔记本和 PDF 走同一条装载路径。 */
+export const PAGED_KINDS = Object.freeze([ENTRY_KINDS.PDF, ENTRY_KINDS.NOTE]);
+
+/** 这一项是分页文档（书或本子）吗。 */
+export function isPagedKind(kind) {
+  return kind === ENTRY_KINDS.PDF || kind === ENTRY_KINDS.NOTE;
+}
 
 /** Why a move was refused. Callers show these; they never guess a remedy. */
 export const DECK_ERRORS = Object.freeze({
@@ -57,13 +88,18 @@ const freeze = (o) => Object.freeze(o);
 /**
  * One item in a deck.
  *
- * `resourceId` is a document id from pdf-library for a PDF, or a pad id from
- * the scratch store for a scratchpad. Two entries may share a resource across
- * DIFFERENT decks — that is the "same PDF in both panes" case — but never
- * within one.
+ * `resourceId` is a document id from pdf-library for a PDF, a pad id from the
+ * scratch store for a scratchpad, or a notebook id from note-store for a note.
+ * Two entries may share a resource across DIFFERENT decks — that is the "same
+ * PDF in both panes" case — but never within one.
  */
 export function createEntry({ id, kind, resourceId } = {}) {
-  const entryKind = kind === ENTRY_KINDS.SCRATCH ? ENTRY_KINDS.SCRATCH : ENTRY_KINDS.PDF;
+  // 认得的照收，认不得的当 PDF。存盘里读回来一个未来版本写的 kind 时，退成 PDF
+  // 会让它去 pdf-library 里找一个不存在的 id，然后干净地开不开 —— 好过当成草稿纸
+  // 塞进一个不会翻页的面板里。
+  const entryKind = kind === ENTRY_KINDS.SCRATCH || kind === ENTRY_KINDS.NOTE
+    ? kind
+    : ENTRY_KINDS.PDF;
   return freeze({
     id: id || newEntryId(),
     kind: entryKind,

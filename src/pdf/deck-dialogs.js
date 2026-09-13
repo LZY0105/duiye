@@ -15,9 +15,12 @@
 // as it was — no pad created, no deck changed.
 
 import { t } from '../core/i18n.js';
-import { ENTRY_KINDS } from './deck-state.js';
+import { ENTRY_KINDS, kindKeyFor } from './deck-state.js';
 import { createScratchStyle, paperColor } from '../scratch/scratch-style.js';
 import { PATTERN_ORDER, TONE_ORDER, paintTile } from '../scratch/scratch-style-panel.js';
+
+/** 摞里这一项叫什么 —— 键在 deck-state，文案在这里。 */
+const kindLabelFor = (kind) => t(kindKeyFor(kind));
 
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
@@ -137,21 +140,34 @@ export function chooseDestination({ options, preferred, title, note, confirm }) 
   });
 }
 
+/** 这个对话框能做出来的两样东西。 */
+export const PAPER_MODES = Object.freeze({ SCRATCH: 'scratch', NOTE: 'note' });
+
 /**
- * Create a scratchpad, and say where it opens.
+ * 新建一张纸，并说它开在哪一栏。
  *
- * The pad is created by the CALLER, after this resolves. Cancelling here leaves
- * no resource behind — an empty pad in the library that nobody asked for is
- * worse than no pad at all, and it is what happens when creation runs first and
- * the dialog only decides where to put it.
+ * 草稿纸和笔记本是这里的两个模式，不是两个对话框。它们要问的东西几乎完全重合
+ * ——叫什么、用什么纸、开在哪 —— 只有「几页」是笔记本独有的。拆成两个对话框，
+ * 就要把纸张选择器和目的地选择器各维护一份，而它们迟早会长得不一样。
  *
- * @returns {Promise<{name: string, slot: string}|null>}
+ * 两者的差别就是那一行字说的那件事：草稿纸是一张没有边界的纸，笔记本是一叠有
+ * 边界的纸。所以模式切换在最上面，且切换时不清空已经填的名字和已经选的纸 ——
+ * 「我要一张方格纸」这个决定，和「它是一张还是一叠」是两件事。
+ *
+ * 资源由**调用方**在这个 Promise 落地之后才创建。在这里取消不会留下任何东西 ——
+ * 一本没人要的空本子留在库里，比没有更糟，而那正是「先创建、对话框只决定放哪」
+ * 的做法会发生的事。
+ *
+ * @returns {Promise<{mode: string, name: string, slot: string, style: object,
+ *   pageCount: number}|null>}
  */
-export function createScratchpadDialog({
-  options, preferred, defaultName, defaultStyle, nameMax = 60,
+export function createPaperDialog({
+  options, preferred, defaultName, defaultNoteName, defaultStyle,
+  mode = PAPER_MODES.SCRATCH, defaultPageCount = 20, pageMax = 999, nameMax = 60,
 }) {
   return modal((dialog, finish) => {
     let chosen = options.some(o => o.slot === preferred) ? preferred : options[0]?.slot;
+    let current = mode === PAPER_MODES.NOTE ? PAPER_MODES.NOTE : PAPER_MODES.SCRATCH;
     // The paper is chosen HERE, at the moment the pad is made, because that is
     // when someone knows what they are about to use it for — squared for a
     // derivation, ruled for an explanation, 田字格 for characters. It was
@@ -160,12 +176,28 @@ export function createScratchpadDialog({
     let style = createScratchStyle(defaultStyle);
 
     dialog.innerHTML = `
-      <div class="deck-dialog-title">${escapeHtml(t('scratch.newTitle'))}</div>
+      <div class="deck-dialog-title" data-role="title"></div>
+      <div class="paper-modes" role="radiogroup"
+           aria-label="${escapeHtml(t('paper.mode'))}">
+        <button type="button" class="paper-mode" role="radio" data-mode="scratch">
+          <span class="paper-mode-name">${escapeHtml(t('deck.scratch'))}</span>
+          <span class="paper-mode-note">${escapeHtml(t('paper.scratchNote'))}</span>
+        </button>
+        <button type="button" class="paper-mode" role="radio" data-mode="note">
+          <span class="paper-mode-name">${escapeHtml(t('deck.note'))}</span>
+          <span class="paper-mode-note">${escapeHtml(t('paper.noteNote'))}</span>
+        </button>
+      </div>
       <label class="deck-field">
         <span class="deck-field-label">${escapeHtml(t('scratch.name'))}</span>
         <input type="text" class="deck-input" data-role="name" maxlength="${nameMax}">
       </label>
-      <div class="deck-field-label">${escapeHtml(t('scratch.style'))}</div>
+      <label class="deck-field" data-role="pages-field">
+        <span class="deck-field-label">${escapeHtml(t('note.pages'))}</span>
+        <input type="number" class="deck-input" data-role="pages"
+               min="1" max="${pageMax}" step="1" inputmode="numeric">
+      </label>
+      <div class="deck-field-label" data-role="style-label"></div>
       <div class="create-styles" data-role="patterns" role="radiogroup"
            aria-label="${escapeHtml(t('scratch.pattern'))}"></div>
       <div class="style-row">
@@ -183,7 +215,42 @@ export function createScratchpadDialog({
       </div>`;
 
     const input = dialog.querySelector('[data-role="name"]');
-    input.value = defaultName || '';
+    const pages = dialog.querySelector('[data-role="pages"]');
+    const pagesField = dialog.querySelector('[data-role="pages-field"]');
+    pages.value = String(defaultPageCount);
+
+    // 两个模式各记各的默认名字。切过去再切回来，原来那个名字还在 —— 而人自己
+    // 改过的名字两边共用，因为那是他给这张纸起的名，不是给模式起的。
+    const proposed = {
+      [PAPER_MODES.SCRATCH]: defaultName || '',
+      [PAPER_MODES.NOTE]: defaultNoteName || defaultName || '',
+    };
+    let touched = false;
+    input.addEventListener('input', () => { touched = true; });
+
+    const renderMode = () => {
+      const note = current === PAPER_MODES.NOTE;
+      dialog.querySelector('[data-role="title"]').textContent =
+        note ? t('note.newTitle') : t('scratch.newTitle');
+      // 「草稿纸样式」在笔记本模式下是错的 —— 选的是纸，不是草稿纸。
+      dialog.querySelector('[data-role="style-label"]').textContent =
+        note ? t('note.style') : t('scratch.style');
+      pagesField.hidden = !note;
+      if (!touched) input.value = proposed[current];
+      for (const button of dialog.querySelectorAll('.paper-mode')) {
+        const on = button.dataset.mode === current;
+        button.classList.toggle('is-selected', on);
+        button.setAttribute('aria-checked', String(on));
+      }
+    };
+    for (const button of dialog.querySelectorAll('.paper-mode')) {
+      button.addEventListener('click', () => {
+        current = button.dataset.mode === PAPER_MODES.NOTE
+          ? PAPER_MODES.NOTE : PAPER_MODES.SCRATCH;
+        renderMode();
+      });
+    }
+    renderMode();
 
     // Patterns and tones are redrawn together: a tile has to show the tone that
     // is actually selected, or the choice it offers is not the one it makes.
@@ -244,16 +311,28 @@ export function createScratchpadDialog({
       group.appendChild(button);
     }
 
+    // 页数就地夹住，而不是等到提交。输入 0 或者 9999 之后按回车，人该看见的是
+    // 框里立刻变成 1 或者上限，而不是创建出一本和他输入的不一样的本子。
+    const pageCount = () => {
+      const n = Math.floor(Number(pages.value));
+      if (!Number.isFinite(n) || n < 1) return 1;
+      return Math.min(pageMax, n);
+    };
+    pages.addEventListener('change', () => { pages.value = String(pageCount()); });
+
     const commit = () => finish({
-      name: input.value.trim() || defaultName,
+      mode: current,
+      name: input.value.trim() || proposed[current],
       slot: chosen,
       style,
+      pageCount: pageCount(),
     });
     dialog.querySelector('[data-role="cancel"]').textContent = t('deck.cancel');
     dialog.querySelector('[data-role="confirm"]').textContent = t('scratch.createAndOpen');
     dialog.querySelector('[data-role="cancel"]').addEventListener('click', () => finish(null));
     dialog.querySelector('[data-role="confirm"]').addEventListener('click', commit);
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') commit(); });
+    pages.addEventListener('keydown', (e) => { if (e.key === 'Enter') commit(); });
   });
 }
 
@@ -281,7 +360,7 @@ export function moveEntryDialog({ entry, entryName, options, preferred, anchorsF
       <div class="deck-dialog-title">${escapeHtml(t('deck.moveTitle'))}</div>
       <div class="deck-dialog-subject">
         <span class="deck-row-kind">${escapeHtml(
-    entry.kind === ENTRY_KINDS.SCRATCH ? t('deck.scratch') : t('deck.pdf'))}</span>
+    kindLabelFor(entry.kind))}</span>
         <span></span>
       </div>
       <div class="deck-field-label">${escapeHtml(t('deck.destination'))}</div>

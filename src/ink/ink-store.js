@@ -141,6 +141,24 @@ export async function annotatedPages(documentId) {
 }
 
 /** Removes all ink for a document; called when the document itself is deleted. */
+/**
+ * Forgets one page's ink.
+ *
+ * Symmetric with deleteDocumentInk, and needed by anything that can make a
+ * page stop existing — today that is shortening a notebook. Leaving the row
+ * behind would be invisible rather than harmless: nothing can reach that page
+ * any more, so the ink is unreachable storage, and if the notebook is later
+ * lengthened again the old strokes would reappear on what the reader believes
+ * is a fresh page.
+ */
+export async function deletePageInk(documentId, pageNumber) {
+  if (!documentId) return;
+  const db = await getDB();
+  const key = inkKey(documentId, pageNumber);
+  cacheWrite(key, null);
+  await db.delete(STORE, key);
+}
+
 export async function deleteDocumentInk(documentId) {
   const db = await getDB();
   const records = await db.getAllFromIndex(STORE, 'documentId', documentId);

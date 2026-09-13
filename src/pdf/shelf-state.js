@@ -11,8 +11,13 @@
 // DOM-free，和旁边的 deck-state、panel-state、bookmark-state 一样：顺序是数据
 // 的性质，不是渲染的性质，所以它可以在 Node 里单独测。
 
-/** 书架上摆的两种东西。草稿纸也是书，只是它的封面是纸本身。 */
-export const SHELF_KINDS = Object.freeze({ DOC: 'doc', PAD: 'pad' });
+/**
+ * 书架上摆的三种东西。
+ *
+ * 草稿纸和笔记本也是书，只是它们的封面是纸本身。笔记本和 PDF 一样有页数，所以
+ * 书脊上印的是页数；草稿纸只有一张纸，印的是它自己是什么。
+ */
+export const SHELF_KINDS = Object.freeze({ DOC: 'doc', PAD: 'pad', NOTE: 'note' });
 
 const str = (v, fallback = '') => (typeof v === 'string' && v.trim() ? v : fallback);
 const num = (v, fallback = 0) => (Number.isFinite(v) ? v : fallback);
@@ -23,9 +28,10 @@ const num = (v, fallback = 0) => (Number.isFinite(v) ? v : fallback);
  * @param {Array} docs    listDocuments() 的结果
  * @param {Array} pads    listScratchpads() 的结果
  * @param {Array<string>} recent  最近打开过的 id，越靠前越近
+ * @param {Array} notes   listNotebooks() 的结果
  * @returns {ReadonlyArray} 冻结的书架条目
  */
-export function shelfItems(docs = [], pads = [], recent = []) {
+export function shelfItems(docs = [], pads = [], recent = [], notes = []) {
   // 名次表：查一次 O(1)，而不是每次比较都去数组里找。
   const rank = new Map();
   if (Array.isArray(recent)) {
@@ -65,6 +71,23 @@ export function shelfItems(docs = [], pads = [], recent = []) {
     }));
   }
 
+  for (const note of Array.isArray(notes) ? notes : []) {
+    if (!note?.id) continue;
+    items.push(Object.freeze({
+      id: note.id,
+      kind: SHELF_KINDS.NOTE,
+      name: str(note.name, '笔记本'),
+      role: '',
+      pageCount: num(note.pageCount, 1),
+      // 真的是 0。空白页不占存储，算进「文档库用了多少空间」是在说谎。
+      sizeBytes: 0,
+      hasOutline: false,
+      style: note.style || null,
+      addedAt: num(note.updatedAt) || num(note.createdAt),
+      rank: rank.has(note.id) ? rank.get(note.id) : Infinity,
+    }));
+  }
+
   // 两级：先看多久以前读过，读过的里面按远近；都没读过就按什么时候进来的。
   // 第三级按 id，只是为了让两份时间戳一模一样的东西也有个定死的先后——顺序
   // 稳定比顺序「对」更要紧，人是靠位置记住书的。
@@ -89,5 +112,6 @@ export const BOOK_MIN_WIDTH = 240;
 export function shelfSubtitle(item) {
   if (!item) return '';
   if (item.kind === SHELF_KINDS.PAD) return '草稿纸';
+  // 笔记本落到下面那行：它有页数，而页数正是「这本厚不厚」这个问题的答案。
   return item.pageCount > 0 ? `${item.pageCount} 页` : '';
 }

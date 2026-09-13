@@ -30,6 +30,11 @@ import {
   listScratchpads,
   renameScratchpad,
 } from '../scratch/scratch-store.js';
+import {
+  deleteNotebook,
+  listNotebooks,
+  renameNotebook,
+} from '../note/note-store.js';
 import { t } from '../core/i18n.js';
 import Logger from '../core/logger.js';
 
@@ -84,20 +89,22 @@ async function refreshLibrary() {
   const list = elRoot?.querySelector('[data-role="library-list"]');
   if (!list) return;
 
-  const [docs, usage, pads] = await Promise.all([
-    listDocuments(), libraryUsageBytes(), listScratchpads(),
+  const [docs, usage, pads, notes] = await Promise.all([
+    listDocuments(), libraryUsageBytes(), listScratchpads(), listNotebooks(),
   ]);
   const usageEl = elRoot.querySelector('[data-role="library-usage"]');
   if (usageEl) {
+    // 笔记本也算进来。原来这行只数文档和草稿纸，于是建了几本笔记之后它还是
+    // 说「0 个文档 · 0 张草稿纸」，而架子上明明摆着东西。
     usageEl.textContent = t('shelf.usage', {
-      docs: docs.length, pads: pads.length, size: formatBytes(usage),
+      docs: docs.length, notes: notes.length, pads: pads.length, size: formatBytes(usage),
     });
   }
 
   shelf?.destroy();
   shelf = null;
 
-  const items = shelfItems(docs, pads, docViewOrder());
+  const items = shelfItems(docs, pads, docViewOrder(), notes);
 
   // 一本书都没有时也要把架子搭出来。
   //
@@ -185,9 +192,7 @@ async function openItem(item) {
     // 毫秒再飞——真机上量到的就是这个。
     if (flight) await flight.ready();
     setStatus('正在打开…');
-    await workspace.openResource(item.id, item.kind === SHELF_KINDS.PAD
-      ? { kind: ENTRY_KINDS.SCRATCH, slot }
-      : { slot });
+    await workspace.openResource(item.id, { slot, kind: kindForShelf(item) });
     setStatus('');
     if (flight) await flight.land();
     else closeLibrary();
@@ -202,11 +207,21 @@ async function openItem(item) {
   }
 }
 
+/** 书架上的一样东西，在摞里是哪一种。 */
+function kindForShelf(item) {
+  if (item?.kind === SHELF_KINDS.PAD) return ENTRY_KINDS.SCRATCH;
+  if (item?.kind === SHELF_KINDS.NOTE) return ENTRY_KINDS.NOTE;
+  return ENTRY_KINDS.PDF;
+}
+
 /** 一本书的 ⋯。 */
 async function openItemMenu(item) {
   const isPad = item.kind === SHELF_KINDS.PAD;
+  const isNote = item.kind === SHELF_KINDS.NOTE;
   const actions = [{ id: 'rename', label: '重命名' }];
-  if (!isPad) {
+  // 「标为练习册 / 答案册」只对 PDF 有意义：对题靠的是文字层，而草稿纸和笔记本
+  // 上只有手写的笔迹。给它们这两个选项，是让人去设一个永远不会起作用的角色。
+  if (!isPad && !isNote) {
     if (item.role !== DOC_ROLES.EXERCISE) actions.push({ id: 'role-exercise', label: '标为练习册' });
     if (item.role !== DOC_ROLES.ANSWER) actions.push({ id: 'role-answer', label: '标为答案册' });
   }
@@ -222,7 +237,7 @@ async function openItemMenu(item) {
   if (chosen === 'rename') {
     const next = await promptText({
       title: '重命名',
-      label: isPad ? '草稿纸名称' : '书名',
+      label: isPad ? '草稿纸名称' : isNote ? t('deck.note') : '书名',
       value: item.name,
       confirm: '保存',
     });
@@ -230,6 +245,7 @@ async function openItemMenu(item) {
     // 就没法在架子上被认出来，所以这里把空串和取消一样对待。
     if (!next) return;
     if (isPad) await renameScratchpad(item.id, next);
+    else if (isNote) await renameNotebook(item.id, next);
     else await renameDocument(item.id, next);
     await refreshLibrary();
     return;
@@ -255,10 +271,13 @@ async function openItemMenu(item) {
  */
 async function deleteItem(item) {
   const isPad = item.kind === SHELF_KINDS.PAD;
+  const isNote = item.kind === SHELF_KINDS.NOTE;
   const ok = await confirmDestructive({
-    title: isPad ? t('scratch.deleteTitle') : '永久删除这本书？',
+    title: isPad ? t('scratch.deleteTitle')
+      : isNote ? t('note.deleteTitle') : '永久删除这本书？',
     body: isPad ? t('scratch.deleteBody', { name: item.name })
-      : `「${item.name}」连同它上面的笔迹会一起删掉，无法撤销。`,
+      : isNote ? t('note.deleteBody', { name: item.name })
+        : `「${item.name}」连同它上面的笔迹会一起删掉，无法撤销。`,
     confirmLabel: t('scratch.delete'),
   });
   if (!ok) return;
@@ -266,6 +285,9 @@ async function deleteItem(item) {
   await workspace.forgetResource(item.id);
   if (isPad) {
     await deleteScratchpad(item.id);
+  } else if (isNote) {
+    // deleteNotebook 自己会把笔迹一起删掉，和 deleteScratchpad 一样。
+    await deleteNotebook(item.id);
   } else {
     await deleteDocument(item.id);
     await deleteDocumentInk(item.id);
@@ -410,10 +432,12 @@ export async function initPdfWorkspace() {
   // bound here rather than inside the workspace's own empty state.
   elRoot.querySelector('[data-role="new-scratch"]')?.addEventListener('click', async () => {
     try {
-      await workspace.createScratchpad();
+      // 一个按钮，一个对话框，两个模式 —— 草稿纸和笔记本要问的东西几乎完全
+      // 重合，横杠上摆两个按钮只会让人先选一次再填一次同样的表。
+      await workspace.createPaper();
     } catch (error) {
-      Logger.error('PDF', 'create scratchpad failed', error);
-      setStatus('新建草稿纸失败: ' + error.message, true);
+      Logger.error('PDF', 'create paper failed', error);
+      setStatus('新建失败: ' + error.message, true);
     }
   });
 

@@ -38,6 +38,7 @@ import {
   entryAtOffset,
   findByResource,
   findEntry,
+  isPagedKind,
 } from './deck-state.js';
 import {
   activateInSlot,
@@ -77,7 +78,8 @@ import { answerFor, forgetPairsFor, rememberPair } from './answer-association.js
 import {
   chooseDestination,
   confirmDestructive,
-  createScratchpadDialog,
+  createPaperDialog,
+  PAPER_MODES,
   explainRefusal,
   moveEntryDialog,
   promptText,
@@ -91,6 +93,16 @@ import {
   readNewPadStyle,
 } from '../scratch/scratch-store.js';
 import { openScratchStylePanel } from '../scratch/scratch-style-panel.js';
+import {
+  addNotePages,
+  createNotebook,
+  getNotebook,
+  nextNotebookName,
+  setNotebookStyle,
+  PAGE_DEFAULT as NOTE_PAGE_DEFAULT,
+  PAGE_MAX as NOTE_PAGE_MAX,
+} from '../note/note-store.js';
+import { noteMeta, openNoteDocument } from '../note/note-document.js';
 import { t } from '../core/i18n.js';
 import {
   recallDocView,
@@ -216,6 +228,8 @@ export class PdfWorkspace {
       // switch — including its failure paths — can be driven without a
       // database.
       getScratchpad: services.getScratchpad || getScratchpad,
+      // 笔记本同理。它走的是和 PDF 一样的装载路径，只是资源从别处取。
+      getNotebook: services.getNotebook || getNotebook,
     };
     this.state = createWorkspaceState();
     this.panes = {};
@@ -422,7 +436,9 @@ export class PdfWorkspace {
         onNameBookmark: (mark) => this._nameBookmark(slot, mark),
         getInkDocId: () => {
           const entry = this._entryOnScreen(slot);
-          return entry?.kind === ENTRY_KINDS.PDF ? entry.resourceId : null;
+          // 本子的笔迹和书的走同一条路（ink-store 按 (id, 页码) 存），所以缩略
+          // 图上也该有。漏掉它的后果是缩略图有纸没字，而且不报错。
+          return isPagedKind(entry?.kind) ? entry.resourceId : null;
         },
         onGoToPage: (n) => {
           this.panes[slot].goToPage(n);
@@ -1550,6 +1566,16 @@ export class PdfWorkspace {
 
     on('prev', () => pane.previous());
     on('next', () => pane.next());
+    on('note-add-page', async () => {
+      try {
+        const updated = await this.addNotePage(slot);
+        if (!updated) return;
+        if (updated.pageCount >= NOTE_PAGE_MAX) this._setStatus(slot, t('note.atPageMax'));
+      } catch (error) {
+        Logger.error('PDF', 'add note page failed', error);
+        this._setStatus(slot, t('note.addPageFailed'));
+      }
+    });
     // Zoom belongs to whichever surface is on screen. A pad's zoom is its
     // camera; a book's is its fit — the same two buttons, two different things
     // underneath, and the slot knows which it is showing.
@@ -1587,7 +1613,12 @@ export class PdfWorkspace {
       if (entry) this.removeEntry(slot, entry.id);
     });
     on('organize', () => { this._closeSlotMenus(); this.organize(slot, null); });
-    on('scratch-style', () => { this._closeSlotMenus(); this.openStylePanel(slot); });
+    on('scratch-style', () => {
+      this._closeSlotMenus();
+      const kind = activeEntryIn(this.state, slot)?.kind;
+      if (kind === ENTRY_KINDS.NOTE) this.openNoteStylePanel(slot);
+      else this.openStylePanel(slot);
+    });
     on('focus-scratch', () => { this._closeSlotMenus(); this.enterFocus(slot); });
     on('focus-exit', () => this.exitFocus());
     on('bookmark', () => this._toggleBookmark(slot));
@@ -1679,6 +1710,13 @@ export class PdfWorkspace {
     // disabled — they are not there. A disabled Next Page on a boundless sheet
     // invites the question of what it would have done.
     set('pdf-controls', n => { n.hidden = scratch; });
+    const note = entry?.kind === ENTRY_KINDS.NOTE;
+    set('note-add-page', n => {
+      n.hidden = !note || !loaded;
+      n.title = t('note.addPage');
+      // 到上限了就按不动，但按钮还在 —— 没了的话人会以为自己记错了。
+      n.disabled = !!note && loaded && pane.state.pageCount >= NOTE_PAGE_MAX;
+    });
     set('scratch-controls', n => { n.hidden = !scratch; });
     set('prev', n => { n.disabled = !pane.canGoPrevious(); });
     set('next', n => { n.disabled = !pane.canGoNext(); });
@@ -1719,7 +1757,10 @@ export class PdfWorkspace {
     // The menu: what it offers depends on what the pane is holding.
     set('close', n => { n.textContent = t('deck.removeFromPane'); });
     set('organize', n => { n.textContent = t('deck.organize'); });
-    set('scratch-style', n => { n.hidden = !scratch; n.textContent = t('scratch.style'); });
+    set('scratch-style', n => {
+      n.hidden = !scratch && !note;
+      n.textContent = note ? t('note.style') : t('scratch.style');
+    });
     set('focus-scratch', n => {
       n.hidden = !scratch || !!this.focusSlot;
       n.textContent = t('scratch.focus');
@@ -2298,7 +2339,15 @@ export class PdfWorkspace {
     this._openTokens[slot] = token;
     const superseded = () => this._openTokens[slot] !== token;
 
-    const meta = await this._pdfLibrary.getDocumentMeta(entry.resourceId);
+    // 一本书和一本笔记本在这条路上只差两行：从哪儿拿 meta，从哪儿拿文档。往下
+    // 的翻页、缩放、位图缓存、预取、笔迹对齐、目录、会话记页，一个字都不用分。
+    // 那正是 note-document.js 把笔记本装成文档形状换来的东西。
+    const isNote = entry.kind === ENTRY_KINDS.NOTE;
+    const notebook = isNote ? await this._pdfLibrary.getNotebook(entry.resourceId) : null;
+    if (isNote && !notebook) throw new Error('NOTE_NOT_FOUND');
+    const meta = isNote
+      ? noteMeta(notebook)
+      : await this._pdfLibrary.getDocumentMeta(entry.resourceId);
     if (!meta) throw new Error('PDF_DOC_NOT_FOUND');
     if (superseded()) return false;
 
@@ -2332,7 +2381,9 @@ export class PdfWorkspace {
     }
     this._invalidatePairCaches();
 
-    const doc = await this._pdfLibrary.openStoredDocument(entry.resourceId);
+    const doc = isNote
+      ? openNoteDocument(notebook)
+      : await this._pdfLibrary.openStoredDocument(entry.resourceId);
     if (superseded()) {
       try { doc.destroy(); } catch (_) { /* nothing further to release */ }
       return false;
@@ -2416,7 +2467,9 @@ export class PdfWorkspace {
       try {
         const record = entry.kind === ENTRY_KINDS.SCRATCH
           ? await this._pdfLibrary.getScratchpad(entry.resourceId)
-          : await this._pdfLibrary.getDocumentMeta(entry.resourceId);
+          : entry.kind === ENTRY_KINDS.NOTE
+            ? await this._pdfLibrary.getNotebook(entry.resourceId)
+            : await this._pdfLibrary.getDocumentMeta(entry.resourceId);
         this._rememberName(entry.resourceId, record?.name);
       } catch (_) { /* an unnamed entry still lists, by type */ }
     }
@@ -2579,8 +2632,15 @@ export class PdfWorkspace {
    * is what happens when creation runs first and the dialog only decides where
    * to put it.
    */
-  async createScratchpad() {
-    const answer = await createScratchpadDialog({
+  /**
+   * 新建一张纸 —— 草稿纸或者笔记本，同一个对话框的两个模式。
+   *
+   * @param {string} mode PAPER_MODES 之一，作为对话框打开时的初始模式；人可以在
+   *   对话框里改主意，最后算数的是他选的那个。
+   */
+  async createPaper(mode = PAPER_MODES.SCRATCH) {
+    const answer = await createPaperDialog({
+      mode,
       options: this.destinationOptions(),
       preferred: this.activeSlot,
       // The proposed name is in the reader's language, not the code's: a
@@ -2588,22 +2648,52 @@ export class PdfWorkspace {
       // itself. The numbering still comes from what is already in the library,
       // so deleting a pad frees its number again.
       defaultName: await nextScratchpadName(t('deck.scratch')),
+      defaultNoteName: await nextNotebookName(t('deck.note')),
       // Starts from the new-pad preference, so someone who set one gets it
       // without having to choose again — and can still change their mind here.
       defaultStyle: readNewPadStyle(),
+      defaultPageCount: NOTE_PAGE_DEFAULT,
+      pageMax: NOTE_PAGE_MAX,
     });
     if (!answer) return null;
 
-    const pad = await createScratchpad({ name: answer.name, style: answer.style });
-    this._rememberName(pad.id, pad.name);
+    const note = answer.mode === PAPER_MODES.NOTE;
+    const resource = note
+      ? await createNotebook({
+        name: answer.name, style: answer.style, pageCount: answer.pageCount,
+      })
+      : await createScratchpad({ name: answer.name, style: answer.style });
+    this._rememberName(resource.id, resource.name);
     const { state, entry } = openInSlot(this.state, answer.slot, {
-      kind: ENTRY_KINDS.SCRATCH,
-      resourceId: pad.id,
+      kind: note ? ENTRY_KINDS.NOTE : ENTRY_KINDS.SCRATCH,
+      resourceId: resource.id,
     });
     this._setState(state);
     await this.showEntry(answer.slot, entry.id, { force: true });
     this._markActive(answer.slot);
-    return pad;
+    return resource;
+  }
+
+  /** 老名字，还有调用方按这个名字叫。 */
+  createScratchpad() { return this.createPaper(PAPER_MODES.SCRATCH); }
+
+  /** 给这本笔记本在末尾加一页，然后翻过去。 */
+  async addNotePage(slot) {
+    const entry = activeEntryIn(this.state, slot);
+    if (entry?.kind !== ENTRY_KINDS.NOTE) return null;
+    const pane = this.panes[slot];
+    if (!pane?.isLoaded()) return null;
+    const updated = await addNotePages(entry.resourceId, 1);
+    // 页数变了就是文档变了。重开一份而不是就地改 pane.state.pageCount：后者会让
+    // 文档对象的 numPages 和面板以为的页数对不上，而越界检查信的是前者。
+    // 整份 state 原样带过去。自己拼一个 {pageNumber, zoom} 会漏掉 fitMode 和
+    // 平移量，而 zoom 这个字段不是屏幕上那个百分比 —— 真机上试出来的结果是
+    // 加完一页缩放从 100% 跳到 316%。
+    const reopened = await this._preparePdf(slot, entry, {
+      ...pane.state, pageNumber: updated.pageCount,
+    });
+    if (reopened) { this._layout(); this._resizePanes(); this._syncSlotChrome(slot); }
+    return updated;
   }
 
   /**
@@ -2906,6 +2996,33 @@ export class PdfWorkspace {
       onNotice: (message) => this._setStatus(slot, message),
     });
     if (!result.applied) pane.previewStyle(pad.style);
+  }
+
+  /**
+   * 笔记本的纸张样式。
+   *
+   * 和草稿纸共用同一个面板，只换了写入口。差别在应用之后：草稿纸是一张纸，
+   * 换了背景重画一次就行；笔记本是一叠页，每一页都已经被 PdfPane 栅格化并缓
+   * 存过了，所以要整份重新打开 —— 否则屏幕上还是旧纸，而缓存不知道自己过期
+   * 了。也因此这里没有实时预览：面板上那些格子的缩略图就是预览。
+   */
+  async openNoteStylePanel(slot) {
+    const entry = activeEntryIn(this.state, slot);
+    if (entry?.kind !== ENTRY_KINDS.NOTE) return;
+    const notebook = await this._pdfLibrary.getNotebook(entry.resourceId);
+    if (!notebook) return;
+    const pane = this.panes[slot];
+    // 同 addNotePage：整份 state，不要自己拼。
+    const at = pane?.isLoaded() ? { ...pane.state } : undefined;
+    const result = await openScratchStylePanel({
+      pad: notebook,
+      compact: this.root.clientWidth < 620,
+      save: setNotebookStyle,
+      onNotice: (message) => this._setStatus(slot, message),
+    });
+    if (!result.applied) return;
+    const reopened = await this._preparePdf(slot, entry, at);
+    if (reopened) { this._layout(); this._resizePanes(); this._syncSlotChrome(slot); }
   }
 
   /** Permanent deletion, which is only ever reached deliberately. */
@@ -3318,11 +3435,12 @@ export class PdfWorkspace {
       // 里出现的条目从缓存里原样带过去，所以跳过就是「这一条这次没有新话说」。
       if (this._paneInFlux?.[slot]) continue;
       const entry = this._entryOnScreen(slot);
-      // Only a book has a page, a zoom and a scroll to record here. A pad's
-      // place is its camera, and that belongs to the pad rather than to the
-      // session — it is filed against the resource by the scratch pane itself,
-      // so it survives being opened in the other pane just as well.
-      if (entry?.kind !== ENTRY_KINDS.PDF) continue;
+      // Only a paged thing — a book or a notebook — has a page, a zoom and a
+      // scroll to record here. A pad's place is its camera, and that belongs to
+      // the pad rather than to the session — it is filed against the resource by
+      // the scratch pane itself, so it survives being opened in the other pane
+      // just as well.
+      if (!isPagedKind(entry?.kind)) continue;
       const view = this.panes[slot]?.state;
       if (view) views[entry.id] = view;
     }
@@ -3373,7 +3491,8 @@ export class PdfWorkspace {
     if (!btn) return;
     const entry = this._entryOnScreen(slot);
     const page = this.panes[slot]?.state?.pageNumber;
-    const on = entry?.kind === ENTRY_KINDS.PDF && page
+    // 本子也是一页一页的，所以书签在它身上和在书上一个意思。只有草稿纸没有页。
+    const on = isPagedKind(entry?.kind) && page
       && hasBookmark(this._bookmarksIn(slot), page);
     // 形状不变，只是填不填。一个书签记没记，是它有没有被涂满，而不是它变成
     // 了另一样东西——空心和实心是同一条丝带的两种状态。
@@ -3392,7 +3511,7 @@ export class PdfWorkspace {
    */
   _bookmarksIn(slot) {
     const entry = this._entryOnScreen(slot);
-    if (entry?.kind !== ENTRY_KINDS.PDF) return [];
+    if (!isPagedKind(entry?.kind)) return [];
     this._marks ||= {};
     if (this._marks[entry.resourceId] === undefined) {
       this._marks[entry.resourceId] = loadBookmarks(entry.resourceId);
@@ -3408,7 +3527,8 @@ export class PdfWorkspace {
    */
   _toggleBookmark(slot, page) {
     const entry = this._entryOnScreen(slot);
-    if (entry?.kind !== ENTRY_KINDS.PDF) return;
+    // 本子的页和书的页一样可以记书签。只有草稿纸没有页。
+    if (!isPagedKind(entry?.kind)) return;
     const pane = this.panes[slot];
     const target = page || pane?.state?.pageNumber;
     if (!target) return;
@@ -3433,7 +3553,7 @@ export class PdfWorkspace {
    */
   async _nameBookmark(slot, mark) {
     const entry = this._entryOnScreen(slot);
-    if (entry?.kind !== ENTRY_KINDS.PDF || !mark) return;
+    if (!isPagedKind(entry?.kind) || !mark) return;
     const label = await promptText({
       title: `第 ${mark.page} 页`,
       label: '书签名称',
@@ -3492,7 +3612,9 @@ export class PdfWorkspace {
     // 牌子还没立起来，所以照走不误。
     if (this._paneInFlux?.[slot]) return;
     const entry = this._entryOnScreen(slot);
-    if (entry?.kind !== ENTRY_KINDS.PDF) return;
+    // 本子和书一样是一页一页的，读到哪一页同样要记 —— 只认 PDF 的话，一本
+    // 笔记本换走再换回来永远回到第 1 页。只有草稿纸没有页可记。
+    if (!isPagedKind(entry?.kind)) return;
     const view = this.panes[slot]?.state;
     if (!view) return;
     // 两处都要记：这一条目自己的位置，和这份文件在任何地方最后被放下的位置。
@@ -3638,6 +3760,9 @@ function slotChrome(slot) {
         <input type="number" class="pdf-slot-page" data-role="page-input" min="1" step="1" value="1" aria-label="页码">
         <span class="pdf-slot-total" data-role="page-total"></span>
         <button type="button" class="pdf-slot-btn" data-role="next" title="下一页">›</button>
+        <!-- 只有笔记本有。一本书的页数是它自己的事，加不了也不该能加；一本
+             空本子写满了要续，而「续」的地方就该在翻到头的那个按钮旁边。 -->
+        <button type="button" class="pdf-slot-btn" data-role="note-add-page" hidden>+页</button>
         <!-- 书签：这一页记不记，和翻页是同一件事的两面，所以挨着放。 -->
         <button type="button" class="pdf-slot-btn pdf-slot-mark" data-role="bookmark"
                 aria-pressed="false" title="书签">

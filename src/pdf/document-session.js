@@ -24,6 +24,7 @@ import { ENTRY_KINDS } from './deck-state.js';
 import { createViewState, serializeViewState } from './pdf-view-state.js';
 import { getDocumentMeta } from './pdf-library.js';
 import { getScratchpad } from '../scratch/scratch-store.js';
+import { getNotebook } from '../note/note-store.js';
 
 const STORAGE_KEY = 'ls_pdf_session';
 
@@ -194,13 +195,20 @@ function commitMigration(raw, migrated) {
 /**
  * Whether a resource is still there to be opened.
  *
- * Both kinds, because a deck holds both. The resolvers are injectable so the
- * failure paths can be exercised in Node without a database.
+ * 每一种都要问对地方。这里漏一种的后果不是报错，是那一项被当成「已经删掉了」
+ * 悄悄从摞里剔掉 —— 重启之后书桌上就少了一本，而日志里只有一句「dropped 1」。
+ * 笔记本刚加进来的时候正是这么丢的。
+ *
+ * The resolvers are injectable so the failure paths can be exercised in Node
+ * without a database.
  */
 async function resourceExists(entry, resolvers) {
   try {
     if (entry.kind === ENTRY_KINDS.SCRATCH) {
       return !!(await resolvers.getScratchpad(entry.resourceId));
+    }
+    if (entry.kind === ENTRY_KINDS.NOTE) {
+      return !!(await resolvers.getNotebook(entry.resourceId));
     }
     return !!(await resolvers.getDocumentMeta(entry.resourceId));
   } catch (_) {
@@ -224,6 +232,7 @@ export async function restoreSession(resolvers = {}) {
   const resolve = {
     getDocumentMeta: resolvers.getDocumentMeta || getDocumentMeta,
     getScratchpad: resolvers.getScratchpad || getScratchpad,
+    getNotebook: resolvers.getNotebook || getNotebook,
   };
 
   const raw = readRaw();

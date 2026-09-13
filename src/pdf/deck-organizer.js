@@ -16,7 +16,10 @@
 // feature reachable from a keyboard and a screen reader.
 
 import { t } from '../core/i18n.js';
-import { ENTRY_KINDS } from './deck-state.js';
+import { ENTRY_KINDS, kindKeyFor } from './deck-state.js';
+
+/** 摞里这一项叫什么 —— 键在 deck-state，文案在这里。 */
+const kindLabelFor = (kind) => t(kindKeyFor(kind));
 
 /** Hold this long on the handle before a touch drag begins. */
 const HOLD_MS = 180;
@@ -263,7 +266,7 @@ export function openOrganizer({ getDecks, describe, positions, onMove }) {
               </svg>
             </button>
             <span class="deck-row-kind">${escapeHtml(
-    entry.kind === ENTRY_KINDS.SCRATCH ? t('deck.scratch') : t('deck.pdf'))}</span>
+    kindLabelFor(entry.kind))}</span>
             <span class="organizer-name"></span>
             <button type="button" class="deck-row-btn" data-role="move"></button>`;
           row.querySelector('.organizer-name').textContent = described.name || t('deck.untitled');

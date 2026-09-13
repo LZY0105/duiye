@@ -291,6 +291,56 @@
  * squared for a derivation, ruled for an explanation — not a fine-tuning
  * session. Spacing and guide contrast stay in the full panel. */
 
+/* 新建对话框最上面那两个模式：草稿纸和笔记本。
+
+   做成两块能按的牌子而不是一排单选圆点，是因为这两样东西的差别不是一个属性，
+   是两种纸 —— 一张没有边界的，和一叠可以翻的。牌子上那行小字就是那句话，它比
+   任何标签都说得清楚，所以它不是装饰，是这个控件的主体。*/
+
+.paper-modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+.paper-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  align-items: flex-start;
+  padding: 0.5rem 0.6rem;
+  border: 2px solid var(--line, rgba(15, 23, 42, 0.1));
+  border-radius: 11px;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  min-width: 0;
+}
+
+.paper-mode.is-selected {
+  border-color: var(--accent, #2563eb);
+  background: color-mix(in srgb, var(--accent, #2563eb) 8%, transparent);
+}
+
+.paper-mode-name {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--text, #0f172a);
+}
+
+/* 会被挤窄，所以允许它换行而不是省略 —— 这行字正是这个选项的意思，
+   截掉一半就等于没说。*/
+.paper-mode-note {
+  font-size: 0.68rem;
+  line-height: 1.3;
+  color: var(--muted, rgba(15, 23, 42, 0.55));
+}
+
+/* 页数只在笔记本模式下出现。hidden 由脚本给，这一条只是保证它真的不占位。*/
+.deck-field[hidden] { display: none; }
+
 .create-styles {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

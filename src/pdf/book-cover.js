@@ -19,6 +19,7 @@ import { getScratchpad } from '../scratch/scratch-store.js';
 import { drawScratchBackground } from '../scratch/scratch-background.js';
 import { ORIGIN_CAMERA } from '../scratch/scratch-camera.js';
 import { SHELF_KINDS } from './shelf-state.js';
+import { openNoteDocument } from '../note/note-document.js';
 import { coverSignature, readCover, writeCover } from './cover-store.js';
 import Logger from '../core/logger.js';
 
@@ -82,6 +83,18 @@ async function renderDocCover(id) {
   }
 }
 
+/** 笔记本的第一页。 */
+async function renderNoteCover(item) {
+  const doc = openNoteDocument({
+    id: item.id, pageCount: item.pageCount, style: item.style,
+  });
+  const size = await doc.pageSize(1);
+  const long = Math.max(size.width, size.height);
+  const scale = Math.max(0.05, Math.min(3, COVER_LONG_EDGE / long));
+  const { canvas } = await doc.renderPage(1, scale);
+  return toBlob(canvas);
+}
+
 /** 草稿纸的纸。 */
 async function renderPadCover(id, style) {
   const pad = style ? { style } : await getScratchpad(id);
@@ -114,9 +127,13 @@ export function requestCover(item) {
     const cached = await readCover(item.id, signature);
     if (cached) return cached;
     try {
+      // 笔记本的封面就是它的第一页 —— 和一本书完全一样，因为它本来就是一份
+      // 文档（见 note-document.js）。只有草稿纸要单独画，那一张纸没有页。
       const blob = item.kind === SHELF_KINDS.PAD
         ? await renderPadCover(item.id, item.style)
-        : await renderDocCover(item.id);
+        : item.kind === SHELF_KINDS.NOTE
+          ? await renderNoteCover(item)
+          : await renderDocCover(item.id);
       if (blob) await writeCover(item.id, blob, signature);
       return blob;
     } catch (error) {
