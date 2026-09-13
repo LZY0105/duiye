@@ -618,7 +618,11 @@ export class PagePanel {
       // in decode time.
       const dpr = Math.min(THUMB_MAX_DPR, window.devicePixelRatio || 1);
       const scale = Math.min(1, THUMB_LONG_EDGE / long) * dpr;
-      const { canvas } = await doc.renderPage(page, scale);
+      // drawable：缩略图要把批注继续画在这张页面上，所以不能收零拷贝的
+      // bitmaprenderer 画布 —— 那种画布之后拿不到 2d 上下文。缩略图只有一百多
+      // 像素宽，多拷这一次可以忽略；整页尺寸下就不行了，所以这是个选项而不是
+      // 默认。
+      const { canvas } = await doc.renderPage(page, scale, { drawable: true });
       await this._inkOnto(canvas, page, scale, token);
       // The panel may have been closed, re-tabbed or given a new book while
       // this page was rasterising; anything painted now belongs to nothing.

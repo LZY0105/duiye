@@ -8,16 +8,19 @@
 // This layer knows nothing about canvases, layout or slots. It answers three
 // questions: how many pages, what is the original outline, and what does page N
 // look like at scale S.
+//
+// 有两条路能回答这三个问题，形状完全一样：渲染 worker（pdf-worker-client.js），
+// 和这个文件里的主线程实现。默认走 worker —— 栅格化一页要 14–34ms，放在主线程上
+// 就是放大缩小时那一下卡顿。worker 起不来、或者 pdf.js 在里面跑不动，就落回主线
+// 程，功能一点不少，只是会卡。回退是静默的，但 Logger 里会留一行。
 
-/** Outline extraction never invents entries; this is the "absent" answer. */
-export const NO_OUTLINE = Object.freeze({ available: false, items: [] });
+import { extractOutline, fragmentsFrom, textLinesFrom, NO_OUTLINE } from './pdf-extract.js';
+import { PDF_ERRORS } from './pdf-errors.js';
+import { openInWorker, workerRenderingAvailable } from './pdf-worker-client.js';
 
-/**
- * Baseline drift tolerated when grouping text fragments into a line, in PDF
- * units. Large enough to keep a superscript with its line, small enough not to
- * merge adjacent lines of body text.
- */
-const LINE_TOLERANCE = 2.5;
+// 目录抽取和文本归行的实现在 pdf-extract.js —— worker 那条路要用同一份，两边抽出
+// 来的文本不能有任何差别。这里转发出去，免得调用方还要知道它搬过家了。
+export { NO_OUTLINE, PDF_ERRORS };
 
 /**
  * Resources pdf.js needs to decode CID-keyed fonts.
@@ -43,12 +46,6 @@ const PDF_RESOURCES = Object.freeze({
   standardFontDataUrl: '/vendor/standard_fonts/',
 });
 
-export const PDF_ERRORS = Object.freeze({
-  RUNTIME_MISSING: 'PDF_RUNTIME_MISSING',
-  OPEN_FAILED: 'PDF_OPEN_FAILED',
-  PAGE_OUT_OF_RANGE: 'PDF_PAGE_OUT_OF_RANGE',
-});
-
 function runtime() {
   const lib = typeof window !== 'undefined' ? window.pdfjsLib : undefined;
   if (!lib || typeof lib.getDocument !== 'function') {
@@ -68,58 +65,6 @@ export function isPdfRuntimeAvailable() {
 }
 
 /**
- * Converts pdf.js's raw outline tree into our own shape.
- *
- * Spec rule: preserve the original table of contents when the document has one,
- * and never force-generate one when it does not. A document without bookmarks
- * therefore yields `available: false` and an empty list — callers must render
- * "this document has no table of contents" rather than synthesising headings
- * from page numbers or text.
- *
- * Destinations are resolved to 1-based page numbers where pdf.js can resolve
- * them; an entry whose destination cannot be resolved keeps `pageNumber: null`
- * and is shown as non-navigable rather than silently pointing at page 1.
- */
-async function extractOutline(pdf) {
-  let raw;
-  try {
-    raw = await pdf.getOutline();
-  } catch (_) {
-    return NO_OUTLINE;
-  }
-  if (!Array.isArray(raw) || raw.length === 0) return NO_OUTLINE;
-
-  const resolvePage = async (dest) => {
-    try {
-      const explicit = typeof dest === 'string' ? await pdf.getDestination(dest) : dest;
-      if (!Array.isArray(explicit) || explicit.length === 0) return null;
-      const index = await pdf.getPageIndex(explicit[0]);
-      return index + 1;
-    } catch (_) {
-      return null;
-    }
-  };
-
-  const convert = async (nodes, depth) => {
-    const out = [];
-    for (const node of nodes) {
-      const pageNumber = node.dest ? await resolvePage(node.dest) : null;
-      out.push({
-        title: String(node.title || '').trim(),
-        pageNumber,
-        depth,
-        children: Array.isArray(node.items) && node.items.length
-          ? await convert(node.items, depth + 1)
-          : [],
-      });
-    }
-    return out;
-  };
-
-  return { available: true, items: await convert(raw, 0) };
-}
-
-/**
  * Opens a PDF from raw bytes.
  *
  * Takes an ArrayBuffer/Uint8Array rather than a File so the same call works for
@@ -131,6 +76,28 @@ async function extractOutline(pdf) {
  * with a detached-ArrayBuffer error.
  */
 export async function openPdfDocument(bytes) {
+  if (workerRenderingAvailable()) {
+    try {
+      return await openInWorker(bytes);
+    } catch (cause) {
+      // worker 那条路整条不可用（浏览器不给开、pdf.js 在里面跑不动、或者将来某次
+      // 升级碰了 document 桩没给的东西）。功能不能因此少一块，所以落回主线程 ——
+      // 页还是那些页，字还是那些字，只是栅格化重新占着主线程，放大缩小会卡。
+      //
+      // 这一行日志是唯一能看出「为什么又卡了」的地方，不要删。
+      try { console.warn('[PDF] worker 渲染不可用，回退主线程：', cause); } catch (_) { /* 没有 console */ }
+    }
+  }
+  return openOnMainThread(bytes);
+}
+
+/**
+ * 主线程上的实现，也是回退路径。
+ *
+ * 在 worker 之前，这是唯一的实现，所以它的行为就是基准：worker 那条路要和它逐像
+ * 素、逐行地一致，任何一处对不上都是 worker 的 bug，不是这里的。
+ */
+async function openOnMainThread(bytes) {
   const lib = runtime();
   const data = bytes instanceof Uint8Array
     ? bytes.slice()
@@ -170,9 +137,15 @@ export async function openPdfDocument(bytes) {
 
     /**
      * Renders one page into a canvas at the given scale.
+     *
+     * `drawable` 只对 worker 那条路有意义（那边默认给的是零拷贝的
+     * bitmaprenderer 画布，拿不到 2d 上下文）。主线程画出来的画布本来就能继续
+     * 画，所以这里收下就完了 —— 两条路的签名必须一样，否则调用方得先知道自己
+     * 在跟谁说话。
+     *
      * @returns {Promise<{canvas: HTMLCanvasElement, width: number, height: number}>}
      */
-    async renderPage(pageNumber, scale) {
+    async renderPage(pageNumber, scale, _options = {}) {
       if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > pdf.numPages) {
         throw new Error(PDF_ERRORS.PAGE_OUT_OF_RANGE);
       }
@@ -217,32 +190,9 @@ export async function openPdfDocument(bytes) {
         return { lines: [], empty: true };
       }
 
-      // Group fragments into rows by baseline, tolerating small drift so
-      // superscripts and inline maths stay on their own line.
-      const rows = [];
-      for (const item of content.items) {
-        const text = typeof item.str === 'string' ? item.str : '';
-        if (!text) continue;
-        const x = item.transform ? item.transform[4] : 0;
-        const y = item.transform ? item.transform[5] : 0;
-        const row = rows.find(r => Math.abs(r.y - y) <= LINE_TOLERANCE);
-        if (row) row.parts.push({ x, text });
-        else rows.push({ y, parts: [{ x, text }] });
-      }
-
+      const fragments = fragmentsFrom(content.items);
       page.cleanup();
-
-      const lines = rows
-        .sort((a, b) => b.y - a.y)                  // PDF y grows upward
-        .map(row => row.parts
-          .sort((a, b) => a.x - b.x)
-          .map(p => p.text)
-          .join('')
-          .replace(/\s+/g, ' ')
-          .trim())
-        .filter(Boolean);
-
-      return { lines, empty: lines.length === 0 };
+      return textLinesFrom(fragments);
     },
 
     /**

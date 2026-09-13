@@ -427,18 +427,23 @@ check('a restored page beyond a shorter document is clamped, not broken', () => 
 group('6. Outline — preserved, never fabricated');
 
 const pdfDocSource = $read('src/pdf/pdf-document.js');
+// 目录抽取搬到了 pdf-extract.js —— 渲染 worker 和主线程回退路径共用同一份实现，
+// 不共用的话两条路能对出不同的目录。规矩没变，所以这几条断言跟着搬到新家去查，
+// 而不是放宽成「在任意文件里出现过」。
+const pdfExtractSource = $read('src/pdf/pdf-extract.js');
 
 ok(pdfDocSource.includes('NO_OUTLINE'), 'an explicit "no outline" result exists');
 ok(
-  /available:\s*false/.test(pdfDocSource),
+  /available:\s*false/.test(pdfExtractSource),
   'a document without bookmarks reports available: false',
 );
 ok(
-  pdfDocSource.includes('pdf.getOutline'),
+  pdfExtractSource.includes('pdf.getOutline'),
   'the outline comes from the document itself',
 );
 ok(
-  !/generateOutline|synthesi[sz]eOutline|buildOutlineFromPages/i.test(pdfDocSource),
+  !/generateOutline|synthesi[sz]eOutline|buildOutlineFromPages/i
+    .test(pdfDocSource + pdfExtractSource),
   'no code path force-generates a table of contents',
 );
 
