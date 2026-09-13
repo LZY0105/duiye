@@ -27,7 +27,7 @@ import {
 } from './ink-clipboard.js';
 import {
   ERASER_MODES,
-  eraseArea,
+  eraseAreaAlongPath,
   eraseStrokes,
   strokeIdsAlongPath,
   strokeIdsInRegion,
@@ -789,9 +789,19 @@ export class InkSurface {
         // 了，而擦除过程中不会凭空多出笔画来，所以重走一遍必然一无所获 —— 那是
         // 一条随手势变长而变慢的 O(n²)。600 笔的页面上实测，整条重走比只走新段
         // 贵 22–75 倍。
+        //
+        // 这一段要用合并事件里的原始采样，不能只用事件的落点。笔的采样率比
+        // pointermove 的派发率高得多，浏览器会把中间那些点合并进一个事件；快速
+        // 划过时，两次事件之间笔真正走的是一条**曲线**，而只拿落点去插值得到的
+        // 是那条曲线的弦 —— 弦会抄近路，把弯里那几笔漏掉。这就是「快速扫过时
+        // 有些笔记擦不到」。画笔一直用着合并事件（见下面），橡皮以前没用。
+        //
+        // 仍然是常数量级：合并事件只含**这一次**派发攒下的采样，不随手势变长。
         const previous = this._eraserDot;
-        this._eraserDot = pt;
-        this._eraserPath = [previous, pt];
+        const merged = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+        const walked = merged.length > 1 ? merged.map(m => this._docPoint(m)) : [pt];
+        this._eraserDot = walked[walked.length - 1];
+        this._eraserPath = [previous, ...walked];
         this._eraseAlong();
         this.render();
         return;
@@ -1017,9 +1027,9 @@ export class InkSurface {
    */
   _eraseAlong() {
     if (this.eraserMode === ERASER_MODES.REGION) {
-      const head = this._eraserDot;
-      if (!head) return;
-      if (eraseArea(this.layer, this.history, { x: head.x, y: head.y, radius: this.eraserRadius })) {
+      // 沿这一段路径一路挖，不是只在落点挖一个洞 —— 见 eraseAreaAlongPath。
+      if (!this._eraserPath?.length) return;
+      if (eraseAreaAlongPath(this.layer, this.history, this._eraserPath, this.eraserRadius)) {
         this.handlers.onChange?.(this.layer);
       }
       return;

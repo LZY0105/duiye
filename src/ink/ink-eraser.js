@@ -44,15 +44,20 @@ export function strokeIdsAtPoint(layer, x, y, radius = 6) {
  * endpoints: a fast swipe can jump tens of pixels between events, and testing
  * only the samples leaves untouched strokes behind in the gaps.
  */
-export function strokeIdsAlongPath(layer, points, radius = 6) {
-  const hits = new Set();
-  if (!Array.isArray(points) || points.length === 0) return [];
-
+/**
+ * 把一条采样稀疏的路径补成一串首尾相接的点。
+ *
+ * 两种橡皮共用这一份。指针事件之间的间隔取决于手划得多快 —— 真机上量过，快速
+ * 划一道时相邻两个 pointermove 差 20 个 CSS 像素上下；而橡皮头的半径比这小。
+ * 只在事件落点上擦，中间那段就是没擦到的缝，手越快缝越宽。
+ *
+ * 步长取半径的 0.75，保证相邻两个圆盘互相重叠，路径上不留空隙。
+ */
+function* walkPath(points, radius) {
   const step = Math.max(1, radius * 0.75);
   for (let i = 0; i < points.length; i++) {
     const current = points[i];
     const previous = i > 0 ? points[i - 1] : null;
-
     if (previous) {
       const dx = current.x - previous.x;
       const dy = current.y - previous.y;
@@ -60,14 +65,38 @@ export function strokeIdsAlongPath(layer, points, radius = 6) {
       const samples = Math.floor(distance / step);
       for (let s = 1; s <= samples; s++) {
         const t = s / (samples + 1);
-        for (const id of strokeIdsAtPoint(layer, previous.x + dx * t, previous.y + dy * t, radius)) {
-          hits.add(id);
-        }
+        yield { x: previous.x + dx * t, y: previous.y + dy * t };
       }
     }
-    for (const id of strokeIdsAtPoint(layer, current.x, current.y, radius)) hits.add(id);
+    yield current;
+  }
+}
+
+export function strokeIdsAlongPath(layer, points, radius = 6) {
+  const hits = new Set();
+  if (!Array.isArray(points) || points.length === 0) return [];
+  for (const p of walkPath(points, radius)) {
+    for (const id of strokeIdsAtPoint(layer, p.x, p.y, radius)) hits.add(id);
   }
   return [...hits];
+}
+
+/**
+ * 区域橡皮：沿着这一段路径一路挖过去，而不是只在落点挖一个洞。
+ *
+ * 以前这里只拿当前指针位置调一次 eraseArea。慢慢擦看不出问题——事件密，洞挨着
+ * 洞；快速扫过去就会一段擦掉一段留着，正是「有些笔记擦不到」。整笔模式一直是
+ * 沿路径测的，区域模式漏了。
+ *
+ * @returns {boolean} 这一段有没有真的改动过什么
+ */
+export function eraseAreaAlongPath(layer, history, points, radius) {
+  if (!Array.isArray(points) || points.length === 0) return false;
+  let changed = false;
+  for (const p of walkPath(points, radius)) {
+    if (eraseArea(layer, history, { x: p.x, y: p.y, radius })) changed = true;
+  }
+  return changed;
 }
 
 /**

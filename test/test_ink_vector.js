@@ -46,6 +46,7 @@ import {
 import {
   ERASER_MODES,
   eraseArea,
+  eraseAreaAlongPath,
   eraseStrokes,
   strokeIdsAlongPath,
   strokeIdsAtPoint,
@@ -290,8 +291,48 @@ check('橡皮交给命中测试的永远只有一段', () => {
   const src = $read('src/ink/ink-surface.js');
   assert.ok(!/_eraserPath\.push\(/.test(src),
     '轨迹不再累积：累积的那版每次重走全程，是一条随手势变长而变慢的 O(n²)');
-  assert.ok(/this\._eraserPath = \[previous, pt\]/.test(src),
-    '每次只留上一点和这一点');
+  assert.ok(/this\._eraserPath = \[previous, \.\.\.walked\]/.test(src),
+    '每次只留上一个落点和这一次事件走过的那几个采样');
+});
+
+// 区域橡皮以前只在指针落点挖一个洞。慢慢擦看不出来——事件密，洞挨着洞；快速扫过
+// 去就一段擦掉一段留着，正是「快速扫过时有些笔记擦不到」。真机上量过，快划一道时
+// 相邻两个 pointermove 差 20 个 CSS 像素上下，而橡皮头半径比这小。
+check('区域橡皮沿整段路径擦，不是只在落点挖一个洞', () => {
+  // 一排挨着的墨点，横跨橡皮要走的那条线。
+  const build = () => {
+    const layer = new InkLayer();
+    for (let x = 20; x <= 200; x += 4) layer.add(strokeThrough([[x, 100], [x, 104]], { width: 1 }));
+    return layer;
+  };
+  const from = { x: 20, y: 102 };
+  const to = { x: 200, y: 102 };
+  const RADIUS = 6;
+
+  // 只在两个落点各挖一次 —— 以前的做法
+  const spotty = build();
+  const before = spotty.getAll().length;
+  eraseArea(spotty, null, { x: from.x, y: from.y, radius: RADIUS });
+  eraseArea(spotty, null, { x: to.x, y: to.y, radius: RADIUS });
+
+  // 沿路径擦 —— 现在的做法
+  const swept = build();
+  eraseAreaAlongPath(swept, null, [from, to], RADIUS);
+
+  assert.ok(spotty.getAll().length > swept.getAll().length,
+    '只在落点挖，中间那一大段必然留着');
+  assert.equal(swept.getAll().length, 0,
+    '沿路径扫过去，这条线上的墨点一个都不该剩');
+  assert.ok(before > 0);
+});
+
+check('区域橡皮：走得再快也不留缝', () => {
+  // 事件之间隔得很开（模拟快速划动），依然要擦干净。
+  const layer = new InkLayer();
+  for (let x = 0; x <= 300; x += 3) layer.add(strokeThrough([[x, 50], [x, 54]], { width: 1 }));
+  const sparse = [{ x: 0, y: 52 }, { x: 150, y: 52 }, { x: 300, y: 52 }];
+  eraseAreaAlongPath(layer, null, sparse, 6);
+  assert.equal(layer.getAll().length, 0);
 });
 
 check('region eraser removes strokes inside a lasso', () => {
