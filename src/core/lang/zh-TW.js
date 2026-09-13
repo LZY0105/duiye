@@ -359,6 +359,6 @@ export default {
   "install.action": "安裝",
   "about.licence": "© 2026 對頁 · 依 <a href=\"https://opensource.org/licenses/MIT\" target=\"_blank\" rel=\"noopener\">MIT 授權條款</a> 授權發布。",
   "about.derived": "本專案最初自 <a href=\"https://github.com/strangelion/LaTeXSnipper_mobile\" target=\"_blank\" rel=\"noopener\">LaTeXSnipper Mobile</a> 分出，此後核心部分整體重寫：上游的程式碼現已不在其中，授權條款也隨之由 AGPL-3.0 改為 MIT。改動的來龍去脈記在儲存庫的 docs/許可證變更.md，分界之前的版本仍然適用 AGPL-3.0。",
-  "about.rewritten": "雙欄工作區、向量筆跡層、無限草稿紙、書架式文件庫與手勢翻頁均為本專案所寫；答案比對引擎來自同一作者的 <a href=\"https://github.com/LZY0105/Math-answer-to-question-matching-model\" target=\"_blank\" rel=\"noopener\">Math-answer-to-question-matching-model</a>，以 MIT 發布；Agent 面板與本機代理由 @WangJiyi 所寫。",
+  "about.rewritten": "雙欄工作區、向量筆跡層、無限草稿紙、書架式文件庫與手勢翻頁均為本專案所寫；答案比對引擎來自同一作者的 <a href=\"https://github.com/LZY0105/Math-answer-to-question-matching-model\" target=\"_blank\" rel=\"noopener\">Math-answer-to-question-matching-model</a>，以 MIT 發布；Agent 面板與本機代理由 @allnothing571 所寫。",
   "about.source": "完整原始碼見 <a href=\"https://github.com/LZY0105/duiye\" target=\"_blank\" rel=\"noopener\">github.com/LZY0105/duiye</a>。教材 PDF 與其中的題目、答案文字屬於各自權利人，不隨本軟體散布。",
 }

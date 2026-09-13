@@ -146,5 +146,5 @@ The answer matching engine comes from https://github.com/LZY0105/Math-answer-to-
 and is released under the MIT License too. Its copyright and license notices remain in
 the corresponding source files.
 
-The Agent panel and its local proxy were written by [@WangJiyi](https://github.com/WangJiyi),
+The Agent panel and its local proxy were written by [@allnothing571](https://github.com/allnothing571),
 who holds the copyright to them.

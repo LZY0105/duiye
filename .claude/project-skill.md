@@ -41,7 +41,7 @@ duiye/
 │   │   ├── pdf-pane.js            单栏 PDF：手势、翻页、位图缓存、笔迹装卸
 │   │   ├── book-shelf.js          书架；book-open.js 是翻书那一下的动画
 │   │   ├── user-guide.js          使用说明，图是画的不是截的
-│   │   ├── agent-panel.js         Agent 面板（@WangJiyi）
+│   │   ├── agent-panel.js         Agent 面板（@allnothing571）
 │   │   └── …                      21 个匹配引擎模块
 │   ├── ink/                矢量笔迹层，PDF 和草稿纸共用
 │   │   └── ink-shared.js          同一页开在两栏时共用同一层（A09）
