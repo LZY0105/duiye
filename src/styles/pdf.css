@@ -179,13 +179,16 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
 /* ── page toolbar: Floating Liquid Glass Bar ───────────────────────────────── */
 
 /* Compressed: three buttons do not need 72px of a 736px screen. */
+/* 和底栏一样：半透，但不磨砂。理由见 base.css 里 .bottom-nav 那条规则上的注释
+   ——这两条横跨整个屏幕，磨砂糊掉的是正在读的内容，不是页边空白。
+   真正生效的是文件末尾 [data-skin="liquid-math"] .pdf-page-bar 那条，
+   只改这里不起作用。 */
 .pdf-page-bar {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.25rem 0.75rem;
   background: var(--hdr-bg);
-  backdrop-filter: var(--nav-blur);
   border-bottom: var(--nav-border);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.4), 0 4px 20px -2px rgba(0, 0, 0, 0.03);
   flex-wrap: wrap;
@@ -2135,9 +2138,10 @@ body.is-library-open .ink-card-layer { display: none; }
   overflow: hidden;
 }
 
+/* 不磨砂。这一条才是真正生效的那个（特异性高过上面那条光秃秃的
+   .pdf-page-bar），理由见 base.css 里 .bottom-nav 那条规则上的注释。 */
 [data-skin="liquid-math"] .pdf-page-bar {
   background: var(--glass-bg);
-  backdrop-filter: var(--nav-blur);
   border: var(--nav-border);
   box-shadow: var(--glass-shadow);
   border-radius: var(--pill-radius);
