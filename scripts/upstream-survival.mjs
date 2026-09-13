@@ -15,11 +15,12 @@
 //   git fetch upstream
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, statSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-const REF = process.argv[2] || 'upstream/main';
+const args = process.argv.slice(2);
+const LIST = args.includes('--list');   // 把「其余」那一档逐行列出来，好人工过一遍
+const REF = args.find((a) => !a.startsWith('--')) || 'upstream/main';
 
 // ── 判定口径 ────────────────────────────────────────────────────────────────
 //
@@ -70,8 +71,16 @@ function capacitorTemplateLines() {
     console.warn('  没有它，android/ 下的模板代码会被错算成上游的。\n');
     return new Set();
   }
-  const dir = mkdtempSync(join(tmpdir(), 'captpl-'));
+  // 解到仓库内的相对路径，不走系统临时目录。
+  //
+  // Windows 上用户名含非 ASCII 字符时（这台机器就是），%TEMP% 的绝对路径交给
+  // MSYS 的 tar 会被转义两次，报出来的是 "Cannot open: No such file or
+  // directory"，看不出是路径编码的事。相对路径绕开整件事。
+  // 同一个坑的完整版见 docs/BUILD_WINDOWS_NON_ASCII_PATH.md。
+  const dir = 'node_modules/.capacitor-template-probe';
   try {
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
     execFileSync('tar', ['-xzf', tarball, '-C', dir]);
     const lines = new Set();
     const walk = (d) => {
@@ -116,8 +125,20 @@ const SELECTOR = /^\s*[.#:*\[]?[\w-]*[\w\-.#:>+~*\[\]="'()\s,]*\{\s*$/;
 // 形式由语言定死的：CSS 声明（`属性: 值;`）、JSON/YAML 的键值对
 const DECLARATION = /^\s*(-{0,2}[\w-]+\s*:\s*[^{}]+;?\s*\}?|"[^"]+"\s*:\s*.+,?)\s*$/;
 
-// API 表面：import、公开函数签名、Actions 的固定字段。都只有一种写法。
-const API_SURFACE = /^\s*(import\s|export\s+(async\s+)?(function|const|class)\s|export\s*\{|-\s*uses:\s|uses:\s|runs-on:\s|@media\s|@keyframes\s|@supports\s)/;
+// API 表面：形式由语言、框架或平台定死，只有一种写法。
+//
+//   import / export          —— 由文件布局和调用方定死
+//   GitHub Actions 的关键字  —— on:、jobs:、steps:、with:、env: 是 schema，
+//                               不是措辞；${{ secrets.X }} 同理
+//   HTML 的 <meta> / <link>  —— charset、viewport、manifest 都是规范定的
+//   CSS 的 @ 规则
+const API_SURFACE = new RegExp([
+  String.raw`^\s*(import\s|export\s+(async\s+)?(function|const|class)\s|export\s*\{)`,
+  String.raw`^\s*-?\s*(on|jobs|steps|inputs|with|env|permissions|uses|runs-on|needs|if|outputs|secrets)\s*:\s*$`,
+  String.raw`^\s*[A-Z_]+\s*:\s*\$\{\{\s*secrets\.`,
+  String.raw`^\s*<(meta|link)\s`,
+  String.raw`^\s*@(media|keyframes|supports|import|font-face)\s`,
+].join('|'));
 
 function bucketOf(line) {
   if (SKELETON.test(line)) return 'skeleton';
@@ -160,17 +181,20 @@ for (const f of ours) {
   if (!upstream.size) continue;
 
   const counts = { skeleton: 0, phrase: 0, api: 0, selector: 0, declaration: 0, prose: 0 };
+  const proseLines = [];
   let tpl = 0, kept = 0;
-  for (const line of cur) {
-    if (!isUpstreamLine(line, upstream)) continue;
-    if (tplLines.has(line.trim())) { tpl++; continue; }   // Capacitor 模板，不算上游的
+  cur.forEach((line, i) => {
+    if (!isUpstreamLine(line, upstream)) return;
+    if (tplLines.has(line.trim())) { tpl++; return; }   // Capacitor 模板，不算上游的
     kept++;
-    counts[bucketOf(line)]++;
-  }
+    const b = bucketOf(line);
+    counts[b]++;
+    if (b === 'prose') proseLines.push([i + 1, line]);
+  });
   template += tpl;
   if (!kept) continue;
   for (const k of Object.keys(totals)) totals[k] += counts[k];
-  perFile.push({ f, kept, live, ...counts });
+  perFile.push({ f, kept, live, proseLines, ...counts });
 }
 
 perFile.sort((a, b) => b.prose - a.prose || b.kept - a.kept);
@@ -193,4 +217,19 @@ console.log(`   其余                ${pad(totals.prose, 6)} 行   ← 只有�
 console.log(`\n按「其余」排序的前 15 个文件：`);
 for (const r of perFile.slice(0, 15)) {
   console.log(`   ${pad(r.prose, 5)} / ${pad(r.kept, 4)} 行（本文件共 ${r.live}）  ${r.f}`);
+}
+
+// --list：把需要人工判断的那一档逐行摊开。
+// 复核这件事要能被别人重做一遍，而不是只存在于某一次对话里。
+if (LIST) {
+  console.log(`\n${'═'.repeat(70)}\n「其余」共 ${totals.prose} 行，逐行如下\n`);
+  for (const r of perFile) {
+    if (!r.proseLines.length) continue;
+    console.log(`\n── ${r.f}  (${r.proseLines.length} 行)`);
+    for (const [n, l] of r.proseLines) {
+      console.log(`   ${pad(n, 5)} | ${l.length > 108 ? `${l.slice(0, 105)}…` : l}`);
+    }
+  }
+} else {
+  console.log(`\n加 --list 可以把「其余」那 ${totals.prose} 行逐行列出来。`);
 }
