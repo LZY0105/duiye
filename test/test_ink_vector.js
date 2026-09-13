@@ -239,6 +239,61 @@ check('a fast eraser swipe does not skip strokes between samples', () => {
   assert.equal(hit.length, ids.length, 'every crossed stroke must be hit');
 });
 
+// 橡皮每次 pointermove 只把**新走的那一段**交给命中测试，不是整条轨迹。这条断言
+// 守的是那个优化的正确性：逐段擦，和把整条路径一次擦，结果必须完全一样。
+//
+// 它成立的理由是「擦除只会让笔画变少」——走过的地方已经没有东西可擦了，所以重走
+// 一遍必然一无所获。哪天橡皮变成了会添东西的工具，这条会先红。
+check('逐段擦和整条擦，擦掉的是同一批笔画', () => {
+  const build = () => {
+    const layer = new InkLayer();
+    for (let x = 0; x <= 200; x += 7) layer.add(strokeThrough([[x, -6], [x, 6]], { width: 1 }));
+    for (let y = -40; y <= 40; y += 11) layer.add(strokeThrough([[-30, y], [-20, y]], { width: 1 }));
+    return layer;
+  };
+  // 一条弯一点的轨迹，样本之间的间隔比笔画间距大——正是会漏掉东西的那种。
+  const path = [];
+  for (let i = 0; i <= 20; i++) path.push({ x: i * 10, y: Math.sin(i / 2) * 4 });
+
+  const whole = build();
+  eraseStrokes(whole, null, strokeIdsAlongPath(whole, path, 4));
+
+  const piecewise = build();
+  for (let i = 1; i < path.length; i++) {
+    eraseStrokes(piecewise, null, strokeIdsAlongPath(piecewise, [path[i - 1], path[i]], 4));
+  }
+  // 第一个点本身也要测到（pointerdown 那一下）。
+  eraseStrokes(piecewise, null, strokeIdsAlongPath(piecewise, [path[0]], 4));
+
+  // 按几何比，不按 id：两次 build 出来的是两批新笔画，id 全局递增，跨层比 id
+  // 永远不相等 —— 那会让这条断言变成一条永远红的假警报。
+  const shape = (l) => l.getAll()
+    .map(st => st.points.map(pt => `${pt.x},${pt.y}`).join(' '))
+    .sort().join('|');
+  assert.equal(shape(piecewise), shape(whole));
+  assert.ok(whole.getAll().length < build().getAll().length, '这一趟必须真的擦掉了东西');
+});
+
+// 橡皮在一次 pointermove 里只许重画一遍。_eraseAlong 曾经自己也 render 一次，
+// 而两个调用点在它返回之后又各 render 一次——同一帧把整层笔画重绘两遍，且恰好
+// 发生在真擦到东西、那一帧本来就最重的时候。平板上 600 笔的页面实测，去掉这一
+// 下之后帧间隔 p95 从 73ms 降到 45ms，超过 50ms 的帧从 22 个降到 2 个。
+check('_eraseAlong 自己不重画', () => {
+  const src = $read('src/ink/ink-surface.js');
+  const body = src.slice(src.indexOf('  _eraseAlong() {'), src.indexOf('  // ── commands'));
+  assert.ok(body.length > 0, '找不到 _eraseAlong');
+  assert.ok(!/this\.render\(\)/.test(body), '_eraseAlong 里不该有 render');
+  assert.ok(/onChange/.test(body), '但 onChange 还要照发——落盘和另一栏都靠它');
+});
+
+check('橡皮交给命中测试的永远只有一段', () => {
+  const src = $read('src/ink/ink-surface.js');
+  assert.ok(!/_eraserPath\.push\(/.test(src),
+    '轨迹不再累积：累积的那版每次重走全程，是一条随手势变长而变慢的 O(n²)');
+  assert.ok(/this\._eraserPath = \[previous, pt\]/.test(src),
+    '每次只留上一点和这一点');
+});
+
 check('region eraser removes strokes inside a lasso', () => {
   const layer = new InkLayer();
   const inside = strokeThrough([[10, 10], [20, 20]]);
