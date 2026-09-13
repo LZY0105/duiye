@@ -1,154 +1,196 @@
-name: Build Android APK
+name: 构建 APK
 
+# 只手动触发。
+#
+# 这个仓库不需要「每次推送都出包」：包是拿去装平板的，不是给 CI 看的，而一次
+# Android 构建要拉整套 SDK 加 Gradle 缓存，跑几分钟。推送时该跑的是测试和安全
+# 检查，那两件在别的工作流里。
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（留空自动从 package.json 读取）'
+        description: '版本号（留空就用 package.json 里的）'
         required: false
         default: ''
         type: string
-      create_release:
-        description: '创建 GitHub Release'
+      release:
+        description: '同时创建 GitHub Release（需要先配好签名 Secret）'
         required: false
         default: false
         type: boolean
 
+# 默认只读。只有最后创建 Release 那一步需要写，写权限在那个 job 上单独给。
+permissions:
+  contents: read
+
 env:
-  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  GRADLE_OPTS: '-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs="-Xmx3g"'
+  # CI 上每个 job 都是一台新机器，Gradle 守护进程活不过这一次构建，留着它只是
+  # 多占一份内存 —— 而这台机器的内存要同时喂 Node、Gradle 和 R8。
+  GRADLE_OPTS: '-Dorg.gradle.daemon=false -Dorg.gradle.jvmargs=-Xmx3g'
+  BUILD_TOOLS: '36.0.0'
 
 jobs:
-  build-apk:
+  apk:
+    name: Release APK
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write        # 创建 Release 用
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
+          cache: npm
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '21'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v3
         with:
-          packages: 'platforms;android-36 build-tools;36.0.0'
+          packages: platforms;android-36 build-tools;${{ env.BUILD_TOOLS }}
 
-      - name: Generate release keystore
-        run: |
-          mkdir -p ~/.android
-          # Debug keystore (for assembleDebug)
-          if [ ! -f ~/.android/debug.keystore ]; then
-            keytool -genkey -v -keystore ~/.android/debug.keystore \
-              -storepass android -alias androiddebugkey -keypass android \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-          fi
-          # Release keystore (for assembleRelease, V1+V2+V3 signed)
-          # Use GitHub Secrets if available, otherwise generate a CI-only key
-          cd android/app
-          if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > release.keystore
-            echo "storeFile=release.keystore" > keystore.properties
-            echo "storePassword=${KEYSTORE_PASSWORD}" >> keystore.properties
-            echo "keyAlias=${KEY_ALIAS:-duiye}" >> keystore.properties
-            echo "keyPassword=${KEY_PASSWORD:-${KEYSTORE_PASSWORD}}" >> keystore.properties
-            echo "Using user-provided keystore"
-          else
-            keytool -genkey -v -keystore release.keystore \
-              -storepass duiye -alias duiye -keypass duiye \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=duiye,O=duiye,C=CN"
-            echo "storeFile=release.keystore" > keystore.properties
-            echo "storePassword=duiye" >> keystore.properties
-            echo "keyAlias=duiye" >> keystore.properties
-            echo "keyPassword=duiye" >> keystore.properties
-            echo "Using CI-generated keystore (no Secrets set)"
-          fi
-        env:
-          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      - name: 把 build-tools 放进 PATH
+        # apksigner 和 zipalign 住在这里，setup-android 不会替你加。
+        run: echo "$ANDROID_HOME/build-tools/$BUILD_TOOLS" >> "$GITHUB_PATH"
 
-      - name: Cache npm
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-
-      - name: Cache Gradle
+      - name: 缓存 Gradle
         uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle*', 'android/**/gradle-wrapper.properties') }}
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle*', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
 
-      - name: Set version
-        run: |
-          # Auto-read version from package.json if not provided
-          VERSION="${{ inputs.version }}"
-          if [ -z "$VERSION" ]; then
-            VERSION=$(node -e "console.log(require('./package.json').version)")
-            echo "Using package.json version: $VERSION"
-          else
-            # Update package.json with the provided version
-            node -e "const p=require('./package.json');p.version='$VERSION';require('fs').writeFileSync('package.json',JSON.stringify(p,null,2))"
-          fi
-          # Update Android version — strip dots and strip leading zeros to avoid octal
-          VER_CODE=$(echo "$VERSION" | node -e "process.stdin.on('data',d=>console.log(Number(d.toString().replace(/\./g,''))))")
-          sed -i "s/versionCode .*/versionCode $VER_CODE/" android/app/build.gradle
-          sed -i "s/versionName .*/versionName \"$VERSION\"/" android/app/build.gradle
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "Version set to $VERSION (code: $VER_CODE)"
-
-      - name: Install dependencies
+      - name: 装依赖
         run: npm ci
 
-      - name: Build web assets
+      # 版本号只写 package.json 一处。
+      #
+      # android/app/build.gradle 自己从 package.json 读版本，并按
+      # 主*10000 + 次*100 + 修订 折算 versionCode（1.4.0 → 10400）。
+      #
+      # 这一步以前用 sed 把算好的值覆盖成「去掉点」的 140 —— 比本地构建低两个
+      # 数量级。Android 正是用 versionCode 判断一次安装是升级还是降级，所以
+      # CI 出的包装不到本地装过的机器上，而且报的错是「应用未安装」，看不出
+      # 是版本号的事。
+      #
+      # 输入值走环境变量，不直接拼进脚本：workflow_dispatch 的输入是外部可控的，
+      # 内联 ${{ }} 到 shell 里等于把它当代码执行。
+      - name: 版本号
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_VERSION" ]; then
+            case "$INPUT_VERSION" in
+              [0-9]*.[0-9]*.[0-9]*) ;;
+              *) echo "::error::版本号要写成 主.次.修订，例如 1.4.0；收到的是 $INPUT_VERSION"; exit 1 ;;
+            esac
+            node -e '
+              const fs = require("fs");
+              const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+              pkg.version = process.env.INPUT_VERSION;
+              fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+            '
+          fi
+          VERSION=$(node -p 'require("./package.json").version')
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "版本 $VERSION"
+
+      # 测试在构建之前跑。一个通不过自己测试的包不该被签名，更不该被发出去。
+      - name: 跑测试
+        run: npm test
+
+      - name: 构建前端
         run: npm run build
 
-      - name: Sync Capacitor Android
+      - name: 同步 Capacitor
         run: npx cap sync android
 
-      - name: Build Release APK (signed V1+V2+V3 + R8 obfuscated)
+      # 签名。
+      #
+      # 配了 Secret 就用正式密钥。没配就现生成一把，让人能拿到一个装得上的包
+      # 试一试 —— 但那把密钥每次构建都不一样，签名一变 Android 就拒绝覆盖安装。
+      # 所以临时密钥签出来的包**不允许**发 Release：那样的版本一旦发出去，下一
+      # 版就再也更新不上去，只能让所有人卸载重装。
+      - name: 准备签名
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        working-directory: android/app
+        run: |
+          set -euo pipefail
+          if [ -n "${KEYSTORE_B64:-}" ]; then
+            printf '%s' "$KEYSTORE_B64" | base64 -d > release.keystore
+            {
+              echo "storeFile=release.keystore"
+              echo "storePassword=${KEYSTORE_PASSWORD}"
+              echo "keyAlias=${KEY_ALIAS:-duiye}"
+              echo "keyPassword=${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
+            } > keystore.properties
+            echo "EPHEMERAL_KEY=0" >> "$GITHUB_ENV"
+            echo "用的是仓库 Secret 里的正式密钥"
+          else
+            keytool -genkeypair -v -keystore release.keystore \
+              -storepass duiye -alias duiye -keypass duiye \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=duiye,O=duiye,C=CN"
+            {
+              echo "storeFile=release.keystore"
+              echo "storePassword=duiye"
+              echo "keyAlias=duiye"
+              echo "keyPassword=duiye"
+            } > keystore.properties
+            echo "EPHEMERAL_KEY=1" >> "$GITHUB_ENV"
+            echo "::warning::没配签名 Secret，这次用的是临时密钥。包能装，但和任何其它构建的签名都不一样，不能用来发布。"
+          fi
+
+      - name: 构建 Release APK
         working-directory: android
         run: |
           chmod +x ./gradlew
           ./gradlew assembleRelease
 
-      - name: Verify APK
+      # 验签这一步必须能失败。
+      # 原来它结尾挂着 `|| true`，而一个不会失败的检查不是检查 —— 它只是在日志
+      # 里留一段没人读的文字。
+      - name: 验签
         run: |
-          APK_DIR="android/app/build/outputs/apk/release"
-          echo "=== APK files ==="
-          ls -lh "$APK_DIR"/
-          echo "--- Architecture-specific APKs ---"
-          for apk in "$APK_DIR"/*.apk; do
-            echo "APK: $(basename "$apk") size: $(du -sh "$apk" | cut -f1)"
-            apksigner verify --verbose "$apk" 2>&1 | head -5 || true
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(android/app/build/outputs/apk/release/*.apk)
+          if [ ${#apks[@]} -eq 0 ]; then
+            echo "::error::没有产出任何 APK"
+            exit 1
+          fi
+          for apk in "${apks[@]}"; do
+            echo "── $(basename "$apk")  $(du -h "$apk" | cut -f1)"
+            apksigner verify --verbose --print-certs "$apk"
           done
 
-      - name: Get version
-        id: version
-        run: echo "version=${VERSION}" >> $GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: duiye-v${{ env.VERSION }}
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
 
-      - name: Create GitHub Release
-        if: ${{ inputs.create_release }}
+      - name: 临时密钥不许发 Release
+        if: ${{ inputs.release && env.EPHEMERAL_KEY == '1' }}
+        run: |
+          echo "::error::这次用的是临时密钥，发出去的版本以后无法覆盖安装。先在仓库里配 KEYSTORE_B64 / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD 再发。包已经作为 artifact 上传，可以先拿去装着试。"
+          exit 1
+
+      - name: 创建 Release
+        if: ${{ inputs.release }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.VERSION }}
           name: v${{ env.VERSION }}
           files: android/app/build/outputs/apk/release/*.apk
-          draft: false
           generate_release_notes: true

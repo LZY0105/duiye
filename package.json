@@ -10,6 +10,7 @@
     "sync:android": "cap sync android",
     "build:android": "npm run build && npm run sync:android",
     "preview": "vite preview",
+    "check:licenses": "node scripts/check-licenses.mjs",
     "test:answers": "node test/test_answer_matching.js",
     "test:pdf-open": "node test/test_pdf_open_performance.js",
     "test:ink-drag": "node test/test_ink_toolbar_drag_dom.js",
@@ -62,7 +63,6 @@
     "@capacitor/cli": "^8.3.4",
     "@capacitor/core": "^8.3.4",
     "jsdom": "^30.0.1",
-    "sharp": "^0.34.5",
     "vite": "^8.0.16",
     "vite-plugin-pwa": "^1.3.0"
   },
