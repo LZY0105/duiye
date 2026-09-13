@@ -1,5 +1,11 @@
-// main.js — Application entry point.
-// bootstrap() → createApp() → start()
+// 入口。这里只做两件事：按顺序引入样式，然后把启动的三步走一遍。
+//
+// 样式的**顺序就是层级**——后引入的覆盖先引入的，所以这一串不能重排。每一处
+// 需要解释的地方都在下面注掉了原因。
+//
+// 启动分三步而不是一个函数，是因为它们失败的后果不同：bootstrap 挂了整个页面
+// 是空的，createApp 挂了骨架在但没有内容，start 挂了界面在但不响应。分开写，
+// 崩溃守卫的堆栈就能直接告诉你停在哪一步。
 
 import './styles/base.css';
 import './styles/pdf.css';

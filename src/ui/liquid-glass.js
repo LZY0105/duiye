@@ -360,7 +360,7 @@ const RIPPLE_TARGETS = [
   '.ink-overflow',
   '.ink-swatch',
   '.calc-btn',
-  '.ocr-btn',
+  '.action-btn',
   '.pdf-control-btn',
   '.skin-quick-toggle',
 ].join(',');

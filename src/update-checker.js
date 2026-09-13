@@ -126,7 +126,7 @@ function showUpdateDialog({ version, url, body }) {
   const footer = document.createElement('div');
   footer.className = 'update-dialog-footer';
   const later = document.createElement('button');
-  later.className = 'ocr-btn secondary';
+  later.className = 'action-btn secondary';
   later.type = 'button';
   later.textContent = t('update.later');
   footer.appendChild(later);
@@ -135,7 +135,7 @@ function showUpdateDialog({ version, url, body }) {
   // href 就是一次点击即执行。
   if (/^https:\/\//i.test(url || '')) {
     const go = document.createElement('a');
-    go.className = 'ocr-btn';
+    go.className = 'action-btn';
     go.href = url;
     go.target = '_blank';
     go.rel = 'noopener noreferrer';

@@ -56,9 +56,9 @@
   /* The tab indicator is a solid bar; it does not need to emit light too. */
   box-shadow: none;
 }
-[data-skin="default"] .ocr-btn,
-:root:not([data-skin]) .ocr-btn,
-:root[data-skin="default"] .ocr-btn {
+[data-skin="default"] .action-btn,
+:root:not([data-skin]) .action-btn,
+:root[data-skin="default"] .action-btn {
   font-weight: 500; letter-spacing: -0.01em;
 }
 /* ═══════════════════════════════════════════
@@ -166,7 +166,7 @@
 /* 纸这套皮肤靠明度差和一条切边分层，不靠透光。所以按钮是一条墨线加一片空白，
    没有底色可言——而那条线得是墨的低透明度，不能是灰：这块屏幕上其余一切都是
    墨，一条中性灰会被读成印刷线而不是控件。 */
-[data-skin="minimal"] .ocr-btn {
+[data-skin="minimal"] .action-btn {
   border: 1px solid rgba(28, 28, 30, 0.55);
   background: transparent;
   color: var(--fg);
@@ -174,11 +174,11 @@
   font-weight: 450;
 }
 /* 按下去是反白，不是变淡：纸上没有「压暗」这回事，翻面才是。 */
-[data-skin="minimal"] .ocr-btn:active {
+[data-skin="minimal"] .action-btn:active {
   background: var(--fg);
   color: #fff;
 }
-[data-skin="minimal"] .ocr-btn.secondary {
+[data-skin="minimal"] .action-btn.secondary {
   border-color: rgba(28, 28, 30, 0.22);
   color: var(--muted);
 }
@@ -321,7 +321,7 @@
   background-attachment: fixed;
 }
 
-[data-skin="liquid-math"] .ocr-btn {
+[data-skin="liquid-math"] .action-btn {
   background: rgba(255, 255, 255, 0.35);
   color: var(--accent);
   border: 1px solid rgba(255, 255, 255, 0.95);
@@ -336,7 +336,7 @@
   font-weight: 600;
   letter-spacing: 0.01em;
 }
-[data-skin="liquid-math"] .ocr-btn.secondary {
+[data-skin="liquid-math"] .action-btn.secondary {
   background: rgba(255, 255, 255, 0.20);
   color: var(--fg);
   border: 1px solid rgba(15, 23, 42, 0.08);
@@ -344,12 +344,12 @@
   backdrop-filter: blur(16px) saturate(190%);
   -webkit-backdrop-filter: blur(16px) saturate(190%);
 }
-[data-skin="liquid-math"] .ocr-btn:hover {
+[data-skin="liquid-math"] .action-btn:hover {
   transform: translateY(-1px);
   background: rgba(255, 255, 255, 0.55);
   box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08), inset 0 1.5px 0.5px #fff;
 }
-[data-skin="liquid-math"] .ocr-btn:active {
+[data-skin="liquid-math"] .action-btn:active {
   transform: scale(0.97);
   background: rgba(255, 255, 255, 0.25);
 }
@@ -375,10 +375,7 @@
                sense that anything was behind it.
 
    Both are inert to input, and both are suppressed under reduced motion in the
-   sense that matters — they stop tracking, they do not disappear. */
-
-[data-skin="liquid-math"] .result-card,
-[data-skin="liquid-math"] .hw-canvas-wrap {
+   sense that matters — they stop tracking{
   background: var(--glass-bg);
   box-shadow: var(--glass-shadow);
   backdrop-filter: var(--glass-blur);
@@ -387,56 +384,6 @@
   border-radius: var(--card-radius);
   position: relative;
   isolation: isolate;
-}
-
-/* ── the rim ── */
-[data-skin="liquid-math"] .result-card::before,
-[data-skin="liquid-math"] .hw-canvas-wrap::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: var(--glass-rim-width, 1.25px);
-  /* Anchored to the pointer angle, so the bright arc of the ring swings around
-     the surface as the hand moves — the same way a catchlight travels around
-     the edge of a real lens. */
-  background:
-    conic-gradient(from calc(var(--glass-angle, 135deg) - 100deg),
-      var(--glass-rim-bright)  0deg,
-      var(--glass-rim-mid)    58deg,
-      var(--glass-rim-dim)   126deg,
-      var(--glass-rim-dim)   190deg,
-      var(--glass-rim-mid)   258deg,
-      var(--glass-rim-bright) 330deg,
-      var(--glass-rim-bright) 360deg);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-          mask-composite: exclude;
-  pointer-events: none;
-  z-index: 1;
-}
-
-/* ── the glint ── */
-[data-skin="liquid-math"] .result-card::after,
-[data-skin="liquid-math"] .hw-canvas-wrap::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background:
-    radial-gradient(circle var(--glass-glint-size, 92px)
-      at var(--glass-x, 28%) var(--glass-y, 16%),
-      var(--glass-glint-core) 0%,
-      rgba(255, 255, 255, 0.10) 38%,
-      transparent 72%),
-    radial-gradient(circle 26px
-      at var(--glass-x, 28%) var(--glass-y, 16%),
-      rgba(255, 255, 255, 0.34) 0%,
-      transparent 100%);
-  mix-blend-mode: screen;
-  pointer-events: none;
-  z-index: 1;
 }
 
 /* ── Floating Island Navigation Dock (Anchored Dead Center) ── */
@@ -746,16 +693,11 @@
    rim would cover the glass instead of edging it. So the rings are switched
    off there and a plain border stands in: less alive, but a correct edge. */
 @supports not ((mask-composite: exclude) or (-webkit-mask-composite: xor)) {
-  [data-skin="liquid-math"] .result-card::before,
-  [data-skin="liquid-math"] .hw-canvas-wrap::before,
   [data-skin="liquid-math"] .ink-toolbar::after,
   [data-skin="liquid-math"] .ink-card::after,
   .bottom-nav::after,
   .nav-glass-lens::before,
   .segmented-glass-lens::before { display: none !important; }
-
-  [data-skin="liquid-math"] .result-card,
-  [data-skin="liquid-math"] .hw-canvas-wrap,
   [data-skin="liquid-math"] .ink-toolbar,
   [data-skin="liquid-math"] .ink-card,
   .bottom-nav,
@@ -792,7 +734,7 @@ html, body {
   touch-action: manipulation;
 }
 
-button, .snippet-btn, .compute-btn, .ocr-btn, .hw-tool-btn, .cam-trigger-btn {
+button, .action-btn{
   touch-action: manipulation;
   -webkit-user-select: none;
   user-select: none;
@@ -909,14 +851,12 @@ a:hover { color: var(--accent-hover); }
   background: var(--card-bg); color: var(--fg);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
   font-weight: 600;
-}
-.set-input, .set-select {
+} .set-select {
   width: 100%; padding: 0.65rem 0.85rem; border: var(--glass-border-subtle);
   border-radius: 10px; background: var(--bg); color: var(--fg);
   font-size: 0.9rem; font-family: inherit; outline: none;
   transition: all var(--transition-fast);
-}
-.set-input:focus, .set-select:focus {
+} .set-select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-light);
 }
@@ -979,7 +919,6 @@ a:hover { color: var(--accent-hover); }
 .set-option:hover { background: var(--accent-light); }
 .set-option:active { background: var(--accent); color: #fff; }
 .set-option.selected { color: var(--accent); font-weight: 600; background: var(--accent-light); }
-.set-hint { font-size: 0.74rem; color: var(--muted); margin-top: 0.5rem; line-height: 1.6; }
 
 /* ── Settings page groups: Apple Inset Grouped ── */
 
@@ -1003,10 +942,6 @@ a:hover { color: var(--accent-hover); }
 .set-section { margin-bottom: 1rem; }
 .set-section:last-child { margin-bottom: 0; }
 .set-section-title { font-size: 0.82rem; font-weight: 500; color: var(--muted); margin-bottom: 0.5rem; }
-.set-radio.active {
-  background: var(--accent); color: #fff; border-color: var(--accent);
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.135); font-weight: 600;
-}
 
 /* ── Settings toggle switch (iOS Switch) ── */
 .set-toggle {
@@ -1168,7 +1103,7 @@ a:hover { color: var(--accent-hover); }
   justify-content: flex-end;
   padding: 1rem 1.5rem 1.25rem;
 }
-.update-dialog-footer .ocr-btn { min-width: 5.5rem; }
+.update-dialog-footer .action-btn { min-width: 5.5rem; }
 @keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes dialogIn {
   from { opacity: 0; transform: scale(0.96) translateY(8px); }
@@ -1340,7 +1275,7 @@ a:hover { color: var(--accent-hover); }
 
 .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), #5856D6); border-radius: var(--pill-radius); transition: width 0.3s var(--spring-ease); width: 0%; }
 
-.ocr-btn {
+.action-btn {
   flex: 1; text-align: center;
   background: var(--glass-bg-subtle); color: var(--accent);
   border: var(--glass-border-subtle); padding: 10px 16px; border-radius: var(--pill-radius);
@@ -1348,13 +1283,13 @@ a:hover { color: var(--accent-hover); }
   transition: all var(--transition-fast); font-family: inherit;
 }
 
-.ocr-btn:hover { background: var(--card-bg); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+.action-btn:hover { background: var(--card-bg); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
 
-.ocr-btn:active { transform: scale(0.95); }
+.action-btn:active { transform: scale(0.95); }
 
-.ocr-btn.copied { background: #34C759; color: #fff; border-color: #34C759; box-shadow: 0 4px 12px rgba(52, 199, 89, 0.3); }
+.action-btn.copied { background: #34C759; color: #fff; border-color: #34C759; box-shadow: 0 4px 12px rgba(52, 199, 89, 0.3); }
 
-.ocr-btn.secondary {
+.action-btn.secondary {
   border-color: var(--border-color); color: var(--muted);
 }
 

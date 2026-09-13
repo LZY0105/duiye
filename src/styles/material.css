@@ -36,7 +36,7 @@
  * On `!important`
  * ───────────────
  * The eight skins declare their glass through selectors like
- * `[data-skin="liquid-math"][data-theme="dark"] .ocr-btn`, which outrank any
+ * `[data-skin="liquid-math"][data-theme="dark"] .action-btn`, which outrank any
  * plain class selector this file could write. Matching that specificity per
  * skin per theme would mean re-stating every rule eight times and would still
  * lose to the next skin someone adds.
@@ -185,8 +185,8 @@
    changed together in handwriting.css. */
 
 /* Disabled must read as unavailable before it is tapped, not after. */
-.ocr-btn:disabled,
-.ocr-btn.secondary:disabled,
+.action-btn:disabled,
+.action-btn.secondary:disabled,
 .calc-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
@@ -270,7 +270,7 @@
     box-shadow: none;
   }
 
-  .ocr-btn.secondary,
+  .action-btn.secondary,
   .calc-btn {
     border: 1px solid currentColor;
   }
@@ -287,7 +287,7 @@
 @media (prefers-reduced-motion: reduce) {
   .result-card,
 .history-item,
-.ocr-btn,
+.action-btn,
 .calc-btn,
 .mode-tab,
 .settings-tab,
@@ -295,7 +295,7 @@
     transition: none !important;
     animation: none !important;
   }
-  .ocr-btn:active,
+  .action-btn:active,
   .calc-btn:active { transform: none !important; }
 }
 
@@ -305,7 +305,7 @@
 
 /* 44px is the floor, and it is a floor for the hit area rather than for the
    drawn control: a 34px tool button keeps its size and grows its target. */
-.ocr-btn,
+.action-btn,
 .calc-btn,
 .mode-tab,
 .settings-tab,
@@ -320,7 +320,7 @@
 
 /* Focus has to be visible for anyone driving this from a keyboard or a
    connected trackpad, and the browser default ring disappears on glass. */
-.ocr-btn:focus-visible,
+.action-btn:focus-visible,
 .calc-btn:focus-visible,
 .mode-tab:focus-visible,
 .settings-tab:focus-visible,
@@ -1226,7 +1226,7 @@
 .answer-goto,
 .pdf-slot-btn.is-answer-action,
 .pdf-bar-btn,
-.ocr-btn,
+.action-btn,
 .answer-close {
   /* The rebound belongs to the RELEASE. Going down is immediate — a control
      that eases into being pressed feels unresponsive — so the spring is on the
@@ -1238,7 +1238,7 @@
 .answer-goto:active,
 .pdf-slot-btn.is-answer-action:active,
 .pdf-bar-btn:active,
-.ocr-btn:active,
+.action-btn:active,
 .answer-close:active {
   transform: scale(0.94);
   transition: transform 60ms ease-out;
@@ -1248,12 +1248,12 @@
   .answer-goto,
   .pdf-slot-btn.is-answer-action,
   .pdf-bar-btn,
-  .ocr-btn,
+  .action-btn,
   .answer-close { transition: background 140ms ease, color 140ms ease; }
   .answer-goto:active,
   .pdf-slot-btn.is-answer-action:active,
   .pdf-bar-btn:active,
-  .ocr-btn:active,
+  .action-btn:active,
   .answer-close:active { transform: none; }
 }
 
