@@ -1102,7 +1102,14 @@ export class PdfWorkspace {
     });
     for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
       const el = this.elSlots[slot];
-      if (el) this._sizeObserver.observe(el);
+      if (!el) continue;
+      this._sizeObserver.observe(el);
+      // 答案面板单独观察一份。它开合、以及内容从「正在匹配」变成一整页结果时，
+      // 高度都会变，而这些都不改变栏本身的尺寸——只观察栏的话，上面那个回调
+      // 一次都不会触发。它没有 dataset.slot，所以会从上面那个循环里 continue
+      // 掉，只落到循环之后那句重判冲突上，而那正是要的。
+      const answers = el.querySelector('[data-role="answer-panel"]');
+      if (answers) this._sizeObserver.observe(answers);
     }
   }
 
@@ -1944,7 +1951,16 @@ export class PdfWorkspace {
     // conflict check sees "something is open", leaves the bar where it is, and
     // there is nothing on screen the reader can close to get it back.
     const shown = (el) => el && el.getBoundingClientRect().width > 0;
-    for (const role of ['deck-list', 'outline-panel']) {
+    // 顺序就是叠放顺序，最上面的排前面：单子 z-index 30，找页面板 24，答案面板
+    // 在文档流里（没有 z-index，所以在最下面）。两块同时开着时，该让位给压在
+    // 最上面的那一块。
+    //
+    // 答案面板是后补的。它和另外两块是同一类东西——盖在某一栏上、在笔迹栏下面、
+    // 打开来是要读的——但一直不在这张表里，于是「对照本页答案」打开之后笔迹栏
+    // 就杵在答案上面不动。它还有一点和另外两块不同：高度是内容撑出来的（最高
+    // 48%），一条提示和一整页匹配结果差很多，所以它的尺寸变化也要重新判一次
+    // ——见 _watchSlotSizes 里对它的观察。
+    for (const role of ['deck-list', 'outline-panel', 'answer-panel']) {
       for (const el of this.root.querySelectorAll(`[data-role="${role}"]:not([hidden])`)) {
         if (shown(el)) return el;
       }

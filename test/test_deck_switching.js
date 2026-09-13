@@ -14,6 +14,12 @@
 // commit, and the restore that failure owes the reader.
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const $read = (f) => readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), '..', f), 'utf-8');
 
 class FakeStorage {
   constructor() { this.map = new Map(); }
@@ -524,6 +530,30 @@ const listIn = (col, box) => ({
 const COL_LEFT = rect(6, 70, 590, 730);
 const COL_RIGHT = rect(610, 70, 1194, 730);
 const LEFT_LIST = () => listIn(COL_LEFT, rect(20, 150, 460, 700));
+
+// 「对照本页答案」那块面板也算一块盖上来的东西。
+//
+// 它和单子、找页面板是同一类：盖在某一栏上、在笔迹栏下面、打开来是要读的。但它
+// 一直不在 _openOverlay 那张表里，于是答案一出来，笔迹栏就杵在上面不动——正是人
+// 报的「打开答案匹配时菜单和工具栏冲突」。
+await check('答案面板也在「会挡住笔迹栏」那张表里', async () => {
+  const src = $read('src/pdf/pdf-workspace.js');
+  const body = src.slice(src.indexOf('  _openOverlay() {'), src.indexOf('  _renderOutline('));
+  assert.ok(body.includes("'answer-panel'"), '答案面板要在表里');
+  // 顺序就是叠放顺序：单子 z-index 30，找页面板 24，答案面板在文档流里最下面。
+  const order = ['deck-list', 'outline-panel', 'answer-panel'].map(r => body.indexOf(r));
+  assert.ok(order[0] < order[1] && order[1] < order[2], '按从上到下排，最上面的先返回');
+});
+
+await check('答案面板的高度变化也要重新判一次冲突', async () => {
+  // 它的高度是内容撑出来的（最高 48%）：一条「请先指定答案册」的提示和一整页匹配
+  // 结果差很多，而这两种高度下笔迹栏该不该让位可能是两个答案。栏本身的尺寸不会跟
+  // 着变，所以只观察栏是看不见这件事的。
+  const src = $read('src/pdf/pdf-workspace.js');
+  const body = src.slice(src.indexOf('  _watchSlotSizes() {'), src.indexOf('  // ── state → DOM'));
+  assert.ok(/observe\(answers\)/.test(body), '答案面板要被单独观察');
+  assert.ok(/_reviewToolbarConflict\(\)/.test(body), '——而回调里要重判冲突');
+});
 
 await check('a list the bar is lying across folds it into that column bottom corner', async () => {
   const { ws, calls } = withToolbar(LEFT_BAR);
