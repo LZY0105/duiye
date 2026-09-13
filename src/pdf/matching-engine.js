@@ -25,7 +25,7 @@
 //   conclusions are the module's job.
 
 import { indexAnswerDocument, indexQuestionDocument, questionsOnPage } from './answer-index.js';
-import { PAIR_STATUS, RUNG } from './decision.js';
+import { PAIR_STATUS, RUNG, applyPairPermissions } from './decision.js';
 import { alignOutlines, matchPage } from './question-matcher.js';
 import { locateAnswerRegion } from './region-locator.js';
 import { verifyPair } from './pair-verifier.js';
@@ -107,9 +107,11 @@ async function readDocument(doc) {
 class PairSession {
   constructor({
     exercise, answer, exerciseIndex, answerIndex, alignment, pair, ocrRequired,
-    formulaPolicy,
+    formulaPolicy, matcher = null,
   }) {
     this.formulaPolicy = formulaPolicy;
+    /** 可选的外部打分实现，见 score()。为空就用 JS 那份。 */
+    this.matcher = matcher;
     this.exercise = exercise;
     this.answer = answer;
     this.exerciseIndex = exerciseIndex;
@@ -218,7 +220,7 @@ class PairSession {
       };
     };
 
-    const matches = matchPage(questions, this.answerIndex, {
+    const matches = await this.score(questions, {
       alignment: this.alignment,
       exercisePage: page,
       answerPageCount: this.answer.numPages,
@@ -233,6 +235,36 @@ class PairSession {
     return matches.map(m => annotate(m.rung === RUNG.AUTO_MATCH || m.rung === RUNG.REVIEW
       ? { ...m, rung: m.region ? RUNG.LOCATED : RUNG.REFUSED, matched: false, cappedBy: 'OCR_REQUIRED' }
       : m));
+  }
+
+  /**
+   * 打分这一步。默认走 JS 那份实现；给了 matcher 就把计算交出去。
+   *
+   * 留这个口是为了以后把匹配搬到 C++（见 native-matcher.js）。分出来单独一步，
+   * 是因为那天要动的不止「换个函数」：matchPage 是同步的，跨 JNI 之后是异步的，
+   * 而它上下全是闸门逻辑。现在先把异步和钳制做好，那天就只剩写 C++。
+   *
+   * 两条不变量，由这里保证，不指望实现方自觉：
+   *
+   * 一、**交出去的活可以失败，功能不能失败。** 原生那一位没接上会以
+   *     UNIMPLEMENTED 拒绝；答得不成形状也会抛。两种都退回 JS 那份——JS 那份不是
+   *     降级方案，它就是现在的正式实现。
+   *
+   * 二、**结论要再钳一次。** 不管谁算的，每一条都过 applyPairPermissions。
+   *     matching-engine 存在的理由就是把闸门收在一处（散出去之后实测 52/60 的
+   *     错书组合拿到了 HIGH 置信度的答案）；把计算交出去不等于把判断交出去。
+   *     一个写错的原生实现最多让答案变差，不能让未确认的配对给出 AUTO_MATCH。
+   */
+  async score(questions, options) {
+    if (this.matcher) {
+      try {
+        const out = await this.matcher(questions, this.answerIndex, options);
+        return out.map(m => clampToPair(m, this.pair.status));
+      } catch (_) {
+        // 故意不往上抛。调用方问的是「这道题的答案是什么」，不是「用哪个实现算的」。
+      }
+    }
+    return matchPage(questions, this.answerIndex, options);
   }
 
   /** Every question in the exercise book, page by page. */
@@ -261,10 +293,41 @@ class PairSession {
  * @param {object} [input.binding]        a manual binding the user already confirmed
  * @returns {{status, decision, session}|{status, decision, session: null}}
  */
+/**
+ * 把一条结论压回配对状态允许的高度。永远只降不升。
+ *
+ * 这是外部实现和 JS 之间那道闸。applyPairPermissions 自己就是「只降不升」的，
+ * 所以一个返回 AUTO_MATCH 的实现在未确认配对上只会得到 REVIEW；返回一个不认得
+ * 的 rung 会落到 REFUSED，而不是被当成最强的那一档。
+ */
+function clampToPair(match, pairStatus) {
+  const { rung, cappedBy } = applyPairPermissions(match?.rung, pairStatus, {
+    hasRegion: !!match?.region,
+  });
+  if (rung === match?.rung) return match;
+  return {
+    ...match,
+    rung,
+    matched: rung === RUNG.AUTO_MATCH,
+    asserted: rung === RUNG.AUTO_MATCH,
+    cappedBy: cappedBy ?? match?.cappedBy ?? null,
+  };
+}
+
 export async function preparePair({
   exerciseDocument,
   answerDocument,
   recognizer = null,
+  /**
+   * 可选：把打分这一步交给别的实现。
+   *
+   * 签名和 question-matcher.js 的 matchPage 一样，但返回 Promise：
+   *   matcher(questions, answerIndex, options) -> Promise<match[]>
+   *
+   * 现在唯一的用处是把计算交给原生层，见 native-matcher.js 的
+   * createNativeMatcher()。和 recognizer 一样是「有就用，没有照常跑」。
+   */
+  matcher = null,
   binding = null,
   expectScript = 'auto',
   /** See FORMULA_POLICY. STRICT is the agreed product rule. */
@@ -325,7 +388,7 @@ export async function preparePair({
     },
     session: new PairSession({
       exercise, answer, exerciseIndex, answerIndex, alignment, pair, ocrRequired,
-      formulaPolicy,
+      formulaPolicy, matcher,
     }),
   };
 }

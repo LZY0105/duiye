@@ -6,10 +6,10 @@
 //
 // 为什么是这个形状：
 //
-// 一、一座桥，不是两座。AI 代理和 OCR 是两件不同的活，但它们对上层是同一件
-//     事——「把一段东西交出去，等一段东西回来」。做成两套 JNI、两套插件、两套
-//     线程模型，就会有两处要各自修的线程 bug。所以是一个 Service 接口，两个
-//     实现，按名字挑。
+// 一、一座桥，不是几座。AI 代理、OCR、答案匹配是三件不同的活，但它们对上层是
+//     同一件事——「把一段东西交出去，等一段东西回来」。做成三套 JNI、三套插件、
+//     三套线程模型，就会有三处要各自修的线程 bug。所以是一个 Service 接口，
+//     几个实现，按名字挑。
 //
 // 二、结果是一段一段回来的，不是一次性回来的。一个只在算完才开口的模型，在
 //     人这一侧和卡死没有区别；而 OCR 认一整页时也能先把认出来的行交出来。
@@ -40,9 +40,26 @@
 
 namespace duiye {
 
-/** 上层认得的两种服务。字符串而不是枚举：加第三种不必改这个头文件。 */
+/** 上层认得的几种服务。字符串而不是枚举：再加一种不必改这个头文件。 */
 inline constexpr const char* kServiceAgent = "agent";
 inline constexpr const char* kServiceOcr = "ocr";
+
+/**
+ * 答案匹配。
+ *
+ * 这一位和上面两位不一样：它**已经有一个能用的实现**，在 JS 那边
+ * （question-matcher.js 的 matchPage，连带二十来个模块，在四本真实教材上
+ * 508/508 零错误）。留这个位置是为了以后把那段计算搬到 C++ 来，不是为了填补
+ * 一个空白。
+ *
+ * 所以接进来的实现要满足的不是「能跑」，而是「和现有那份算得一样」——
+ * test/ 下那几套回归就是判据，换实现之后它们必须照样全绿。
+ *
+ * 契约写在 src/pdf/native-matcher.js：JS 那一侧的适配器已经写好，照着它期望的
+ * 形状实现即可。**闸门不经过这一层**——角色判定、配对身份、OCR 上限、区域选择
+ * 都留在 JS，而且 JS 会对这一层返回的结论再钳一次。这一层只打分，不下判断。
+ */
+inline constexpr const char* kServiceMatch = "match";
 
 /** 约定好的几个错误码。实现可以自己再加，上层按字符串认。 */
 inline constexpr const char* kErrUnimplemented = "UNIMPLEMENTED";
@@ -51,8 +68,8 @@ inline constexpr const char* kErrCancelled = "CANCELLED";
 inline constexpr const char* kErrBadRequest = "BAD_REQUEST";
 
 struct Request {
-  std::string service;    // "agent" / "ocr"
-  std::string op;         // 服务自己定义的动作，例如 "chat" / "recognize"
+  std::string service;    // "agent" / "ocr" / "match"
+  std::string op;         // 服务自己定义的动作，如 "chat" / "recognize" / "matchPage"
   std::string payload;    // JSON，桥不解析
   std::string requestId;  // 取消和配对用的，由上层生成
 };
@@ -78,7 +95,7 @@ class Sink {
 class Service {
  public:
   virtual ~Service() = default;
-  /** "agent" 或 "ocr"。 */
+  /** 服务名，见上面那几个 kService*。 */
   virtual const char* name() const = 0;
   /** 这个服务现在是什么样，JSON。上层用它决定要不要露出相关的入口。 */
   virtual std::string describe() const = 0;

@@ -81,12 +81,16 @@ class NullService : public Service {
   const char* name_;
 };
 
-/** 第一次用到登记处时把两个空位摆好。 */
+/** 第一次用到登记处时把几个空位摆好。 */
 void ensureDefaults() {
   auto& all = registry();
   if (!all.empty()) return;
   all.emplace(kServiceAgent, std::make_shared<NullService>(kServiceAgent));
   all.emplace(kServiceOcr, std::make_shared<NullService>(kServiceOcr));
+  // match 这一位空着不代表「没有匹配功能」——它现在由 JS 那份实现在跑。
+  // 空的只是**原生的**那一份。上层据此决定要不要把计算交下来，而不是据此
+  // 决定要不要露出功能。
+  all.emplace(kServiceMatch, std::make_shared<NullService>(kServiceMatch));
 }
 
 }  // namespace

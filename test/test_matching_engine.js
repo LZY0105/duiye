@@ -448,6 +448,101 @@ await check('matchQuestion and matchAll agree on the same page', async () => {
     'single-question and whole-book flows must apply the same rules');
 });
 
+// ═══════════════════════════════════════════════════════════════
+group('6. 打分可以交给别人算，判断不行');
+// 以后要把匹配搬到 C++（见 src/pdf/native-matcher.js）。这一组盯的是那个口子：
+// 交出去的是计算，不是闸门——而这件事不能指望实现方自觉，得由 JS 这一侧保证。
+
+await check('给了 matcher 就用它，而不是 JS 那份', async () => {
+  let called = 0;
+  const p = await preparePair({
+    exerciseDocument: EX(),
+    answerDocument: ANS(),
+    matcher: async (questions) => {
+      called++;
+      return questions.map(q => ({
+        rung: RUNG.LOCATED, matched: false, question: q, region: { page: 1 },
+      }));
+    },
+  });
+  const out = await p.session.matchQuestion({ page: 3 });
+  assert.ok(called > 0, 'matcher 没被调用');
+  assert.ok(out.every(m => m.rung === RUNG.LOCATED), '返回的该是 matcher 算的那批');
+});
+
+await check('matcher 拒绝时退回 JS 那份，结果一模一样', async () => {
+  const withNative = await preparePair({
+    exerciseDocument: EX(),
+    answerDocument: ANS(),
+    // 原生那一位没接上就是这个形状：以 UNIMPLEMENTED 拒绝。
+    matcher: async () => { const e = new Error('no impl'); e.code = 'UNIMPLEMENTED'; throw e; },
+  });
+  const plain = await preparePair({ exerciseDocument: EX(), answerDocument: ANS() });
+
+  const a = await withNative.session.matchQuestion({ page: 3 });
+  const b = await plain.session.matchQuestion({ page: 3 });
+  assert.deepEqual(a.map(m => m.rung), b.map(m => m.rung),
+    '退回之后该和根本没给 matcher 时一样');
+});
+
+await check('matcher 抛任何异常都不会把功能带塌', async () => {
+  const p = await preparePair({
+    exerciseDocument: EX(),
+    answerDocument: ANS(),
+    matcher: async () => { throw new TypeError('实现写崩了'); },
+  });
+  const out = await p.session.matchQuestion({ page: 3 });
+  assert.ok(Array.isArray(out) && out.length > 0, '仍然拿得到结果');
+});
+
+await check('未确认的配对上，matcher 报 AUTO_MATCH 会被钳下来', async () => {
+  // 这一条是整组的重点。matching-engine 存在的理由就是把闸门收在一处——散出去
+  // 之后实测 52/60 的错书组合拿到了 HIGH 置信度的答案。把计算交出去不等于把
+  // 判断交出去：一个写错的、甚至怀有恶意的实现，最多只能让答案变差。
+  const p = await preparePair({
+    exerciseDocument: makeDoc({ role: 'EXERCISE', year: '2024' }),
+    answerDocument: makeDoc({ role: 'ANSWER', year: '2024' }),
+    matcher: async (questions) => questions.map(q => ({
+      rung: RUNG.AUTO_MATCH, matched: true, asserted: true, question: q,
+    })),
+  });
+  const out = await p.session.matchQuestion({ page: 3 });
+  if (p.status === PAIR_STATUS.VERIFIED_PAIR) {
+    // 夹具确认了配对，AUTO_MATCH 本来就允许——这条不适用，但顺带确认没被误降。
+    assert.ok(out.length > 0);
+    return;
+  }
+  assert.ok(out.every(m => m.rung !== RUNG.AUTO_MATCH),
+    `未确认的配对不该出现 AUTO_MATCH，实际 ${out.map(m => m.rung).join(',')}`);
+  assert.ok(out.every(m => m.matched !== true), 'matched 也要跟着降');
+});
+
+await check('matcher 返回不认得的 rung 不会被当成最强那一档', async () => {
+  const p = await preparePair({
+    exerciseDocument: EX(),
+    answerDocument: ANS(),
+    matcher: async (questions) => questions.map(q => ({
+      rung: 'PERFECT', matched: true, asserted: true, question: q,
+    })),
+  });
+  const out = await p.session.matchQuestion({ page: 3 });
+  assert.ok(out.every(m => m.rung !== 'PERFECT'),
+    `不认得的 rung 不该原样通过，实际 ${out.map(m => m.rung).join(',')}`);
+});
+
+await check('OCR 上限在 matcher 之后照样压得住', async () => {
+  // 交出去的那一段不知道这本书是扫描件。上限是 JS 在它之后压的。
+  const p = await preparePair({
+    exerciseDocument: makeDoc({ role: 'EXERCISE', sparse: true }),
+    answerDocument: ANS(),
+    matcher: async (questions) => questions.map(q => ({
+      rung: RUNG.AUTO_MATCH, matched: true, asserted: true, question: q,
+    })),
+  });
+  const out = await p.session.matchQuestion({ page: 3 });
+  assert.ok(out.every(m => m.rung !== RUNG.AUTO_MATCH), '需要 OCR 时不该有自动答案');
+});
+
 console.log('\n═══════════════════════════════════════════════════════════════');
 console.log(`  ${PASS} passed, ${FAIL} failed`);
 console.log('═══════════════════════════════════════════════════════════════\n');

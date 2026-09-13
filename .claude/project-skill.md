@@ -62,9 +62,16 @@ duiye/
 
 **① 进程内的 JNI 桥**——`src/native/native-proxy.js` ↔ `NativeProxyPlugin.java`
 ↔ `jni_bridge.cpp` ↔ `duiye_proxy.cpp`，编成 `libduiye_proxy.so` 随 APK 走。
-它有 `agent` 和 `ocr` 两个位置，都还空着（`ready: false`）。
+三个位置：`agent`、`ocr`、`match`，都还空着（`ready: false`）。
 
 **除了开机那次探测（`app.js` 的 `probeNativeProxy`），应用里零调用。**
+
+`match` 那一位和另外两位不一样：答案匹配**现在就有实现**，在 JS 那边（21 个模块，
+四本真实教材 508/508 零错误）。那个位置是留给以后把计算搬到 C++ 的，不是空白。
+JS 这一侧的口子已经开好：`preparePair({ matcher })`，契约写在
+`src/pdf/native-matcher.js`。**闸门不经过那一层**——角色、配对身份、OCR 上限、
+区域选择都留在 `matching-engine.js`，而且它会对交回来的每一条结论再钳一次
+（`test_matching_engine.js` 第 6 组盯的就是这个）。
 
 **② 本机 HTTP 代理**——`src/agent/agent-client.js` 用 `fetch` 打
 `http://127.0.0.1:8787/v1/agent/answer`，另一头是 `native/agent-proxy/` 那个
