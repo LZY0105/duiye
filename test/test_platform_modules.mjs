@@ -4,6 +4,7 @@
 // 里每写一条日志就会记两遍、下拉列表在语言切换后停在旧文字上，都是没人发现的。
 // 这里用 JSDOM 跑真实的 DOM 交互，不看源码形状，只看行为。
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/', pretendToBeVisual: true });
@@ -171,6 +172,33 @@ await check('showSaveToast puts one status node on the page', () => {
   assert.equal(el.getAttribute('role'), 'status');
   save.showSaveToast('再一次');
   assert.equal(document.querySelectorAll('.save-toast').length, 1, 'never two at once');
+});
+
+// ── service worker ──────────────────────────────────────────────────────────
+//
+// sw.js 不是 ES module，是经典 worker 脚本：它在顶层用 self / caches，import 不
+// 进来。所以这一组是接线测试 —— 读源码断言该在的东西在。
+//
+// 预缓存表那条不在这里：test_ui_interactions.js 已经在管它了（那张表曾经 17 项
+// 里有 13 项指向不存在的文件）。这里只管重写时新加的三道闸。
+const swSource = await readFile(new URL('../public/sw.js', import.meta.url), 'utf8');
+
+await check('只缓存成功的完整响应', () => {
+  // 三条都是真修过的 bug：往缓存里塞 404，下次断网时那个 404 就成了永久答案；
+  // 塞 206 会让 cache.put 抛 TypeError 变成没人接的 promise 拒绝。
+  assert.match(swSource, /response\.ok/, '要挡掉 4xx/5xx');
+  assert.match(swSource, /response\.status === 200/, '要挡掉 206 这类部分响应');
+  assert.match(swSource, /response\.type !== 'opaque'/, '要挡掉不透明响应');
+});
+
+await check('跨源请求不拦截', () => {
+  // 唯一的外部请求是启动时问一次 GitHub「有没有新版」。缓存它，答案就会永远
+  // 停在第一次问到的那个。
+  assert.match(swSource, /url\.origin !== self\.location\.origin/);
+});
+
+await check('非 GET 不碰', () => {
+  assert.match(swSource, /request\.method !== 'GET'/);
 });
 
 console.log(`\n  ${PASS} passed, ${FAIL} failed`);

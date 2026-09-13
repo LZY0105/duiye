@@ -1,19 +1,36 @@
 apply plugin: 'com.android.application'
 
-// Load keystore properties from environment (CI) or local file
-def keystoreProperties = new Properties()
-def keystoreFile = file('release.keystore')
-def keystorePropsFile = file('keystore.properties')
+// 签名材料从哪里来。
+//
+// 两个来源，本地文件优先：
+//   keystore.properties  —— 本机开发用，被 .gitignore 拦着，永远不进仓库
+//   环境变量             —— CI 用，值来自仓库 Secret
+//
+// 找不到就留空。留空不是错误：debug 构建根本不需要它，assembleRelease 也能跑完
+// （下面 signingConfig 那一句会跳过），只是产出一个没签名、装不上去的包。要让
+// 它在没有密钥时直接报错听起来更严谨，但那会让「只想编译一下看看有没有语法错」
+// 这件事也必须先有密钥。
+def signing = new Properties()
+def signingPropsFile = file('keystore.properties')
 
-if (keystorePropsFile.exists()) {
-    keystoreProperties.load(new FileInputStream(keystorePropsFile))
-} else if (System.getenv('KEYSTORE_PASSWORD') != null) {
-    // CI: use environment variables (GitHub Secrets)
-    keystoreProperties['storeFile'] = 'release.keystore'
-    keystoreProperties['storePassword'] = System.getenv('KEYSTORE_PASSWORD')
-    keystoreProperties['keyAlias'] = System.getenv('KEY_ALIAS') ?: 'duiye'
-    keystoreProperties['keyPassword'] = System.getenv('KEY_PASSWORD') ?: System.getenv('KEYSTORE_PASSWORD')
+if (signingPropsFile.exists()) {
+    signingPropsFile.withInputStream { signing.load(it) }
+} else if (System.getenv('KEYSTORE_PASSWORD')) {
+    def pwd = System.getenv('KEYSTORE_PASSWORD')
+    signing.putAll([
+        storeFile    : 'release.keystore',
+        storePassword: pwd,
+        keyAlias     : System.getenv('KEY_ALIAS') ?: 'duiye',
+        keyPassword  : System.getenv('KEY_PASSWORD') ?: pwd,
+    ])
 }
+
+// 密钥齐不齐，只判断一次，下面两处都用它。
+// 原来那个判断写了两遍，一处在 signingConfigs、一处在 buildTypes.release；
+// 两处都只看 storeFile 在不在，于是一份缺了口令的 properties 能过第一关，
+// 到 Gradle 真去开密钥库时才炸，报的是 keystore password was incorrect。
+def canSign = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword']
+        .every { signing[it] }
 
 // 版本号从 package.json 读，而不是在这里另抄一份。
 //
@@ -78,21 +95,29 @@ android {
 
     signingConfigs {
         release {
-            if (keystoreProperties.containsKey('storeFile')) {
-                storeFile file(keystoreProperties['storeFile'])
-                storePassword keystoreProperties['storePassword']
-                keyAlias keystoreProperties['keyAlias']
-                keyPassword keystoreProperties['keyPassword']
-                // V1+V2+V3+V4 signing
-                enableV1Signing true
-                enableV2Signing true
-                enableV3Signing true
-                enableV4Signing true
+            if (canSign) {
+                storeFile file(signing['storeFile'])
+                storePassword signing['storePassword']
+                keyAlias signing['keyAlias']
+                keyPassword signing['keyPassword']
+
+                // 签名方案：V2 起步。
+                //
+                // V1 是 JAR 签名，只有 Android 7.0 以前的系统会去读它。这个 app
+                // 的 minSdk 是 30，装得上它的设备一台也不会看 V1——留着它只是让
+                // 每次发布构建多算一遍全量摘要，并往 APK 里塞一份 META-INF。
+                // （关掉的代价是它装不到 Android 7 以下，而那本来就装不上。）
+                enableV1Signing false
+                enableV2Signing true      // API 24+，整包摘要
+                enableV3Signing true      // API 28+，支持密钥轮换
+                enableV4Signing true      // API 31+，adb 增量安装用，另出 .idsig
             }
         }
     }
 
     buildTypes {
+        // debug 留空：它用 Android 自带的调试密钥，不混淆、可调试，都是默认值。
+        // 空块比没有块好——它让「这里是故意什么都不改」这件事写在脸上。
         debug {
         }
         release {
@@ -102,7 +127,10 @@ android {
             crunchPngs true
             zipAlignEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            if (keystoreProperties.containsKey('storeFile')) {
+            // 没有密钥就不挂签名配置。挂了会让 Gradle 在打包时才发现开不了
+            // 密钥库，而那时候 R8 已经跑完了——几分钟的等待换一句本可以在第一秒
+            // 说出口的话。
+            if (canSign) {
                 signingConfig signingConfigs.release
             }
         }

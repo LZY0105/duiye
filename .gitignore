@@ -1,60 +1,49 @@
+# 依赖与构建产物
 node_modules/
 dist/
-.git/
-*.pyc
-__pycache__/
-.DS_Store
-Thumbs.db
 
-# Signing keys (never commit!)
+# 签名材料。
+#
+# 泄漏一次，别人就能签出冒充这个应用的包，覆盖安装到已经装了它的设备上——
+# Android 只认签名，不认来源。所以这里宁可拦宽：keystore* 一条盖住
+# keystore.properties，也盖住手工导出时常见的 keystore_b64.txt 之类
+# （原来那几个是一个一个列的文件名，换个名字就漏出去了）。
 *.keystore
 *.jks
-keystore.properties
-!debug.keystore
+keystore*
 
-# Android
-android/app/build/
-android/build/
-android/.gradle/
-android/captures/
-android/local.properties
+# 打包出来的安装包。
+# 正常情况下它们在 android/app/build/ 里，那一层由 android/.gitignore 管；
+# 这两条防的是有人把包拷到仓库根上。
+*.apk
+*.aab
+
+# Windows 上绕开非 ASCII 路径用的那套临时目录，见
+# docs/BUILD_WINDOWS_NON_ASCII_PATH.md
 .android-local/
 .gradle-local/
 .gradle-hybrid*/
 .build-temp/
-*.apk
-*.aab
-keystore_b64.txt
-keystore_b64_clean.txt
-RELEASE.md
-keystore_new.txt
-keystore_new_clean.txt
-skills/
 
-# Python
-.venv/
-*.pyc
-__pycache__/
+# Android Studio 的性能采样文件。
+# android/ 下其余的构建产物（build/、.gradle/、local.properties、.cxx/）由
+# android/.gitignore 管——那份是 npx cap add android 生成的，这里不重复一遍。
+android/captures/
 
-# Packages / datasets (too large for git)
+# 系统往目录里塞的东西
+.DS_Store
+Thumbs.db
+
+# 匹配引擎回归用的真实书目语料。
+#
+# 从受版权保护的教材里抽出来的文字和书签树，7.4 MB。永远不提交。测试先看这里，
+# 再看 FIND_ENGINE_CORPUS / FIND_ENGINE_EXPANDED_CORPUS，都没有就干净地跳过，
+# 所以没有语料的克隆照样跑得全绿。
+corpus/
+
+# 大体积归档。
+# 语料和模型都是以这种形式传来传去的，误提交一次就永远留在历史里——git 删不掉
+# 已经写进对象库的东西，只能重写历史。
 *.zip
 *.tar
 *.gz
-
-# Training artifacts (all consolidated)
-pp-ocr-train/
-
-# Test scripts (local only, not for production)
-.claude/test-before-deploy
-test_48h.png
-test_detect.js
-test_upload.png
-test_output/
-
-# Real-book corpora for the matcher regression suites.
-#
-# Extracted text and bookmark trees from copyrighted textbooks — ~7.7 MB of
-# them. Never committed. The suites look here first, then at
-# FIND_ENGINE_CORPUS / FIND_ENGINE_EXPANDED_CORPUS, and skip cleanly when the
-# files are absent, so a clone without them still runs green.
-corpus/
