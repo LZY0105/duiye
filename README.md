@@ -190,7 +190,6 @@ AGPL-3.0。核心部分重写之后改为 MIT——**分界点之前的每一个
 答案匹配引擎来自 https://github.com/LZY0105/Math-answer-to-question-matching-model ，
 同样以 MIT 发布，其版权与许可声明保留在相应源文件中。
 
-Agent 面板与本机代理由 [@WangJiyi](https://github.com/WangJiyi) 所写，著作权归他。
 
 依赖的许可证由 `npm run check:licenses` 守着：MIT 作品里不能并入 GPL/AGPL 这类
 copyleft 代码，每一个会被打进 APK 的依赖都要过这一关。
