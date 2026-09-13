@@ -46,15 +46,37 @@ duiye/
 │   ├── ink/                矢量笔迹层，PDF 和草稿纸共用
 │   │   └── ink-shared.js          同一页开在两栏时共用同一层（A09）
 │   ├── scratch/            无限草稿纸：世界坐标相机、八种底纹
-│   ├── agent/              agent-client.js → 本机 C++ 代理
-│   ├── native/             native-proxy.js → NativeProxy 插件
+│   ├── agent/              agent-client.js → 127.0.0.1:8787（见下）
+│   ├── native/             native-proxy.js → NativeProxy 插件（见下）
 │   ├── ui/、settings/、export/
 │   └── styles/             base / pdf / scratch / deck / ink-toolbar / mobile /
 │                           material
-├── native/agent-proxy/     Agent 的本机 C++ 代理
-├── android/                Capacitor；app/src/main/cpp 是预留的原生代理层
+├── native/agent-proxy/     独立的 C++ HTTP 服务，**不随 APK 走**（见下）
+├── android/                Capacitor；app/src/main/cpp 是进程内的原生代理层
 └── test/                   37 个文件，入口只有 `npm test`
 ```
+
+### 原生层现在是两套，互不相通
+
+接 OCR 或改 Agent 之前先看这一节，否则会往错的那一套上加东西。
+
+**① 进程内的 JNI 桥**——`src/native/native-proxy.js` ↔ `NativeProxyPlugin.java`
+↔ `jni_bridge.cpp` ↔ `duiye_proxy.cpp`，编成 `libduiye_proxy.so` 随 APK 走。
+它有 `agent` 和 `ocr` 两个位置，都还空着（`ready: false`）。
+
+**除了开机那次探测（`app.js` 的 `probeNativeProxy`），应用里零调用。**
+
+**② 本机 HTTP 代理**——`src/agent/agent-client.js` 用 `fetch` 打
+`http://127.0.0.1:8787/v1/agent/answer`，另一头是 `native/agent-proxy/` 那个
+独立的 C++ 程序（cpp-httplib）。`pdf-workspace.js` 在用它。
+
+**但那个程序不在 APK 里**：`android/app/src/main/cpp/CMakeLists.txt` 只编
+`duiye_proxy.cpp` 和 `jni_bridge.cpp`，`native/agent-proxy/` 是另一个 CMake 工程，
+没有任何构建步骤打包它、也没有任何代码启动它。所以**平板上 8787 没人在听**，
+Agent 面板按下去总是「无法连接本地 Agent 代理」。它是开发期的原型
+（在电脑上跑起来，再 `adb reverse tcp:8787 tcp:8787` 转过去）。
+
+要接 OCR，走 ①：它随 APK 走、不需要另一个进程、位置已经留好了。
 
 ### 新增功能落在哪里
 
