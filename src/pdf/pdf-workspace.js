@@ -540,16 +540,9 @@ export class PdfWorkspace {
       // it would collapse the pane again the moment it came back.
       this._ratioBeforeDrag = this.state.dividerRatio;
       pointerId = e.pointerId;
-      // Widths at the start of the gesture, so the live preview knows what it
-      // is scaling from. Recorded BEFORE the capture, and the capture is allowed
-      // to fail: it throws if the pointer is not one the element can claim, and
-      // everything after it used to be skipped — leaving the drag running with
-      // no starting width, so the preview scaled from a nominal 1px pane and
-      // blew the page up several times its size until the release put it back.
-      this._dragBaseWidth = {
-        [SLOTS.PRIMARY]: this.elSlots[SLOTS.PRIMARY].clientWidth || 1,
-        [SLOTS.SECONDARY]: this.elSlots[SLOTS.SECONDARY].clientWidth || 1,
-      };
+      // 这里原来记一份「手势开始时两栏各多宽」，给实时预览当缩放基准。
+      // 现在不记了：预览改成对着屏幕上那张位图定价（pdf-pane.js 的
+      // previewFitAt），起点宽度不再参与计算，记着它只会让人以为它还有用。
       try { this.elDivider.setPointerCapture(pointerId); } catch (_) { /* not ours to capture */ }
       this.elDivider.classList.add('is-dragging');
       this.root.classList.remove('is-animating');
@@ -588,7 +581,7 @@ export class PdfWorkspace {
       // and the real refit on release snapped it back. Asking the pane what the
       // fit would be at the new width makes the preview and the result the same
       // number, so there is nothing left to snap.
-      this._previewPaneFits(this._dragBaseWidth);
+      this._previewPaneFits();
     });
 
     const end = (e) => {
@@ -619,7 +612,6 @@ export class PdfWorkspace {
       this.elDivider.classList.remove('is-dragging');
       // The preview stays up until the refit's own render replaces it.
       this._stopTrackingPaneFits();
-      this._dragBaseWidth = null;
       this.root.classList.remove('is-closing-primary', 'is-closing-secondary');
       this.elSlots[SLOTS.PRIMARY].classList.remove('is-closing');
       this.elSlots[SLOTS.SECONDARY].classList.remove('is-closing');
@@ -714,22 +706,23 @@ export class PdfWorkspace {
    * are measured shows up as two different animations either side of the line
    * the finger is holding.
    */
-  _previewPaneFits(base) {
+  _previewPaneFits() {
     for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
       const pane = this.panes[slot];
-      if (!pane?.previewScale || !pane.isLoaded?.()) continue;
-      const from = base?.[slot];
-      // A manual zoom is not ours to re-price, and nor is a pane we never took
-      // a starting width from — but both still have to be re-PLACED, because
-      // the middle of a pane that is changing width is a moving target.
-      if (pane.state?.fitMode === FIT_MODES.NONE || !(from > 1)) {
+      if (!pane?.previewFitAt || !pane.isLoaded?.()) continue;
+      // 手动缩放不归这里重新定价——但仍然要重新摆放：一栏的中线在它变宽变窄的
+      // 过程中本来就是移动的。
+      if (pane.state?.fitMode === FIT_MODES.NONE) {
         pane.reposition?.();
         continue;
       }
-      const now = this.elSlots[slot].clientWidth || from;
-      const was = pane.fitZoomFor?.(from);
-      const will = pane.fitZoomFor?.(now);
-      pane.previewScale(was && will ? will / was : now / from);
+      // 让栏自己量自己。
+      //
+      // 这里原来传的是「拖动起点的栏宽」，由 pane 算出起点与此刻的比值再乘上去。
+      // 那个基准只在整段拖动一次真渲染都不落地时才成立——而它会落地，于是同一次
+      // 缩放被乘两遍，越拖越小。`previewFitAt` 改成对着屏幕上那张位图定价，渲染
+      // 落地多少次都不影响。整段推导记在 pdf-pane.js 那个方法的注释里。
+      pane.previewFitAt();
     }
   }
 
@@ -770,14 +763,10 @@ export class PdfWorkspace {
    */
   _trackPaneFits(duration) {
     if (typeof requestAnimationFrame !== 'function') return;
-    const base = {
-      [SLOTS.PRIMARY]: this.elSlots[SLOTS.PRIMARY].clientWidth || 0,
-      [SLOTS.SECONDARY]: this.elSlots[SLOTS.SECONDARY].clientWidth || 0,
-    };
     if (this._trackFrame) cancelAnimationFrame(this._trackFrame);
     const until = Date.now() + duration;
     const step = () => {
-      this._previewPaneFits(base);
+      this._previewPaneFits();
       // 横杠也是随栏变的，所以它也得每帧重新量。
       //
       // 原来整段动画里都不碰它——等动画停了再一次性排好。于是一栏从整屏收回一

@@ -606,17 +606,19 @@ check('a manual zoom is not the divider\u2019s to move', () => {
   assert.equal(pane.fitZoomFor(370), null, 'there is no fit to preview');
 });
 
-check('the divider records its starting widths before it claims the pointer', () => {
+check('抓住指针那一步失败，也不能把后面的步骤一起跳掉', () => {
+  // setPointerCapture 会在拿不到这个指针时抛异常。它裸着写的时候，后面所有语句
+  // 都被跳过——拖动照跑，但状态没建起来。所以它必须在 try 里。
+  //
+  // 这条原来盯的是「起点宽度要记在 capture 之前」。那份起点宽度已经没有了：
+  // 预览改成对着屏幕上那张位图定价（pdf-pane.js 的 previewFitAt），起点宽度不
+  // 再参与计算。但「capture 允许失败」这条约束还在，就留这一半。
   const code = $code('src/pdf/pdf-workspace.js');
   const down = code.slice(code.indexOf("elDivider.addEventListener('pointerdown'"));
-  const base = down.indexOf('_dragBaseWidth');
-  const capture = down.indexOf('setPointerCapture');
-  assert.ok(base > -1 && capture > -1);
-  assert.ok(base < capture,
-    'setPointerCapture throws on a pointer it cannot claim, and everything after '
-    + 'it was skipped — leaving the drag running with no width to scale from');
   assert.ok(/try \{ this\.elDivider\.setPointerCapture/.test(down),
-    'and the claim itself is allowed to fail');
+    'the claim itself is allowed to fail');
+  assert.ok(!/_dragBaseWidth/.test(code),
+    '起点宽度不该再有人记——留着只会让人以为它还参与计算');
 });
 
 /** A pane mid-preview: rendered at `rendered`, painted at `rendered * k`. */
@@ -729,9 +731,9 @@ check('a pane the divider must not re-zoom is still re-placed', () => {
   // snapped back when the finger lifted. Only on the side that was not on a
   // fit, which is what made the two sides look like different gestures.
   const code = $code('src/pdf/pdf-workspace.js');
-  const at = code.indexOf('_previewPaneFits(base) {');
+  const at = code.indexOf('_previewPaneFits() {');
   const body = code.slice(at, at + 900);
-  assert.ok(/fitMode === FIT_MODES\.NONE \|\| !\(from > 1\)\) \{\s*pane\.reposition\?\.\(\);/.test(body),
+  assert.ok(/fitMode === FIT_MODES\.NONE\) \{\s*pane\.reposition\?\.\(\);/.test(body),
     'reposition, not skip');
   assert.ok(/reposition\(\) \{/.test($code('src/pdf/pdf-pane.js')), 'and the pane offers it');
 });
@@ -756,12 +758,33 @@ check('the preview is not dropped before the render that replaces it arrives', (
   assert.ok(/collapsePane\(/.test(collapsing), 'and it is collapsed, not closed');
 });
 
-check('the drag and the transition price the fit the same way', () => {
-  // One previewer, called from both, because two would be two chances for the
-  // left and the right to disagree.
-  const code = $code('src/pdf/pdf-workspace.js');
-  const priced = code.match(/pane\.previewScale\(was && will \? will \/ was : now \/ from\)/g);
-  assert.equal((priced || []).length, 1, 'the fit is priced in exactly one place');
+check('预览按屏幕上那张位图定价，不按拖动起点', () => {
+  // 这是整件事的不变量：previewScale 乘的是**已渲染的位图**，所以唯一说得通的
+  // 分母是那张位图自己的 zoom。
+  //
+  // 原来算的是「起点宽对应的 zoom → 此刻宽对应的 zoom」。那个基准只在整段拖动
+  // 一次真渲染都不落地时才成立，而它会落地：_showCanvas 换掉位图并把
+  // _previewScale 归 1，下一帧又拿相对起点的比值去乘新位图——同一次缩放乘两遍，
+  // 每多渲染一次再乘一遍。
+  //
+  // 真机上量到的：一栏 889px 拖到 238px，页面边缘碰到栏边缘（栏 407px）之前正常，
+  // 之后页面缩得比栏还快——栏 302px 时页宽 235px，栏 238px 时只剩 147px。
+  const pane = $code('src/pdf/pdf-pane.js');
+  const at = pane.indexOf('previewFitAt() {');
+  assert.ok(at > -1, 'pane 提供 previewFitAt');
+  const body = pane.slice(at, at + 420);
+  assert.ok(/this\._previewScale = target \/ rendered;/.test(body),
+    '分母必须是位图的 zoom');
+  assert.ok(/const rendered = this\._renderedZoom;/.test(body),
+    '而 _renderedZoom 就是「这张位图代表哪个 zoom」');
+
+  // 工作区只负责挑栏，不负责算比值——两处都调同一个方法，左右两边就不会算出
+  // 两个不同的答案。
+  const ws = $code('src/pdf/pdf-workspace.js');
+  assert.equal((ws.match(/pane\.previewFitAt\(\)/g) || []).length, 1,
+    '定价只有一处');
+  assert.equal((ws.match(/this\._previewPaneFits\(\)/g) || []).length, 2,
+    '拖动与动画两条路都走它');
 });
 
 /** A workspace whose grip is a 9x54 pill centred at (600, 400) — the tablet's. */

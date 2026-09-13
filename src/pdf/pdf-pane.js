@@ -1785,6 +1785,36 @@ export class PdfPane {
   }
 
   /**
+   * 预览「这一栏此刻这么宽的话，适配之后是多大」。
+   *
+   * 定价基准是**屏幕上那张位图**，不是拖动开始时的栏宽——这是 `_previewScale`
+   * 唯一说得通的基准，`_previewZoom` 用的也正是它（`state.zoom / _renderedZoom`）。
+   *
+   * 之前工作区算的是 `fitZoomFor(起点宽) → fitZoomFor(此刻宽)` 的比值再交给
+   * `previewScale`。只要拖动途中落地一次真渲染，那个基准就废了：`_showCanvas`
+   * 换掉位图并把 `_previewScale` 归 1，而下一帧又拿「相对起点」的比值去乘这张
+   * 新位图——同一次缩放被乘了两遍，且每多渲染一次就再乘一遍。
+   *
+   * 真机上量到的就是这个。一栏从 889px 拖到 238px：页面边缘碰到栏边缘之前
+   * （栏 407px）一切正常，之后页面缩得比栏还快——栏 302px 时页宽只剩 235px，
+   * 栏 238px 时只剩 147px，两侧空出一大块。人看到的就是「边缘一碰就跳一下，
+   * 然后越缩越不对」。
+   *
+   * 宽度也不再由调用方传进来：直接问自己的视口此刻多宽。栏宽含内边距，和视口
+   * 差着几个像素，而那几个像素恰好在临界点附近决定按宽还是按高适配。
+   */
+  previewFitAt() {
+    const rendered = this._renderedZoom;
+    const target = this.fitZoomFor(this._viewport().width);
+    if (!(rendered > 0) || !(target > 0)) { this.reposition(); return; }
+    clearTimeout(this._zoomSettleTimer);
+    this._zoomSettleTimer = null;
+    this._previewScale = target / rendered;
+    this.elHolder.style.transformOrigin = 'top left';
+    this._position();
+  }
+
+  /**
    * A zoom step: shown at once, rasterised once the presses stop.
    *
    * The same stand-in a pinch uses — the bitmap already on screen is scaled to
