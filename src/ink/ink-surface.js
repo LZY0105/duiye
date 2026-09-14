@@ -183,6 +183,8 @@ export class InkSurface {
     this.lassoShape = 'free';
     this.lassoInside = false; // require strokes to fall entirely inside
     this._grab = null;        // an in-progress move/rotate/scale of the selection
+    /** 另一栏正拖过来的那一片。只画，不进层——见 showDragGhost。 */
+    this._ghost = null;
     // 选完之后浮在套索线旁的那两个动作。挂在画布的父节点上——画布自己是 canvas，
     // 按钮不能长在它里面。
     this._swatches = [];
@@ -350,6 +352,11 @@ export class InkSurface {
     if (this._active && isDrawable(this._active)) {
       drawStroke(this.ctx, this._active, this.transform);
     }
+    // 从另一栏探过来的那一片，画在自己这一层上面：它还没落地，但人得看见它到哪
+    // 儿了。见 showDragGhost。
+    if (this._ghost) {
+      for (const stroke of this._ghost) drawStroke(this.ctx, stroke, this.transform);
+    }
     if (this._eraserDot) this._drawEraserDot();
     // The tip ring marks where a freehand loop will close back to. A dragged
     // rectangle has no such point — it is already closed, and a ring on one of
@@ -502,6 +509,7 @@ export class InkSurface {
       for (const pt of stroke.points) { pt.x += dx; pt.y += dy; }
       recomputeBounds(stroke);
     }
+
 
     this.history.beginBatch();
     for (const stroke of strokes) {
@@ -839,7 +847,10 @@ export class InkSurface {
         // 先看这一下是不是松在别的画布上。是的话这一片就归那边了，这边把它
         // 删掉——而删掉这一步记的是「带着另一半的擦除」：在这边撤销，那边那
         // 份也跟着消失，见 _handOff。
+        //
+        // 交出去了就不必收那个预览：那边已经把它收成真的了，先清再放会闪一下。
         if (this._grab.mode === 'move' && this._handOff(e)) return;
+        if (this._grab.mode === 'move') this._endDragOut();
 
         // ONE history entry for the whole gesture.
         //
@@ -1000,7 +1011,85 @@ export class InkSurface {
     const r = this.canvas.getBoundingClientRect();
     const outside = e.clientX < r.left || e.clientX > r.right
       || e.clientY < r.top || e.clientY > r.bottom;
-    this.handlers.onDragOver({ clientX: e.clientX, clientY: e.clientY, outside });
+    this.handlers.onDragOver({
+      clientX: e.clientX,
+      clientY: e.clientY,
+      outside,
+      ghost: this._ghostOnScreen(r),
+    });
+  }
+
+  /** 手松开或者手势被打断：把探到别处的那一片收回来。 */
+  _endDragOut() {
+    this.handlers.onDragOver?.({ clientX: -1, clientY: -1, outside: false, ghost: null });
+  }
+
+  /**
+   * 选中的这一片此刻在屏幕上的样子。
+   *
+   * 这是给**另一栏**用的。一片字迹被拖到两栏交界处时，越过去的那部分会被这块画
+   * 布切掉——人看到的是它一点点消失，然后松手时在对面凭空出现。要让它看着像慢慢
+   * 挪过去，对面就得在同一时刻把越过去的那部分画出来。
+   *
+   * 点用客户端坐标：那是两块画布唯一共用的坐标系，对面拿到之后换算成自己的。
+   * scale 一并带上，好让对面把线画成一样的粗细——同一片字迹在路上不该变胖变瘦。
+   */
+  _ghostOnScreen(rect) {
+    if (!this.selection.length) return null;
+    const strokes = [];
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const id of this.selection) {
+      const stroke = this.layer.getById(id);
+      if (!stroke) continue;
+      const points = stroke.points.map((pt) => {
+        const at = documentToScreen(this.transform, pt.x, pt.y);
+        const x = rect.left + at.x;
+        const y = rect.top + at.y;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+        return { x, y, p: pt.p };
+      });
+      strokes.push({
+        tool: stroke.tool,
+        color: stroke.color,
+        width: stroke.width,
+        opacity: stroke.opacity,
+        points,
+      });
+    }
+    if (!strokes.length || !Number.isFinite(minX)) return null;
+    return { strokes, scale: this.transform.scale, bounds: { minX, minY, maxX, maxY } };
+  }
+
+  /**
+   * 别的栏有一片字迹探到这块画布上来了，先画出来。
+   *
+   * 只是画：不进层、不记历史、擦不到也选不中——它还在别人手里。松手那一下走的是
+   * adoptStrokes，那才是真的收下。
+   */
+  showDragGhost(ghost) {
+    if (!ghost?.strokes?.length || !this._viewport) { this.clearDragGhost(); return; }
+    const r = this.canvas.getBoundingClientRect();
+    // 粗细先除掉自己的 scale：drawStroke 画的时候会再乘回来，不这么做的话，同一
+    // 片字迹跨过来会突然变粗或变细——而两栏的缩放本来就常常不一样。
+    const k = (ghost.scale || 1) / (this.transform.scale || 1);
+    this._ghost = ghost.strokes.map((stroke) => ({
+      ...stroke,
+      width: stroke.width * k,
+      points: stroke.points.map((pt) => {
+        const at = screenToDocument(this.transform, pt.x - r.left, pt.y - r.top);
+        return { x: at.x, y: at.y, p: pt.p };
+      }),
+    }));
+    this.render();
+  }
+
+  clearDragGhost() {
+    if (!this._ghost) return;
+    this._ghost = null;
+    this.render();
   }
 
   /**
@@ -1030,6 +1119,10 @@ export class InkSurface {
       strokes: strokes.map(serializeStroke),
       clientX: e.clientX,
       clientY: e.clientY,
+      // 带上这边的缩放，让它落下去之后**看着和拖着的时候一样大**。不带的话，两
+      // 栏缩放不同时，松手那一刻它会突然涨一圈或缩一圈——前面一路铺垫的「慢慢挪
+      // 过去」，全毁在最后那一下。
+      scale: this.transform.scale,
     });
     if (!landed) return false;
 
@@ -1072,14 +1165,23 @@ export class InkSurface {
   /**
    * 别的画布把一片交过来了，落在这个屏幕点上。
    *
+   * @param {number} [sourceScale] 源那块画布的缩放。给了就按它折算，让这一片落下
+   *   来之后在屏幕上和拖着的时候一样大。
    * @returns {{ids: string[], remove: function, restore: function}|null}
    *   接住了就回一组把手：源那边把它挂在自己的撤销上，好让「撤销拖走」把两边一起
    *   还原。接不住回 null。
    */
-  adoptStrokes(serialized, clientX, clientY) {
+  adoptStrokes(serialized, clientX, clientY, sourceScale) {
     if (!Array.isArray(serialized) || !serialized.length || !this._viewport) return null;
     const r = this.canvas.getBoundingClientRect();
     const at = screenToDocument(this.transform, clientX - r.left, clientY - r.top);
+
+    // 屏幕上多大就多大。两栏缩放不同时，照搬文档坐标会让它在松手那一刻变个大小
+    // ——而人刚刚一路看着它以某个大小挪过来。代价是它在**文档**里的尺寸变了，但
+    // 直接拖动本来承诺的就是「所见即所得」。
+    const k = Number.isFinite(sourceScale) && sourceScale > 0
+      ? sourceScale / (this.transform.scale || 1)
+      : 1;
 
     const strokes = serialized.map(json => deserializeStroke({ ...json, id: undefined }));
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -1092,13 +1194,23 @@ export class InkSurface {
       }
     }
     if (!Number.isFinite(minX)) return null;
-    // 落在手指底下，居中——人松手的地方就是他想放的地方。
-    const dx = at.x - (minX + maxX) / 2;
-    const dy = at.y - (minY + maxY) / 2;
+    // 落在手指底下，居中——人松手的地方就是他想放的地方。缩放也绕这个中心做，所
+    // 以变大变小都是朝着指尖，不会把这一片甩到一边去。
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
     for (const stroke of strokes) {
-      for (const pt of stroke.points) { pt.x += dx; pt.y += dy; }
+      for (const pt of stroke.points) {
+        pt.x = at.x + (pt.x - cx) * k;
+        pt.y = at.y + (pt.y - cy) * k;
+      }
+      stroke.width *= k;
       recomputeBounds(stroke);
     }
+
+    // 预览到此为止：这一片马上就是真的了，两份一起画就是同一片字迹重了影。
+    // 收在这里而不是让外面记得收——它是谁的预览，谁就该在它变成真的那一刻收
+    // 掉，而不是指望调用方的顺序排得刚好。
+    this._ghost = null;
 
     this.history.beginBatch();
     for (const stroke of strokes) {
@@ -1110,11 +1222,15 @@ export class InkSurface {
     // 落下来就是选中的：人接着多半要再挪一下，而那需要它是被选中的那一个。
     this.selection = strokes.map(s => s.id);
     const pad = 6;
+    const left = at.x + (minX - cx) * k - pad;
+    const right = at.x + (maxX - cx) * k + pad;
+    const top = at.y + (minY - cy) * k - pad;
+    const bottom = at.y + (maxY - cy) * k + pad;
     this.selectionLoop = [
-      { x: minX + dx - pad, y: minY + dy - pad },
-      { x: maxX + dx + pad, y: minY + dy - pad },
-      { x: maxX + dx + pad, y: maxY + dy + pad },
-      { x: minX + dx - pad, y: maxY + dy + pad },
+      { x: left, y: top },
+      { x: right, y: top },
+      { x: right, y: bottom },
+      { x: left, y: bottom },
     ];
     this._anchor = -1;
     this.render();

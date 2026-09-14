@@ -88,13 +88,25 @@ function mount(rect) {
  */
 function wire(panes) {
   for (const pane of panes) {
-    pane.surface.handlers.onDragOver = () => {};
-    pane.surface.handlers.onDragDrop = ({ strokes, clientX, clientY }) => {
+    // 照抄工作区的 _showInkGhost：按**这一片的外框**和对面画布相不相交来判，不是
+    // 按手指在哪。
+    pane.surface.handlers.onDragOver = ({ ghost }) => {
+      for (const other of panes) {
+        if (other === pane) continue;
+        const r = other.rect;
+        const b = ghost?.bounds;
+        const reaches = b && b.maxX > r.left && b.minX < r.left + r.width
+          && b.maxY > r.top && b.minY < r.top + r.height;
+        if (reaches) other.surface.showDragGhost(ghost);
+        else other.surface.clearDragGhost();
+      }
+    };
+    pane.surface.handlers.onDragDrop = ({ strokes, clientX, clientY, scale }) => {
       const hit = panes.find(p => p !== pane
         && clientX >= p.rect.left && clientX <= p.rect.left + p.rect.width
         && clientY >= p.rect.top && clientY <= p.rect.top + p.rect.height);
       if (!hit) return null;
-      return hit.surface.adoptStrokes(strokes, clientX, clientY);
+      return hit.surface.adoptStrokes(strokes, clientX, clientY, scale);
     };
   }
 }
@@ -310,7 +322,100 @@ await test('拖过去之后在两边来回撤销重做，右边不会多出一�
 });
 
 // ═══════════════════════════════════════════════════════════════
-group('6. 两块面板把把手原样传出去');
+group('6. 越过去的那一半，对面当场就画出来');
+
+// 一片字迹拖到两栏交界处时，越过去的那部分会被这块画布切掉——人看到的是它一点点
+// 消失，松手之后在对面凭空出现。要让它看着像慢慢挪过去，对面就得在同一时刻把越
+// 过去的那部分画出来。
+
+await test('手指还在这边，但这一片探过去了，对面就有了', async () => {
+  dom.window.document.body.innerHTML = '';
+  const left = mount({ left: 0, top: 0, width: 400, height: 600 });
+  const right = mount({ left: 400, top: 0, width: 400, height: 600 });
+  wire([left, right]);
+
+  // 一条很长的线：手指按在它左端，右端早就过了 400 那条界。
+  const a = line(left.surface, 200, 300, 260);
+  selectRect(left.surface, [a.id], 180, 250, 480, 350);
+  left.canvas.dispatchEvent(pen('pointerdown', 220, 300));
+  left.canvas.dispatchEvent(pen('pointermove', 260, 300));
+
+  assert.ok(right.surface._ghost, '手指还在左边，但右边该已经看得见探过去的那一截了');
+  assert.equal(right.surface.layer.length, 0, '预览不进层：它还在别人手里');
+  assert.equal(right.surface.history.canUndo(), false, '预览也不该记成一步');
+
+  left.canvas.dispatchEvent(pen('pointerup', 260, 300));
+});
+
+await test('还没探到对面就不画', async () => {
+  dom.window.document.body.innerHTML = '';
+  const left = mount({ left: 0, top: 0, width: 400, height: 600 });
+  const right = mount({ left: 400, top: 0, width: 400, height: 600 });
+  wire([left, right]);
+
+  const a = line(left.surface, 100, 300);
+  selectRect(left.surface, [a.id], 60, 250, 220, 350);
+  left.canvas.dispatchEvent(pen('pointerdown', 140, 300));
+  left.canvas.dispatchEvent(pen('pointermove', 160, 300));
+  assert.equal(right.surface._ghost, null, '离得还远就画，那是一片突然冒出来的字迹');
+  left.canvas.dispatchEvent(pen('pointerup', 160, 300));
+});
+
+await test('松手之后预览不留在对面', async () => {
+  const { right } = dragAcross();
+  assert.equal(right.surface._ghost, null,
+    '落地之后那一份是真的了，预览再留着就是同一片东西画了两遍');
+});
+
+await test('缩回来也不留', async () => {
+  dom.window.document.body.innerHTML = '';
+  const left = mount({ left: 0, top: 0, width: 400, height: 600 });
+  const right = mount({ left: 400, top: 0, width: 400, height: 600 });
+  wire([left, right]);
+
+  const a = line(left.surface, 200, 300, 260);
+  selectRect(left.surface, [a.id], 180, 250, 480, 350);
+  left.canvas.dispatchEvent(pen('pointerdown', 220, 300));
+  left.canvas.dispatchEvent(pen('pointermove', 300, 300));
+  assert.ok(right.surface._ghost, '先探过去');
+  left.canvas.dispatchEvent(pen('pointermove', 100, 300));
+  assert.equal(right.surface._ghost, null, '缩回来了就该收掉');
+  left.canvas.dispatchEvent(pen('pointerup', 100, 300));
+});
+
+// ═══════════════════════════════════════════════════════════════
+group('7. 落下来和拖着的时候一样大');
+
+await test('两栏缩放不同时，落地不改屏幕上的大小', async () => {
+  dom.window.document.body.innerHTML = '';
+  const left = mount({ left: 0, top: 0, width: 400, height: 600 });
+  const right = mount({ left: 400, top: 0, width: 400, height: 600 });
+  left.surface.setTransform(0.5, 0, 0);   // 左边 50%
+  right.surface.setTransform(2, 0, 0);    // 右边 200%
+  wire([left, right]);
+
+  const a = line(left.surface, 100, 200, 40);   // 文档里 40 宽，屏幕上 20
+  selectRect(left.surface, [a.id], 60, 150, 220, 280);
+  // 按在套索线的左上角一带：右下角那个圈是旋转把手，离它太近按下去开始的是旋
+  // 转，不是搬动。
+  left.canvas.dispatchEvent(pen('pointerdown', 40, 85));
+  left.canvas.dispatchEvent(pen('pointermove', 300, 200));
+  left.canvas.dispatchEvent(pen('pointermove', 600, 300));
+  left.canvas.dispatchEvent(pen('pointerup', 600, 300));
+
+  const got = right.surface.layer.getAll()[0];
+  assert.ok(got, '先得落过去');
+  const xs = got.points.map(p => p.x);
+  const onScreen = (Math.max(...xs) - Math.min(...xs)) * 2;   // 右边 scale = 2
+  assert.ok(Math.abs(onScreen - 20) < 0.5,
+    `屏幕上应该还是 20 宽，实际 ${onScreen.toFixed(1)}——松手那一刻变了大小，前面` +
+    '一路铺垫的「慢慢挪过去」就毁在最后那一下');
+  assert.ok(Math.abs(got.width - 2 * 0.25) < 1e-6,
+    '线的粗细也要一起折算，不然它在屏幕上会突然变粗');
+});
+
+// ═══════════════════════════════════════════════════════════════
+group('8. 两块面板把把手原样传出去');
 
 // 上面那些测试是直接把两块画布接在一起的，绕过了 PdfPane / ScratchPane。真机上
 // 中间隔着这两层，而它们原先写的是 `onInkDragDrop?.(payload) === true` —— 把那一

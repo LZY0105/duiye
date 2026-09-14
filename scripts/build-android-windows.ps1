@@ -20,14 +20,19 @@ $sdkRoot = [System.IO.Path]::GetFullPath($sdkRoot)
 
 $repoDriveName = 'R'
 $sdkDriveName = 'S'
+$jdkDriveName = 'J'
 $repoDrive = "${repoDriveName}:"
 $sdkDrive = "${sdkDriveName}:"
+$jdkDrive = "${jdkDriveName}:"
 
 if (Get-PSDrive -Name $repoDriveName -ErrorAction SilentlyContinue) {
     throw "$repoDrive is already in use"
 }
 if (Get-PSDrive -Name $sdkDriveName -ErrorAction SilentlyContinue) {
     throw "$sdkDrive is already in use"
+}
+if (Get-PSDrive -Name $jdkDriveName -ErrorAction SilentlyContinue) {
+    throw "$jdkDrive is already in use"
 }
 if (-not (Test-Path -LiteralPath (Join-Path $sdkRoot 'cmake\3.31.6\bin\cmake.exe'))) {
     throw "Android CMake 3.31.6 is not installed under $sdkRoot"
@@ -55,6 +60,7 @@ $originalLocalProperties = if ($hadLocalProperties) {
 $exitCode = 1
 $repoMapped = $false
 $sdkMapped = $false
+$jdkMapped = $false
 
 # Rebuild the web bundle and copy it into the native project BEFORE Gradle runs.
 # android/app/src/main/assets/public is generated, not tracked, so without this
@@ -81,6 +87,18 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Failed to map $sdkDrive" }
     $sdkMapped = $true
 
+    # The JDK gets a drive of its own for the same reason the repo and the SDK
+    # do. On a machine whose user profile is spelled with non-ASCII characters,
+    # java.exe resolves its own install directory through the ANSI code page;
+    # when that code page cannot spell the path, the launcher reports
+    #   Error: could not find java.dll
+    # while java.dll is sitting right next to it. The JDK is not broken and
+    # JAVA_HOME is not wrong -- the launcher simply cannot name its own home.
+    # An ASCII drive letter is a name it can always spell.
+    & subst.exe $jdkDrive $javaRoot
+    if ($LASTEXITCODE -ne 0) { throw "Failed to map $jdkDrive" }
+    $jdkMapped = $true
+
     [System.IO.File]::WriteAllText(
         $localPropertiesPath,
         "sdk.dir=S\:/`r`n",
@@ -91,7 +109,7 @@ try {
     $gradleCache = Join-Path $repoDrive '.gradle-hybrid-j21'
     New-Item -ItemType Directory -Force -Path $buildTemp, $gradleCache | Out-Null
 
-    $env:JAVA_HOME = $javaRoot
+    $env:JAVA_HOME = "$jdkDrive\"
     $env:GRADLE_USER_HOME = $gradleCache
     $env:ANDROID_USER_HOME = Join-Path $repoDrive '.android-local'
     $env:TEMP = $buildTemp
@@ -110,6 +128,7 @@ try {
     }
     if ($repoMapped) { & subst.exe $repoDrive /D }
     if ($sdkMapped) { & subst.exe $sdkDrive /D }
+    if ($jdkMapped) { & subst.exe $jdkDrive /D }
 }
 
 exit $exitCode

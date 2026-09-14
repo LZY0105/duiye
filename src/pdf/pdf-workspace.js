@@ -534,6 +534,10 @@ export class PdfWorkspace {
    * 拖丢了——于是松手前就缩回来了，这个功能等于不存在。
    */
   _markInkDropTarget(fromSlot, at) {
+    // 预览要先做，而且每一次移动都要做：下面那个「目标没变就直接回去」的短路是
+    // 给描边用的（描边一次手势只变两下），而这一片是每一帧都在动的。
+    this._showInkGhost(fromSlot, at?.ghost || null);
+
     const hit = at?.outside ? this._inkSurfaceAt(at.clientX, at.clientY) : null;
     const target = hit && hit.slot !== fromSlot ? hit.slot : null;
     if (this._inkDropSlot === target) return;
@@ -551,19 +555,49 @@ export class PdfWorkspace {
    *
    * @returns {boolean} 那边接住了吗
    */
-  _dropInkIntoOtherSlot(fromSlot, { strokes, clientX, clientY } = {}) {
-    this._markInkDropTarget(fromSlot, null);
+  _dropInkIntoOtherSlot(fromSlot, { strokes, clientX, clientY, scale } = {}) {
     const hit = this._inkSurfaceAt(clientX, clientY);
-    if (!hit || hit.slot === fromSlot) return null;
+    if (!hit || hit.slot === fromSlot) {
+      this._markInkDropTarget(fromSlot, null);
+      return null;
+    }
     // 回的不是「接住了没有」，是一组把手：源那边要把「撤销拖走」接到这一份上，
     // 否则在源撤销之后两边各留一份，一次撤销反而把内容变成了两份。
-    const landed = hit.view.ink.adoptStrokes(strokes, clientX, clientY);
+    const landed = hit.view.ink.adoptStrokes(strokes, clientX, clientY, scale);
+    // 先落地再撤预览。反过来的话中间会空一帧——那一帧上这一片哪儿都不在，看着就
+    // 是闪了一下。
+    this._markInkDropTarget(fromSlot, null);
     if (landed) {
       // 落过去之后那一栏就是活动栏：人接下来要动的是它。
       this._markActive(hit.slot);
       this._syncSlotChrome(hit.slot);
     }
     return landed;
+  }
+
+  /**
+   * 把源那一栏探出来的那一片，实时画到另一栏上。
+   *
+   * 判的是**这一片的外框**和另一栏画布有没有相交，不是手指在哪。一片大的选区，
+   * 手指还在这边的时候它的右半边可能已经越过去了——而人要看的正是越过去的那半
+   * 边。按手指判的话，那半边会一直被切掉，直到手指自己也过去。
+   */
+  _showInkGhost(fromSlot, ghost) {
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+      if (slot === fromSlot) continue;
+      const surface = this._loadedViewIn(slot)?.ink;
+      if (!surface) continue;
+      if (ghost && this._ghostReaches(surface, ghost.bounds)) surface.showDragGhost(ghost);
+      else surface.clearDragGhost();
+    }
+  }
+
+  _ghostReaches(surface, bounds) {
+    if (!bounds) return false;
+    const r = surface.canvas?.getBoundingClientRect();
+    if (!r || r.width < 2 || r.height < 2) return false;
+    return bounds.maxX > r.left && bounds.minX < r.right
+      && bounds.maxY > r.top && bounds.minY < r.bottom;
   }
 
   // ── divider ───────────────────────────────────────────────────────────────
