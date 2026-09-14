@@ -1646,8 +1646,19 @@ export class PdfWorkspace {
 
     // Tool selection lives in the floating toolbar (spec chapter 5); per-pane
     // undo/redo stays here because history belongs to a pane, not to a tool.
-    on('ink-undo', () => pane.ink.undo());
-    on('ink-redo', () => pane.ink.redo());
+    //
+    // 作用在**这一栏里真正显示着的**那块画布上，不是 this.panes[slot]。
+    //
+    // 原来这两行写的是 pane.ink，而 pane 是构造时抓住的 PdfPane。于是在草稿纸上
+    // 按撤销，撤的是那一栏里那本书的笔迹——一块没人在看的画布。按钮本身是亮的
+    // （下面 _syncSlotChrome 里算 disabled 用的是显示着的那一个），所以现象是
+    // 「按钮能按，按了没反应」，而不是任何一处报错。
+    //
+    // 和浮动笔迹栏当年那个 bug 是同一个：见构造函数里 getSurface 那一段。那次只
+    // 修了浮动栏，栏内这两颗漏了。这次两处都改成问同一个 viewFor(slot)，「按钮亮
+    // 不亮」和「按下去作用在谁身上」从此不可能各说各的。
+    on('ink-undo', () => this.viewFor(slot)?.ink?.undo());
+    on('ink-redo', () => this.viewFor(slot)?.ink?.redo());
     on('answers', () => this.toggleAnswers(slot));
 
     const pageInput = el.querySelector('[data-role="page-input"]');
@@ -1764,8 +1775,9 @@ export class PdfWorkspace {
       n.classList.toggle('is-active', this.state.focusedSlot === slot);
       n.title = this.state.focusedSlot === slot ? '退出专注' : '专注此文档';
     });
-    set('ink-undo', n => { n.disabled = !loaded || !view.ink.canUndo(); });
-    set('ink-redo', n => { n.disabled = !loaded || !view.ink.canRedo(); });
+    // 和上面那两颗按钮问的是同一个对象，见 _bindSlotChrome 里的注释。
+    set('ink-undo', n => { n.disabled = !loaded || !this.viewFor(slot)?.ink?.canUndo(); });
+    set('ink-redo', n => { n.disabled = !loaded || !this.viewFor(slot)?.ink?.canRedo(); });
 
     // The menu: what it offers depends on what the pane is holding.
     set('close', n => { n.textContent = t('deck.removeFromPane'); });
