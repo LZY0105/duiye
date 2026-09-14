@@ -128,7 +128,7 @@ async function refreshLibrary() {
   shelf = new BookShelf(host, {
     onOpen: openItem,
     onMenu: openItemMenu,
-    onAdd: () => elRoot.querySelector('[data-role="file-exercise"]')?.click(),
+    onAdd: () => pickAndImport(DOC_ROLES.EXERCISE),
     onGuide: showGuide,
   });
   shelf.setItems(items);
@@ -412,18 +412,18 @@ function bindImportMenu() {
     items[(at + step + items.length) % items.length].focus();
   });
 
-  const PICKERS = {
-    'import-exercise': { input: 'file-exercise', role: DOC_ROLES.EXERCISE },
-    'import-answer': { input: 'file-answer', role: DOC_ROLES.ANSWER },
+  const ROLES = {
+    'import-exercise': DOC_ROLES.EXERCISE,
+    'import-answer': DOC_ROLES.ANSWER,
   };
   for (const item of items) {
-    const target = PICKERS[item.dataset.role];
-    if (!target) continue;
+    const role = ROLES[item.dataset.role];
+    if (!role) continue;
     item.addEventListener('click', () => {
       // 先关再开选择器：反过来的话，选择器盖上来时单子还留在底下，选完回来它仍
       // 然开着。
       close();
-      pickAndImport(target);
+      pickAndImport(role);
     });
   }
 }
@@ -437,9 +437,15 @@ function bindImportMenu() {
  *
  * 两条路在 handleImport 之前就合并了：面板给的是一个 File，文件框给的也是 File，
  * 往下只有一套导入逻辑。这是刻意的——第二套导入逻辑会和第一套慢慢长岔。
+ *
+ * **应用里每一个「导入」都必须走这里**，一共四个入口：横杠单子那两项、书架上那张
+ * 「＋」卡片、空工作区卡片上那两颗按钮。它们原来各自去点隐藏的 &lt;input&gt;，于是
+ * 同一个动作有两种表现——横杠上弹应用内面板，书架上弹系统选择器。人不会认为那是两
+ * 个功能，只会觉得这个应用时好时坏。
  */
-async function pickAndImport({ input, role }) {
+export async function pickAndImport(role = DOC_ROLES.EXERCISE) {
   if (!nativeFilesAvailable()) {
+    const input = role === DOC_ROLES.ANSWER ? 'file-answer' : 'file-exercise';
     elRoot.querySelector(`[data-role="${input}"]`)?.click();
     return;
   }
@@ -516,6 +522,8 @@ export async function initPdfWorkspace() {
   // 关掉最后一份文件之后，书架自己回来。空工作区没有别的用途，而人接下来要做
   // 的事就在书架上。
   workspace.onEmpty = () => openLibrary();
+  // 空工作区卡片上那两颗「导入」和横杠上的是同一个动作，走同一条路。
+  workspace.onImport = (role) => pickAndImport(role);
 
   chromeOff?.();
   // 菜单栏一动，工具栏就跟着让位——见 initChromeHiding 里那个泵。

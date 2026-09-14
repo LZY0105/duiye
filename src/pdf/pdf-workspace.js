@@ -388,12 +388,18 @@ export class PdfWorkspace {
       onClose: () => { this.agentTarget = null; },
     });
 
-    this.elEmpty?.querySelector('[data-action="import-exercise"]')?.addEventListener('click', () => {
-      document.querySelector('[data-role="file-exercise"]')?.click();
-    });
-    this.elEmpty?.querySelector('[data-action="import-answer"]')?.addEventListener('click', () => {
-      document.querySelector('[data-role="file-answer"]')?.click();
-    });
+    // 空工作区上那两颗按钮和横杠上的「导入」是同一个动作，所以走同一条路——
+    // onImport 由 UI 层挂上来（见 pdf-workspace-ui.js 的 pickAndImport）。没人挂
+    // 的时候退回去点隐藏的文件框：工作区在测试里是单独立起来的，那时候没有 UI 层。
+    const askImport = (role) => {
+      if (typeof this.onImport === 'function') { this.onImport(role); return; }
+      const input = role === DOC_ROLES.ANSWER ? 'file-answer' : 'file-exercise';
+      document.querySelector(`[data-role="${input}"]`)?.click();
+    };
+    this.elEmpty?.querySelector('[data-action="import-exercise"]')?.addEventListener('click',
+      () => askImport(DOC_ROLES.EXERCISE));
+    this.elEmpty?.querySelector('[data-action="import-answer"]')?.addEventListener('click',
+      () => askImport(DOC_ROLES.ANSWER));
 
     this.elRestore?.addEventListener('click', () => this.restorePane());
 

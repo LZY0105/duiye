@@ -2446,7 +2446,7 @@ ok(
   '点单子以外的地方能关（pointerdown 捕获，不是 click）',
 );
 ok(
-  importUi.indexOf('close();') < importUi.indexOf('pickAndImport(target)'),
+  importUi.indexOf('close();') < importUi.indexOf('pickAndImport(role)'),
   '选完一项先关单子再开选择器 —— 反过来的话选完文件回来它还开着',
 );
 

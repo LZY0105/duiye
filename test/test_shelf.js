@@ -340,10 +340,35 @@ await test('导入的进度说给看得见的那一处', async () => {
 
 await test('「＋」接到的是真的导入，不是一个空壳', async () => {
   const code = $read('src/pdf/pdf-workspace-ui.js');
-  assert.ok(/onAdd: \(\) => elRoot\.querySelector\('\[data-role="file-/.test(code),
-    '「＋」得真的把文件选择器打开');
+  assert.ok(code.includes('onAdd: () => pickAndImport(DOC_ROLES.EXERCISE)'),
+    '「＋」得真的走到导入');
   assert.ok(/handleImport\(Array\.from\(e\.target\.files/.test(code),
     '选完文件得真的走到导入');
+});
+
+await test('应用里每一个「导入」都走同一条路', async () => {
+  // 四个入口：横杠单子那两项、书架上那张「＋」、空工作区卡片上那两颗按钮。
+  // 它们原来各自去点隐藏的 <input>，于是同一个动作有两种表现——横杠上弹应用内面
+  // 板，书架上弹系统选择器。人不会认为那是两个功能，只会觉得这个应用时好时坏。
+  const ui = $read('src/pdf/pdf-workspace-ui.js');
+  const ws = $read('src/pdf/pdf-workspace.js');
+
+  assert.ok(ui.includes('export async function pickAndImport('),
+    '有一个共用的入口');
+  assert.ok(ui.includes('onAdd: () => pickAndImport('), '书架的「＋」走它');
+  assert.ok(ui.includes('pickAndImport(role)'), '横杠单子那两项走它');
+  assert.ok(ui.includes('workspace.onImport = (role) => pickAndImport(role)'),
+    '空工作区那两颗也接到它身上');
+  assert.ok(ws.includes('this.onImport(role)'), '——而工作区确实会去叫它');
+
+  // 没人挂 onImport 时（测试里工作区是单独立起来的）要能退回文件框，不能哑掉。
+  assert.ok(/typeof this\.onImport === 'function'/.test(ws),
+    '没挂的时候退回隐藏文件框，而不是什么都不做');
+
+  // 除了那一处回退和 change 监听，不该再有谁直接去点隐藏文件框。
+  const clicks = (ui + ws).match(/data-role="file-(exercise|answer)"\]`?\)\?\.click\(\)/g) || [];
+  assert.ok(clicks.length <= 2,
+    `只剩两处回退，现在有 ${clicks.length} 处`);
 });
 
 console.log('\n═══════════════════════════════════════════════════════════════');
