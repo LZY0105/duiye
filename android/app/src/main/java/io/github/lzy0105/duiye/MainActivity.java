@@ -3,6 +3,7 @@ package io.github.lzy0105.duiye;
 import android.os.Bundle;
 
 import com.getcapacitor.BridgeActivity;
+import io.github.lzy0105.duiye.files.PdfFilesPlugin;
 import io.github.lzy0105.duiye.proxy.NativeProxyPlugin;
 
 /**
@@ -30,6 +31,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(NativeProxyPlugin.class);
+        registerPlugin(PdfFilesPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

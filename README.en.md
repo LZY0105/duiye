@@ -77,6 +77,21 @@ The only affected case is a pure scanned document with neither bookmarks nor a r
   A notebook is not "a scratchpad that turns pages"; it is **a document**. `note-document.js` answers the same questions a PDF does — how many pages, how big is page N, what does it look like, what text is on it — so paging, zoom, fit-to-width, bitmap caching, prefetch, ink alignment, thumbnails, bookmarks, covers and session restore all work on it without a line of change. Pages are drawn on demand rather than stored: a thousand-page empty notebook is a few dozen bytes in the library.
 - **Lasso editing**: select annotations and move, scale, or rotate them as a group. Rotation and scaling share the selection center and can happen in one gesture. The entire gesture occupies a single undo step.
 - **Four-corner toolbar docking**: drag the floating toolbar to any edge. Near a corner, its collapsed circular token grows as a docking cue; release to snap into that corner and expand. Each corner is an independent target instead of a rounded result from the nearest edge.
+- **Importing lists every PDF on the device**: the Import button opens a small menu (exercises /
+  answers), and choosing one opens the app's own sheet rather than the system picker — **every PDF
+  on the device in one list**, newest first, searchable by name. The problem with the system picker
+  is not that it looks foreign; it is that it makes you walk a folder tree, while what you remember
+  is "that Xie Huimin book", not which folder it is in.
+  "Only PDFs are visible" holds structurally here rather than as a filter that can be bypassed: the
+  source itself contains nothing else, because MediaStore is queried by MIME type rather than by
+  filename extension — a PDF without a `.pdf` suffix is still a PDF. Dot-prefixed folders are
+  skipped; they hold file-manager cache copies and unzip leftovers, and without that the same book
+  appears twice under two names.
+  **This needs all-files access.** Since Android 11 a PDF is not a media file as far as MediaStore
+  is concerned, so without that permission an app sees only the files it created itself. There is no
+  in-app dialog for it — the app can only open system settings — so when the permission is missing
+  the sheet explains why it is needed and where to grant it instead of saying "failed". The app side
+  is read-only: the plugin exposes no method that deletes or modifies a file.
 - **Automatic question matching**: list question numbers and their corresponding answer locations for the current page, with a reliability label. If the books have not been verified as a pair, the application says "please verify" and never presents a tentative match as certain.
 - **Annotation saving**: annotations save automatically after 400 ms. The toolbar also provides an explicit Save button, enabled only while changes remain unwritten. A disabled button therefore means the current work is already saved.
 - **Handwriting-first input**: the stylus writes; fingers and the mouse pan or change pages. A one-finger gesture is interpreted by the page itself. When zoom makes the page larger than its panel, the gesture pans; when the page already fits, it turns the page. Direction is chosen once at the start of the gesture and never changes midway. Reaching an edge does not turn the page until the next swipe.
@@ -99,6 +114,7 @@ The only affected case is a pure scanned document with neither bookmarks nor a r
 | Annotations | Custom vector ink layer (`src/ink/`) with IndexedDB persistence |
 | Notebooks | `src/note/` — a synthetic document whose pages are drawn on demand from the scratchpad paper styles (`note-document.js`), read through the PDF reader |
 | Matching | The engine described above; pure JavaScript with no dependencies |
+| Device files | `android/…/files/PdfFilesPlugin.java` — a MediaStore query listing every PDF on the device; the web side is `src/pdf/pdf-files.js` and `pdf-picker.js` |
 | Local storage | IndexedDB (PDF bytes, ink, scratchpads, notebooks) plus localStorage (session, reading position, book pairings) |
 | Offline support | Service Worker (`public/sw.js`) |
 

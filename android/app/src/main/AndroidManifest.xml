@@ -43,6 +43,17 @@
     <!-- 导出诊断日志走的是浏览器下载（<a download>）。Android 9 及更早的系统
          需要这两条才写得进「下载」文件夹；再新的系统由下载管理器代劳，所以
          maxSdkVersion 把它们挡在外面。除此之外这个 app 不碰外部存储。 -->
+    <!-- 列出本机所有 PDF 用的。
+
+         PDF 在 MediaStore 眼里不是媒体文件，而从 Android 11 起，没有这个权限的应
+         用查 MediaStore.Files 只看得见自己创建的那些——别的应用下载的、微信存的、
+         U 盘拷进来的一个都看不到。所以「导入」那张单子要列全机的 PDF，只有这一条
+         路（见 files/PdfFilesPlugin.java 里的长注释）。
+
+         它没有应用内弹窗：只能把人送到系统设置里自己打开。应用这边只读不写，插件
+         里没有任何删除或修改文件的方法——权限的粒度比用得着的粗，那是 Android 的
+         问题，不是顺手多做几件事的理由。 -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 </manifest>

@@ -35,6 +35,8 @@ import {
   listNotebooks,
   renameNotebook,
 } from '../note/note-store.js';
+import { nativeFilesAvailable, readDevicePdf } from './pdf-files.js';
+import { openDevicePdfPicker } from './pdf-picker.js';
 import { t } from '../core/i18n.js';
 import Logger from '../core/logger.js';
 
@@ -411,19 +413,56 @@ function bindImportMenu() {
   });
 
   const PICKERS = {
-    'import-exercise': 'file-exercise',
-    'import-answer': 'file-answer',
+    'import-exercise': { input: 'file-exercise', role: DOC_ROLES.EXERCISE },
+    'import-answer': { input: 'file-answer', role: DOC_ROLES.ANSWER },
   };
   for (const item of items) {
-    const picker = PICKERS[item.dataset.role];
-    if (!picker) continue;
+    const target = PICKERS[item.dataset.role];
+    if (!target) continue;
     item.addEventListener('click', () => {
-      // 先关再开文件选择器：反过来的话，系统那张选择器盖上来时单子还留在底下，
-      // 选完文件回来它仍然开着。
+      // 先关再开选择器：反过来的话，选择器盖上来时单子还留在底下，选完回来它仍
+      // 然开着。
       close();
-      elRoot.querySelector(`[data-role="${picker}"]`)?.click();
+      pickAndImport(target);
     });
   }
+}
+
+/**
+ * 挑一份 PDF 然后导入。
+ *
+ * 两条路，同一个终点。平板上走应用内那张面板——它列的是全机的 PDF，人不用自己翻
+ * 目录（见 pdf-picker.js）。浏览器里没有原生插件，退回 &lt;input type="file"&gt;，
+ * 那是开发和测试时唯一能用的路。
+ *
+ * 两条路在 handleImport 之前就合并了：面板给的是一个 File，文件框给的也是 File，
+ * 往下只有一套导入逻辑。这是刻意的——第二套导入逻辑会和第一套慢慢长岔。
+ */
+async function pickAndImport({ input, role }) {
+  if (!nativeFilesAvailable()) {
+    elRoot.querySelector(`[data-role="${input}"]`)?.click();
+    return;
+  }
+  let chosen;
+  try {
+    chosen = await openDevicePdfPicker({ title: t('picker.title') });
+  } catch (error) {
+    Logger.error('PDF', 'picker failed', error);
+    setStatus(t('picker.failed'), true);
+    return;
+  }
+  if (!chosen) return;
+
+  let file;
+  try {
+    setStatus(`正在读取 ${chosen.name} …`);
+    file = await readDevicePdf(chosen);
+  } catch (error) {
+    Logger.error('PDF', 'read device pdf failed', error);
+    setStatus(`读取 ${chosen.name} 失败`, true);
+    return;
+  }
+  await handleImport([file], role);
 }
 
 /**

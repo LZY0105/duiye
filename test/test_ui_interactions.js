@@ -2446,8 +2446,20 @@ ok(
   '点单子以外的地方能关（pointerdown 捕获，不是 click）',
 );
 ok(
-  importUi.indexOf('close();') < importUi.indexOf('${picker}'),
-  '选完一项先关单子再开文件选择器 —— 反过来的话选完文件回来它还开着',
+  importUi.indexOf('close();') < importUi.indexOf('pickAndImport(target)'),
+  '选完一项先关单子再开选择器 —— 反过来的话选完文件回来它还开着',
+);
+
+// 挑文件有两条路，但只有一套导入逻辑。
+ok(
+  importUi.includes('nativeFilesAvailable()')
+  && importUi.includes('openDevicePdfPicker('),
+  '平板上走应用内面板，浏览器里退回系统选择器',
+);
+ok(
+  (importUi.match(/await handleImport\(/g) || []).length >= 1
+  && importUi.includes('await handleImport([file], role)'),
+  '——两条路在 handleImport 之前就合并了，往下只有一套导入逻辑',
 );
 ok(
   importUi.includes('if (focus) button.focus();'),
@@ -2460,6 +2472,69 @@ ok(
   '空工作区那两颗导入按钮还在，走的是它们自己的 data-action',
 );
 
+// ═══════════════════════════════════════════════════════════════
+// 本机 PDF 选择面板
+//
+// 「只导入 PDF」这件事现在是结构上成立的，不是靠一个筛选条件：数据源本身就只有
+// PDF（MediaStore 按 MIME 查）。能静默坏掉的是权限那一段——没权限时如果只说「失
+// 败」，人不知道该去哪儿开，而这个权限没有应用内弹窗。
+
+const filesJs = $read('src/pdf/pdf-files.js');
+const pickerJs = $read('src/pdf/pdf-picker.js');
+const pluginJava = $read('android/app/src/main/java/io/github/lzy0105/duiye/files/PdfFilesPlugin.java');
+const manifest = $read('android/app/src/main/AndroidManifest.xml');
+
+ok(
+  pluginJava.includes('MIME_TYPE') && pluginJava.includes('application/pdf'),
+  '按 MIME 查，不是按文件名后缀 —— 没有 .pdf 后缀的 PDF 照样是 PDF',
+);
+ok(
+  manifest.includes('android.permission.MANAGE_EXTERNAL_STORAGE'),
+  '声明了「所有文件访问权限」—— 没有它只看得见自己创建的文件',
+);
+ok(
+  $read('android/app/src/main/java/io/github/lzy0105/duiye/MainActivity.java')
+    .includes('registerPlugin(PdfFilesPlugin.class)'),
+  '插件在 super.onCreate 之前登记，否则网页那边找不到它',
+);
+ok(
+  !/void delete|void write|void rename/.test(pluginJava),
+  '插件只读：权限的粒度比用得着的粗，那不是顺手多做几件事的理由',
+);
+ok(
+  pluginJava.includes('private static boolean hidden('),
+  '点开头的目录滤掉 —— 那里面是缓存副本和解压残留，会让同一本书出现两次',
+);
+
+// 没有原生层时（浏览器、测试）要诚实地说没有，而不是抛一个谁也接不住的错。
+ok(
+  filesJs.includes('export function nativeFilesAvailable()')
+  && /return !!plugin\(\)/.test(filesJs),
+  '没有原生插件时如实回 false，调用方据此退回系统选择器',
+);
+
+// 权限那一段。
+ok(
+  pickerJs.includes("t('picker.needPermission')") && pickerJs.includes("t('picker.grant')"),
+  '没权限时说的是「为什么要」和「去哪儿开」，不是一句「失败」',
+);
+ok(
+  pickerJs.includes("addEventListener('visibilitychange'"),
+  '从系统设置回来要重新问一次 —— 授权发生在别的应用里，这边收不到回调',
+);
+for (const lang of ['zh-CN', 'zh-TW', 'en']) {
+  const src = $read(`src/core/lang/${lang}.js`);
+  const missing = ['picker.title', 'picker.confirm', 'picker.search', 'picker.empty',
+    'picker.needPermission', 'picker.grant', 'picker.count']
+    .filter(k => !src.includes(`"${k}"`));
+  ok(missing.length === 0, `${lang} 有全部面板文案`, missing.join(', '));
+}
+
+// 文件名来自本机文件系统，是别处写的名字。
+ok(
+  pickerJs.includes(".textContent = file.name"),
+  '文件名走 textContent 不进 innerHTML',
+);
 console.log('\n═══════════════════════════════════════════════════════════════');
 console.log(`  ${PASS} passed, ${FAIL} failed`);
 console.log('═══════════════════════════════════════════════════════════════');
