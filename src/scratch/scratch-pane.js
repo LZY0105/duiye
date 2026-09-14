@@ -106,6 +106,12 @@ export class ScratchPane {
       onChange: () => this._inkChanged(),
       onHistoryChange: () => this.handlers.onInkHistoryChange?.(this.ink),
       onDrawStart: () => this.handlers.onFocus?.(),
+      // 同 PdfPane：另一栏在哪只有工作区知道。
+      onDragOver: (at) => this.handlers.onInkDragOver?.(at),
+      // 原样回传，不要折成布尔：落地的那一侧给的是一组把手，源那边要靠它把
+      // 「撤销拖走」连到落下的那一份上。折成 true/false 的话，撤销之后两边
+      // 各留一份。
+      onDragDrop: (payload) => this.handlers.onInkDragDrop?.(payload) || null,
     });
     this.ink.setEnabled(false);
 

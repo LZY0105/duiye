@@ -409,6 +409,8 @@ export class PdfWorkspace {
         onStateChange: () => { this._syncSlotChrome(slot); this._persist(); },
         onFocus: () => this._markActive(slot),
         onInkHistoryChange: () => this._syncSlotChrome(slot),
+        onInkDragOver: (at) => this._markInkDropTarget(slot, at),
+        onInkDragDrop: (payload) => this._dropInkIntoOtherSlot(slot, payload),
       });
       this.strips[slot] = new DeckStrip(this.elSlots[slot], {
         getDeck: () => deckFor(this.state, slot),
@@ -499,6 +501,69 @@ export class PdfWorkspace {
     const column = listEl.closest?.('.pdf-ws-slot')?.getBoundingClientRect() || list;
     const host = this.root.getBoundingClientRect();
     bar.yieldTo(this._cornerFor(column, host, bar.rect()));
+  }
+
+  // ── 跨栏拖拽笔迹 ──────────────────────────────────────────────────────────
+
+  /**
+   * 这个屏幕点底下是哪一栏的哪块画布。
+   *
+   * 问的是画布自己的矩形，不是栏的：一栏里同时挂着 PdfPane 和 ScratchPane，只
+   * 有显示着的那一块有面积（另一块是 1x1 的、收起来的）。所以拿矩形去撞，天然
+   * 就只会撞上真正在屏幕上的那一块。
+   */
+  _inkSurfaceAt(clientX, clientY) {
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+      const view = this._loadedViewIn(slot);
+      const canvas = view?.ink?.canvas;
+      if (!canvas) continue;
+      const r = canvas.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) continue;
+      if (clientX >= r.left && clientX <= r.right
+          && clientY >= r.top && clientY <= r.bottom) {
+        return { slot, view };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 拖动途中：把手指底下那一栏点亮。
+   *
+   * 一片被拖到半空中的笔迹，如果没有任何东西表示它会落在哪，人只会以为自己把它
+   * 拖丢了——于是松手前就缩回来了，这个功能等于不存在。
+   */
+  _markInkDropTarget(fromSlot, at) {
+    const hit = at?.outside ? this._inkSurfaceAt(at.clientX, at.clientY) : null;
+    const target = hit && hit.slot !== fromSlot ? hit.slot : null;
+    if (this._inkDropSlot === target) return;
+    this._inkDropSlot = target;
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+      this.elSlots?.[slot]?.classList.toggle('is-ink-drop', slot === target);
+    }
+  }
+
+  /**
+   * 松在别的栏里：把这一片交给那边。
+   *
+   * 落回原栏（比如拖出去又拖回来）不算交出去——回 false，源画布照常走它本来的
+   * 收尾，那一片留在原地。
+   *
+   * @returns {boolean} 那边接住了吗
+   */
+  _dropInkIntoOtherSlot(fromSlot, { strokes, clientX, clientY } = {}) {
+    this._markInkDropTarget(fromSlot, null);
+    const hit = this._inkSurfaceAt(clientX, clientY);
+    if (!hit || hit.slot === fromSlot) return null;
+    // 回的不是「接住了没有」，是一组把手：源那边要把「撤销拖走」接到这一份上，
+    // 否则在源撤销之后两边各留一份，一次撤销反而把内容变成了两份。
+    const landed = hit.view.ink.adoptStrokes(strokes, clientX, clientY);
+    if (landed) {
+      // 落过去之后那一栏就是活动栏：人接下来要动的是它。
+      this._markActive(hit.slot);
+      this._syncSlotChrome(hit.slot);
+    }
+    return landed;
   }
 
   // ── divider ───────────────────────────────────────────────────────────────
@@ -2168,6 +2233,8 @@ export class PdfWorkspace {
       onFocus: () => this._markActive(slot),
       onInkHistoryChange: () => this._syncSlotChrome(slot),
       onSaveStateChange: () => this._syncSlotChrome(slot),
+      onInkDragOver: (at) => this._markInkDropTarget(slot, at),
+      onInkDragDrop: (payload) => this._dropInkIntoOtherSlot(slot, payload),
     });
     this.scratchPanes[slot] = pane;
     return pane;

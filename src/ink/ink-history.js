@@ -110,10 +110,26 @@ export class InkHistory {
     this.record({ type: INK_OPS.ADD, index, stroke });
   }
 
-  /** @param {Array<{index:number, stroke:Object}>} entries from InkLayer.removeByIds */
-  recordErase(entries) {
+  /**
+   * @param {Array<{index:number, stroke:Object}>} entries from InkLayer.removeByIds
+   * @param {{onUndo?: function, onRedo?: function}} [paired] 这一步的「另一半」
+   *
+   * 绝大多数擦除没有另一半：擦掉就是擦掉。有另一半的只有一种——把一片笔迹拖到了
+   * 另一栏：那边加上、这边擦掉，是同一件事的两面。少了这一对回调，在这边撤销会
+   * 把笔迹放回来、而那边那份还在，于是一次撤销之后内容变成了两份。
+   *
+   * 回调而不是「目标图层」的引用：历史不该知道有别的画布这回事，它只知道这一步
+   * 还有一件事要一起做。跨文档那点耦合留在真正跨文档的那个地方（ink-surface 的
+   * _handOff），不渗进这里。
+   */
+  recordErase(entries, paired = null) {
     if (!entries.length) return;
-    this.record({ type: INK_OPS.ERASE, entries });
+    this.record({
+      type: INK_OPS.ERASE,
+      entries,
+      onUndo: paired?.onUndo || null,
+      onRedo: paired?.onRedo || null,
+    });
   }
 
   /**
@@ -204,6 +220,8 @@ export class InkHistory {
       case INK_OPS.CLEAR:
         // Restored at their original indices, so z-order survives the round trip.
         this.layer.restore(op.entries);
+        // 有「另一半」的擦除，另一半也要跟着回去——见 recordErase。
+        try { op.onUndo?.(); } catch (_) { /* 那一栏可能已经关掉了 */ }
         break;
       case INK_OPS.SPLIT:
         // Take the fragments out before putting the originals back, or the
@@ -237,6 +255,7 @@ export class InkHistory {
       case INK_OPS.ERASE:
       case INK_OPS.CLEAR:
         this.layer.removeByIds(op.entries.map(e => e.stroke.id));
+        try { op.onRedo?.(); } catch (_) { /* 同上 */ }
         break;
       case INK_OPS.SPLIT:
         this.layer.removeByIds(op.removed.map(e => e.stroke.id));
