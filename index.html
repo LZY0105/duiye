@@ -104,6 +104,20 @@
           <button type="button" class="pdf-bar-btn is-accent" data-role="new-scratch" data-i18n="note.new">新建纸张</button>
         </div>
         <span class="pdf-status" data-role="pdf-status"></span>
+        <!-- 只收 PDF。想加 Word 的话，改这两行 accept 是不够的，而且会更糟。
+
+             这个应用没有读 Word 的能力：依赖里只有 pdfjs-dist，importPdf() 第一
+             件事就是验文件头 %PDF-，整个阅读器（翻页、缩略图、笔迹按页存、对题）
+             都建在 pdf.js 的「页」模型上。只把 .docx 加进 accept 的结果是——选得
+             中，一导入就报「不是 PDF」。人会以为是自己的文件坏了，那比没有这个入
+             口更糟。
+
+             真要支持得选一条路：docx → PDF（需要转换器，前端没有靠谱的纯 JS 方
+             案），或者 mammoth.js 转 HTML 再单独做一种文档——但 HTML 是连续流、
+             没有「页」，而笔迹、缩略图、书签、对题全都按页码存，等于要为它设计一
+             套分页。两条都是独立的一件功能，不是这里的一个属性。
+
+             2026-09-14 评估过，决定先不做。 -->
         <input type="file" accept="application/pdf,.pdf" hidden data-role="file-exercise">
         <input type="file" accept="application/pdf,.pdf" hidden data-role="file-answer">
       </div>
