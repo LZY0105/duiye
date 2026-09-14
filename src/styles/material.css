@@ -612,12 +612,21 @@
    clear at the rim, where the curve is, and its face is where anything printed
    on it stays readable.
 
-   So the sheet is split by geometry rather than by opacity. A 14px transparent
+   So the sheet is split by geometry rather than by opacity. A transparent
    border gives the element a band that its background does not paint into, and
    the fill is clipped to the padding box. The backdrop filter applies across
    the whole element but is only VISIBLE in that band — so the bevel refracts
-   the blurred page behind the modal, hard, while the face behind the text is
+   the blurred page behind the modal, while the face behind the text is
    near-opaque and reads at full contrast.
+
+   那条带子原来是 14px 的**清**带，于是它显出来的是紧挨在它背后的那一层——也就是
+   遮罩。遮罩是一块压平的深色，而一块压平的东西折射出来还是它自己：结果不是玻璃
+   的边，是一圈灰蓝色的板子，白卡片像垫在另一张卡片上。
+
+   现在带子自己带一层浅白（border-box 那一层渐变），只让很少一点背景透上来，宽度
+   也从 14px 收到 7px。它仍然是同一个结构——面不透光、边透光——只是边上那一点光是
+   亮的而不是暗的，这才是一片玻璃压在暗底上该有的样子。带子和面之间那条 1px 的白
+   内圈也去掉了：带子变浅之后，那条线成了「两块叠在一起」里的那道缝。
 */
 
 .pdf-role-overlay {
@@ -628,18 +637,21 @@
 }
 
 .pdf-role-dialog {
-  border: 14px solid transparent !important;
-  border-radius: 28px !important;
-  /* padding-box: the fill stops at the inner edge, leaving the border band
-     clear for the lens. */
-  background: linear-gradient(rgba(255, 255, 255, 0.97), rgba(255, 255, 255, 0.97)) padding-box !important;
+  border: 7px solid transparent !important;
+  border-radius: 26px !important;
+  /* 两层：padding-box 那一层是面，border-box 那一层是带子。面几乎不透光，带子
+     浅浅地透一点——而不是像原来那样整条清的，把遮罩原样显出来。 */
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.97), rgba(255, 255, 255, 0.97)) padding-box,
+    linear-gradient(rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.78)) border-box !important;
   backdrop-filter: saturate(150%) !important;
   box-shadow:
-    /* the rim, drawn inside the border box so it sits on the bevel */
+    /* 顶上那道高光留着：它是「这一片有厚度」的唯一线索。 */
     inset 0 1px 0 rgba(255, 255, 255, 0.95),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.55),
-    0 2px 6px rgba(15, 23, 42, 0.10),
-    0 24px 60px -18px rgba(15, 23, 42, 0.38) !important;
+    0 1px 2px rgba(15, 23, 42, 0.05),
+    /* 投影也收了一档。原来 0.38 的那一摊落在遮罩上是黑上加黑，看着像卡片下面还
+       压着一块东西，而不像它浮起来了。 */
+    0 20px 48px -22px rgba(15, 23, 42, 0.28) !important;
 }
 
 @supports (backdrop-filter: url(#lg-refract)) {
@@ -678,7 +690,11 @@
     backdrop-filter: none !important;
   }
   .pdf-role-dialog {
-    border-color: rgba(15, 23, 42, 0.18) !important;
+    /* 不透明那一档下带子没有意义：背后什么都不透，它只会是一圈灰。整片收成一张
+       实心卡片加一条发丝边。border-color 单独改是不够的——border-box 那一层渐变
+       会盖在它上面，所以背景也要一起换掉。 */
+    border: 1px solid rgba(15, 23, 42, 0.18) !important;
+    background: #ffffff !important;
     backdrop-filter: none !important;
   }
 }
