@@ -3,6 +3,7 @@ export default {
   "nav.settings": "Settings",
 
   "nav.pdf": "Practice",
+  "pdf.import": "Import",
   "pdf.importExercise": "Import exercises",
   "pdf.importAnswer": "Import answers",
   "pdf.library": "Library",

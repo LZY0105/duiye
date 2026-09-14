@@ -59,8 +59,44 @@
            reliably at both edges nobody was going to aim at a 30px circle. -->
       <div class="pdf-page-bar">
         <div class="pdf-bar-group">
-          <button type="button" class="pdf-bar-btn" data-role="import-exercise" data-i18n="pdf.importExercise">导入练习册</button>
-          <button type="button" class="pdf-bar-btn" data-role="import-answer" data-i18n="pdf.importAnswer">导入答案册</button>
+          <!-- 一个「导入」，点开是一张单子。
+
+               原来横杠上并排摆着「导入练习册」和「导入答案册」两颗按钮。它们是同
+               一件事的两个去向，而不是两件事——并排摆着，横杠上四颗按钮里有两颗在
+               问同一个问题，而真正不同的那件事（新建纸张）反倒被挤在最右边。
+
+               单子里每一项带一枚线图标：两项都是「导入一份 PDF」，差别只在它进来
+               之后算题还是算答案，光靠文字要读完整行才分得清。图标用 currentColor
+               的线条，和书签、工具栏那些是同一套画法——不是彩色的应用图标，那种在
+               这块以墨色为主的界面上会跳出来抢注意力。 -->
+          <div class="pdf-bar-menu-host">
+            <button type="button" class="pdf-bar-btn" data-role="import-open"
+                    aria-haspopup="menu" aria-expanded="false" data-i18n="pdf.import">导入</button>
+            <div class="pdf-bar-menu" data-role="import-menu" role="menu" hidden>
+              <button type="button" class="pdf-bar-menu-item" role="menuitem" data-role="import-exercise">
+                <svg class="pdf-bar-menu-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6.5 3.5h8l5 5v12a1 1 0 0 1-1 1h-12a1 1 0 0 1-1-1v-16a1 1 0 0 1 1-1z"
+                        fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                  <path d="M14 3.6v5.4h5.4" fill="none" stroke="currentColor" stroke-width="1.6"
+                        stroke-linejoin="round"/>
+                  <path d="M9.4 13.2h5.2M9.4 16.4h3.4" fill="none" stroke="currentColor"
+                        stroke-width="1.6" stroke-linecap="round"/>
+                </svg>
+                <span data-i18n="pdf.importExercise">导入练习册</span>
+              </button>
+              <button type="button" class="pdf-bar-menu-item" role="menuitem" data-role="import-answer">
+                <svg class="pdf-bar-menu-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6.5 3.5h8l5 5v12a1 1 0 0 1-1 1h-12a1 1 0 0 1-1-1v-16a1 1 0 0 1 1-1z"
+                        fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                  <path d="M14 3.6v5.4h5.4" fill="none" stroke="currentColor" stroke-width="1.6"
+                        stroke-linejoin="round"/>
+                  <path d="M9.2 15.4l2 2 3.6-4" fill="none" stroke="currentColor" stroke-width="1.7"
+                        stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span data-i18n="pdf.importAnswer">导入答案册</span>
+              </button>
+            </div>
+          </div>
           <button type="button" class="pdf-bar-btn" data-role="open-library" data-i18n="pdf.library">文档库</button>
           <!-- Beside the import actions, never instead of them: creating a
                scratchpad is a third way to fill a pane, and it is available

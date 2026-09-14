@@ -2,6 +2,7 @@ export default {
   "nav.settings": "設定",
 
   "nav.pdf": "練習",
+  "pdf.import": "匯入",
   "pdf.importExercise": "匯入練習冊",
   "pdf.importAnswer": "匯入答案冊",
   "pdf.library": "文件庫",

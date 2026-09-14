@@ -1012,6 +1012,69 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
   }
 }
 
+/* 横杠上的下拉单子（「导入」）。
+
+   尺寸、圆角、阴影、命中高度都和下面那张 .pdf-slot-menu 对齐——它们是同一种东西
+   出现在两处，长得不一样只会让人以为它们能做的事不一样。差别只有两处，而且都有
+   理由：这张从左边缘展开（它的按钮在横杠最左），并且每一项带一枚图标。 */
+
+.pdf-bar-menu-host {
+  position: relative;
+  display: inline-flex;
+}
+
+.pdf-bar-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  min-width: 11rem;
+  padding: 0.3rem;
+  border-radius: 12px;
+  /* 不透明。这张单子浮在正在读的那一页上，而这条规矩整份样式表都在守：凡是浮在
+     文档上又要被读的表面，都得自己不透明——见 base.css 里顶栏那一段。 */
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  box-shadow: var(--glass-shadow);
+  animation: outlineIn 0.16s var(--spring-ease);
+}
+
+.pdf-bar-menu[hidden] { display: none; }
+
+.pdf-bar-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.86rem;
+  text-align: start;
+  cursor: pointer;
+  /* 和 .pdf-slot-menu-item 同一个数：48dp 的笔尖命中面积，不管文字多高。 */
+  min-height: 2.75rem;
+}
+
+.pdf-bar-menu-item:hover { background: rgba(15, 23, 42, 0.06); }
+.pdf-bar-menu-item:active { background: rgba(15, 23, 42, 0.1); }
+.pdf-bar-menu-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* 图标比文字淡一档：它是用来一眼分辨两项的，不是用来先被读到的。 */
+.pdf-bar-menu-icon {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  color: var(--muted, rgba(15, 23, 42, 0.55));
+}
+.pdf-bar-menu-item:hover .pdf-bar-menu-icon { color: var(--accent); }
+
 .pdf-slot-menu {
   position: absolute;
   right: 6px;

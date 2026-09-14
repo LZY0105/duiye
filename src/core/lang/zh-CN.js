@@ -3,6 +3,7 @@ export default {
   "nav.settings": "设置",
 
   "nav.pdf": "练习",
+  "pdf.import": "导入",
   "pdf.importExercise": "导入练习册",
   "pdf.importAnswer": "导入答案册",
   "pdf.library": "文档库",

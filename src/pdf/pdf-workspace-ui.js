@@ -355,6 +355,78 @@ function confirmRole(file, suggested) {
 }
 
 /**
+ * 「导入」那颗按钮和它点开的那张单子。
+ *
+ * 两项走的是同一条导入路径，只是把「这份文件是？」那个问题的默认答案先填好——
+ * confirmRole 仍然会问，所以选错了还能改。单子不是替它做决定，是让那个问题在被
+ * 问出来之前就已经有一个对的默认值。
+ *
+ * 关掉的三条路都要有，少一条都会留下一张关不掉的单子：按 Escape、点单子以外的任
+ * 何地方、以及选了其中一项之后。第二条用捕获阶段的 pointerdown，和 pdf-workspace
+ * 里那张栏内单子是同一套做法——用 click 的话，落在别的按钮上的那一下会先触发它自
+ * 己的动作，单子还开着。
+ */
+function bindImportMenu() {
+  const host = elRoot.querySelector('.pdf-bar-menu-host');
+  const button = elRoot.querySelector('[data-role="import-open"]');
+  const menu = elRoot.querySelector('[data-role="import-menu"]');
+  if (!host || !button || !menu) return;
+
+  const items = [...menu.querySelectorAll('.pdf-bar-menu-item')];
+  const isOpen = () => !menu.hidden;
+
+  const close = ({ focus = false } = {}) => {
+    if (!isOpen()) return;
+    menu.hidden = true;
+    button.setAttribute('aria-expanded', 'false');
+    // 只有在焦点还在单子里的时候才收回按钮上。人点别处把它关掉时，焦点是那个别
+    // 处的——硬抢回来会把他刚点的东西从手里夺走。
+    if (focus) button.focus();
+  };
+
+  const open = () => {
+    if (isOpen()) return;
+    menu.hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+    items[0]?.focus();
+  };
+
+  button.addEventListener('click', () => { if (isOpen()) close({ focus: true }); else open(); });
+
+  document.addEventListener('pointerdown', (e) => {
+    if (!isOpen()) return;
+    if (host.contains(e.target)) return;
+    close();
+  }, true);
+
+  elRoot.addEventListener('keydown', (e) => {
+    if (!isOpen()) return;
+    if (e.key === 'Escape') { e.stopPropagation(); close({ focus: true }); return; }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    const at = items.indexOf(document.activeElement);
+    if (at < 0) return;
+    e.preventDefault();
+    const step = e.key === 'ArrowDown' ? 1 : -1;
+    items[(at + step + items.length) % items.length].focus();
+  });
+
+  const PICKERS = {
+    'import-exercise': 'file-exercise',
+    'import-answer': 'file-answer',
+  };
+  for (const item of items) {
+    const picker = PICKERS[item.dataset.role];
+    if (!picker) continue;
+    item.addEventListener('click', () => {
+      // 先关再开文件选择器：反过来的话，系统那张选择器盖上来时单子还留在底下，
+      // 选完文件回来它仍然开着。
+      close();
+      elRoot.querySelector(`[data-role="${picker}"]`)?.click();
+    });
+  }
+}
+
+/**
  * Imports one document.
  *
  * One at a time, deliberately. The pickers no longer carry `multiple` and this
@@ -412,12 +484,7 @@ export async function initPdfWorkspace() {
     onChromeMove: () => workspace?.syncToolbarSafeArea?.(),
   });
 
-  elRoot.querySelector('[data-role="import-exercise"]')?.addEventListener('click', () => {
-    elRoot.querySelector('[data-role="file-exercise"]')?.click();
-  });
-  elRoot.querySelector('[data-role="import-answer"]')?.addEventListener('click', () => {
-    elRoot.querySelector('[data-role="file-answer"]')?.click();
-  });
+  bindImportMenu();
   elRoot.querySelector('[data-role="file-exercise"]')?.addEventListener('change', (e) => {
     handleImport(Array.from(e.target.files || []), DOC_ROLES.EXERCISE);
     e.target.value = '';

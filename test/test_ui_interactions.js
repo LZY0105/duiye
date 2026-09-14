@@ -2405,6 +2405,61 @@ check('nothing offers to update itself unless it was asked to', () => {
     'and the switch shows the same rule the checker follows');
 });
 
+// ═══════════════════════════════════════════════════════════════
+// 「导入」下拉单子
+//
+// 横杠上原来并排两颗「导入练习册 / 导入答案册」，现在收成一颗「导入」点开一张
+// 单子。会静默坏掉的是关闭那三条路：少一条就会留下一张关不掉的单子盖在页面上。
+
+const importHtml = $read('index.html');
+const importUi = $read('src/pdf/pdf-workspace-ui.js');
+const importMenuHtml = importHtml.slice(
+  importHtml.indexOf('data-role="import-menu"'),
+  importHtml.indexOf('data-role="file-exercise"'));
+
+ok(
+  new RegExp('data-role="import-open"[\\s\\S]{0,200}?aria-haspopup="menu"').test(importHtml),
+  '横杠上是一颗会展开单子的「导入」',
+);
+ok(
+  (importMenuHtml.match(/class="pdf-bar-menu-item"/g) || []).length === 2,
+  '单子里两项：练习册和答案册',
+);
+ok(
+  new RegExp('data-role="import-menu"[^>]*role="menu"[^>]*hidden').test(importHtml),
+  '单子默认收着，且报出 role=menu',
+);
+ok(
+  (importMenuHtml.match(/class="pdf-bar-menu-icon"/g) || []).length === 2,
+  '每一项带一枚图标 —— 两项都是「导入一份 PDF」，光靠文字要读完整行才分得清',
+);
+ok(
+  !/stroke="#|fill="#/.test(importMenuHtml),
+  '图标用 currentColor，不写死颜色 —— 它要跟着三套皮肤走',
+);
+
+// 关闭的三条路，少一条就会留下一张关不掉的单子。
+ok(importUi.includes("e.key === 'Escape'"), '按 Escape 能关');
+ok(
+  importUi.includes("addEventListener('pointerdown'")
+  && importUi.includes('host.contains(e.target)'),
+  '点单子以外的地方能关（pointerdown 捕获，不是 click）',
+);
+ok(
+  importUi.indexOf('close();') < importUi.indexOf('${picker}'),
+  '选完一项先关单子再开文件选择器 —— 反过来的话选完文件回来它还开着',
+);
+ok(
+  importUi.includes('if (focus) button.focus();'),
+  '只有焦点还在单子里时才收回按钮 —— 人点别处时硬抢会夺走他刚点的东西',
+);
+
+// 空状态卡片上那两颗按钮是另一套（data-action），不能被这次改动波及。
+ok(
+  /data-action="import-exercise"/.test($read('src/pdf/pdf-workspace.js')),
+  '空工作区那两颗导入按钮还在，走的是它们自己的 data-action',
+);
+
 console.log('\n═══════════════════════════════════════════════════════════════');
 console.log(`  ${PASS} passed, ${FAIL} failed`);
 console.log('═══════════════════════════════════════════════════════════════');
