@@ -363,7 +363,7 @@ export default {
   "guide.ink.b": "Drag it to any edge of the screen, or let it fold into a small ball. It steps aside on its own when the bottom bar comes up.",
   "guide.lasso.t": "Select first, then act",
   "guide.lasso.a": "Loop the lasso around some writing and a small bar appears beside it: copy, cut, recolour, delete.",
-  "guide.lasso.b": "What you cut can be pasted onto another page, the other pane, even a scratchpad — the paste button waits until you use it.",
+  "guide.lasso.b": "Press and hold a copy to drag it straight into the other pane; what you cut waits for you, ready to paste onto another page, the other pane or a scratchpad.",
   "guide.page.t": "Pages, zoom, bookmarks",
   "guide.page.a": "Type a number in the page box to jump. Pinch to zoom and the current scale floats in the middle of the page.",
   "guide.page.b": "☆ bookmarks the page and lets you name it yourself. ☰ opens the table of contents — faster than scrolling a thick book.",
