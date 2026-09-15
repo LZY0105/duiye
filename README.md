@@ -208,3 +208,8 @@ Agent 面板与本机代理由 [@allnothing571](https://github.com/allnothing571
 
 依赖的许可证由 `npm run check:licenses` 守着：MIT 作品里不能并入 GPL/AGPL 这类
 copyleft 代码，每一个会被打进 APK 的依赖都要过这一关。
+
+## 开发文档
+
+- [Android 开发与构建](docs/android-development.md)
+- [平板真机验收清单](docs/tablet-acceptance.md)
