@@ -1,4 +1,59 @@
-const AGENT_PROXY_URL = 'http://127.0.0.1:8787';
+const configuredProxyUrl = typeof import.meta !== 'undefined'
+  ? import.meta.env?.VITE_AGENT_PROXY_URL
+  : '';
+const AGENT_PROXY_URL = (configuredProxyUrl || 'http://127.0.0.1:8787').replace(/\/+$/, '');
+const REQUEST_TIMEOUT_MS = 65_000;
+const HEALTH_TIMEOUT_MS = 3_000;
+
+function failure(answer, payload = {}) {
+  return {
+    version: payload.version ?? 1,
+    ok: false,
+    source: payload.source ?? 'cpp-proxy',
+    answer,
+  };
+}
+
+async function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function responsePayload(response) {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Checks whether the local development proxy is running and configured.
+ * This endpoint intentionally never returns the upstream URL, model or key.
+ */
+export async function getAgentProxyHealth() {
+  try {
+    const response = await fetchWithTimeout(
+      `${AGENT_PROXY_URL}/health`,
+      { method: 'GET' },
+      HEALTH_TIMEOUT_MS,
+    );
+    const payload = await responsePayload(response);
+    if (!response.ok || !payload?.ok) return { ok: false, ready: false, mode: 'unavailable' };
+    return {
+      ok: true,
+      ready: payload.ready === true,
+      mode: typeof payload.mode === 'string' ? payload.mode : 'unknown',
+    };
+  } catch {
+    return { ok: false, ready: false, mode: 'offline' };
+  }
+}
 
 export async function requestAgent({
   version = 1,
@@ -7,7 +62,7 @@ export async function requestAgent({
   textOrigin,
 }) {
   try {
-    const response = await fetch(`${AGENT_PROXY_URL}/v1/agent/answer`, {
+    const response = await fetchWithTimeout(`${AGENT_PROXY_URL}/v1/agent/answer`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -18,37 +73,18 @@ export async function requestAgent({
         questionText,
         textOrigin,
       }),
-    });
+    }, REQUEST_TIMEOUT_MS);
 
-    let payload;
-
-    try {
-      payload = await response.json();
-    } catch {
-      return {
-        version: 1,
-        ok: false,
-        source: 'cpp-proxy',
-        answer: '本地 Agent 代理返回了无效响应。',
-      };
-    }
-
+    const payload = await responsePayload(response);
+    if (!payload) return failure('本地 Agent 代理返回了无效响应。');
     if (!response.ok || !payload.ok) {
-      return {
-        version: payload.version ?? 1,
-        ok: false,
-        source: payload.source ?? 'cpp-proxy',
-        answer: payload.message ?? '本地 Agent 代理请求失败。',
-      };
+      return failure(payload.message ?? '本地 Agent 代理请求失败。', payload);
     }
-
     return payload;
-  } catch {
-    return {
-      version: 1,
-      ok: false,
-      source: 'cpp-proxy',
-      answer: '无法连接本地 Agent 代理，请确认代理程序正在运行。',
-    };
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      return failure('本地 Agent 代理请求超时，请检查上游模型状态。');
+    }
+    return failure('无法连接本地 Agent 代理，请确认代理程序正在运行。');
   }
 }
