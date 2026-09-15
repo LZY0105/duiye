@@ -50,7 +50,7 @@ const {
   setDividerRatio, focusSlot,
 } = await import('../src/pdf/workspace-state.js');
 const { ENTRY_KINDS, findByResource, deckLength } = await import('../src/pdf/deck-state.js');
-const { initI18n } = await import('../src/core/i18n.js');
+const { initI18n, t } = await import('../src/core/i18n.js');
 // 真的那一个，不是骨架里那个空的 _persist()——这条测试盯的正是存盘写下的
 // 那份条目缓存，桩掉它就等于把要测的东西拿走了。
 const { saveSession } = await import('../src/pdf/document-session.js');
@@ -969,13 +969,13 @@ await check('选栏的单子按屏幕上的先后排，不是按内部名字', a
 
   const plain = ws.destinationOptions();
   assert.deepEqual(plain.map(o => o.slot), [SLOTS.PRIMARY, SLOTS.SECONDARY]);
-  assert.equal(plain[0].position, '左栏');
-  assert.equal(plain[1].position, '右栏');
+  assert.equal(plain[0].position, t('deck.left'));
+  assert.equal(plain[1].position, t('deck.right'));
 
   ws._setState({ ...ws.state, swapped: true });
   const swapped = ws.destinationOptions();
-  assert.equal(swapped[0].position, '左栏', '第一个永远是屏幕左边那个');
-  assert.equal(swapped[1].position, '右栏');
+  assert.equal(swapped[0].position, t('deck.left'), '第一个永远是屏幕左边那个');
+  assert.equal(swapped[1].position, t('deck.right'));
   assert.equal(swapped[0].slot, SLOTS.SECONDARY, '交换之后，屏幕左边是 b');
   assert.deepEqual(
     swapped.map(o => o.current),
