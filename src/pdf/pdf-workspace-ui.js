@@ -36,7 +36,7 @@ import {
   renameNotebook,
 } from '../note/note-store.js';
 import { nativeFilesAvailable, readDevicePdf } from './pdf-files.js';
-import { openDevicePdfPicker } from './pdf-picker.js';
+import { PERMISSION, ensureFilesPermission, openDevicePdfPicker } from './pdf-picker.js';
 import { t } from '../core/i18n.js';
 import Logger from '../core/logger.js';
 
@@ -444,11 +444,19 @@ function bindImportMenu() {
  * 个功能，只会觉得这个应用时好时坏。
  */
 export async function pickAndImport(role = DOC_ROLES.EXERCISE) {
-  if (!nativeFilesAvailable()) {
-    const input = role === DOC_ROLES.ANSWER ? 'file-answer' : 'file-exercise';
-    elRoot.querySelector(`[data-role="${input}"]`)?.click();
-    return;
-  }
+  if (!nativeFilesAvailable()) return openSystemPicker(role);
+
+  // 先把权限问清楚，再摊面板。没有权限的那张面板是空的，而空面板不会告诉人**为
+  // 什么**空——它看着就像「这台机器上没有 PDF」。
+  const permission = await ensureFilesPermission({
+    onWaiting: () => setStatus(t('picker.waitingGrant')),
+  });
+  if (permission === PERMISSION.CANCELLED) return;
+  if (permission === PERMISSION.NO_SETTINGS_PAGE) setStatus(t('picker.noSettingsPage'), true);
+  // 没要到就退回系统选择器。一次只能选一份，也得自己翻目录，但它不需要任何权
+  // 限——不给这个权限的人照样导得进东西，这是这条退路存在的全部理由。
+  if (permission !== PERMISSION.GRANTED) return openSystemPicker(role);
+
   let chosen;
   try {
     chosen = await openDevicePdfPicker({ title: t('picker.title') });
@@ -469,6 +477,18 @@ export async function pickAndImport(role = DOC_ROLES.EXERCISE) {
     return;
   }
   await handleImport([file], role);
+}
+
+/**
+ * 系统那张选择器。
+ *
+ * 两处用它：浏览器里（没有原生插件），以及人不肯给「所有文件访问权限」的时候。
+ * 它走的是页面上那两个藏起来的 &lt;input type="file"&gt;，和应用内面板在
+ * handleImport 之前就合并了。
+ */
+function openSystemPicker(role) {
+  const input = role === DOC_ROLES.ANSWER ? 'file-answer' : 'file-exercise';
+  elRoot.querySelector(`[data-role="${input}"]`)?.click();
 }
 
 /**

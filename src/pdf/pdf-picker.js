@@ -11,14 +11,95 @@
 // 面板不做导入，只回答「选了哪一份」。导入那一步（问角色、读字节、写库）还在
 // pdf-workspace-ui.js 里，和系统选择器那条路共用——两条路在 readDevicePdf 之后就合
 // 并了，往下只有一条，不会长出第二套导入逻辑。
+//
+// 这个文件还管「问权限」那一步（ensureFilesPermission）。它在面板**之前**跑：没有
+// 权限的面板是空的，而空面板不会告诉人为什么空——看着就像这台机器上没有 PDF。
 
 import { t } from '../core/i18n.js';
+import { chooseAction } from './deck-dialogs.js';
 import {
   FILES_ERRORS,
   hasFilesPermission,
   listDevicePdfs,
   requestFilesPermission,
 } from './pdf-files.js';
+
+/** 问权限问出来的结果。调用方按这个分支决定接下来走哪条路。 */
+export const PERMISSION = Object.freeze({
+  GRANTED: 'granted',
+  /** 人自己选了「这次用系统选择器」。 */
+  FALLBACK: 'fallback',
+  /** 这台机器上没有那一页设置可去。 */
+  NO_SETTINGS_PAGE: 'no-settings-page',
+  CANCELLED: 'cancelled',
+});
+
+/** 同一时刻只问一次。问的过程里人会离开应用，这期间再点导入不该叠出第二张单子。 */
+let asking = null;
+
+/**
+ * 等人从系统设置回到这个应用。
+ *
+ * 授权发生在另一个应用里，这边收不到回调——只能在回到前台时自己再问一次。没有
+ * 超时：人可能在设置里翻很久，而催他没有意义；单飞锁保证这只会挂着一个。
+ */
+function nextForeground() {
+  return new Promise((resolve) => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      document.removeEventListener('visibilitychange', onVisible);
+      resolve();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+  });
+}
+
+async function askOnce({ onWaiting }) {
+  for (;;) {
+    if (await hasFilesPermission()) return PERMISSION.GRANTED;
+
+    // 主动问，而且在打开面板**之前**问。原来是先摊开面板、再在空面板里放一行
+    // 「需要权限」——那等于先把人领进一间空屋子，再告诉他门没开。
+    const answer = await chooseAction({
+      title: t('picker.permissionTitle'),
+      note: t('picker.needPermission'),
+      actions: [
+        { id: 'grant', label: t('picker.grant') },
+        { id: 'fallback', label: t('picker.useSystemPicker') },
+      ],
+    });
+    if (answer === 'fallback') return PERMISSION.FALLBACK;
+    if (answer !== 'grant') return PERMISSION.CANCELLED;
+
+    try {
+      await requestFilesPermission();
+    } catch (_) {
+      // 有的定制系统没有「单个应用」那一页，也没有总列表。没处可去就别装作有。
+      return PERMISSION.NO_SETTINGS_PAGE;
+    }
+    onWaiting?.();
+    await nextForeground();
+    // 回来了就再看一眼。没给成就再摆一次这张单子——「这次用系统选择器」一直在
+    // 上面，所以拒绝这个权限的人也不会卡在这儿导不了东西。
+  }
+}
+
+/**
+ * 要到「所有文件访问权限」，或者问清楚人不想给。
+ *
+ * 这个权限没有应用内的系统弹窗可用——Android 只允许把人送到设置里那一页（见
+ * PdfFilesPlugin.java）。所以「找系统要」这一步只能是「把那一页打开」，而在那之前
+ * 必须自己先说清楚为什么要：这个权限听起来很大，它也确实很大。
+ *
+ * @param {{onWaiting?: function}} [options] 跳去设置那一刻回调一次，用来提示
+ *   「回来就能接着走」
+ * @returns {Promise<string>} PERMISSION 里的一个
+ */
+export function ensureFilesPermission(options = {}) {
+  if (asking) return asking;
+  asking = askOnce(options).finally(() => { asking = null; });
+  return asking;
+}
 
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]

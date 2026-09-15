@@ -27,16 +27,30 @@ export class InkLayer {
   }
 
   add(stroke) {
-    if (!isDrawable(stroke)) return -1;
+    if (!isDrawable(stroke) || this.has(stroke.id)) return -1;
     this.strokes.push(stroke);
     return this.strokes.length - 1;
   }
 
   /** Re-inserts a stroke at a specific index (undo of an erase). */
   insertAt(index, stroke) {
+    if (this.has(stroke?.id)) return -1;
     const at = Math.max(0, Math.min(this.strokes.length, index));
     this.strokes.splice(at, 0, stroke);
     return at;
+  }
+
+  /**
+   * 这个 id 已经在层里了吗。
+   *
+   * add 和 insertAt 都拿它挡重复：getById 用的是 find，同一个 id 出现两次的话，
+   * 第二份永远选不中也擦不掉——它在图上看得见，但对所有按 id 找东西的代码来说不存
+   * 在。跨栏拖动那条路会碰到这个：目标那边记了一步「加入」，源那边的撤销又会把同
+   * 一份还回去，两边各按各的顺序重放时就可能撞上。与其在那条路上小心翼翼，不如让
+   * 「一个 id 只有一份」成为这一层的性质。
+   */
+  has(id) {
+    return id != null && this.strokes.some(s => s.id === id);
   }
 
   /**

@@ -19,6 +19,7 @@
 
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
+import { readFileSync } from 'node:fs';
 
 let passed = 0;
 let failed = 0;
@@ -119,5 +120,34 @@ test('a pointer the surface does not claim is left to the pane', () => {
   assert.equal(announced, 0, 'a pointer ink does not take must not claim focus either');
 });
 
+// ═══════════════════════════════════════════════════════════════
+// 栏内工具栏上的撤销 / 重做，作用在显示着的那块画布上
+//
+// 这两颗原来写的是 pane.ink，而 pane 是 _bindSlotChrome 构造时抓住的 PdfPane。
+// 于是在草稿纸上按撤销，撤的是那一栏里那本书的笔迹——一块没人在看的画布。按钮本
+// 身是亮的（算 disabled 用的是显示着的那一个），所以现象是「按钮能按，按了没反
+// 应」，不报任何错。浮动笔迹栏当年犯过一模一样的错，修的时候只改了浮动栏。
+
+const wsSrc = readFileSync(
+  new URL('../src/pdf/pdf-workspace.js', import.meta.url), 'utf-8');
+
+test('撤销 / 重做作用在这一栏显示着的那块画布上', () => {
+  assert.ok(wsSrc.includes("on('ink-undo', () => this.viewFor(slot)?.ink?.undo())"),
+    '撤销问的是 viewFor(slot)，不是构造时抓住的 PdfPane');
+  assert.ok(wsSrc.includes("on('ink-redo', () => this.viewFor(slot)?.ink?.redo())"),
+    '重做同理');
+  assert.ok(!/on\('ink-(undo|redo)', \(\) => pane\.ink/.test(wsSrc),
+    '不能再有直接打在 pane.ink 上的写法');
+});
+
+test('按钮亮不亮和按下去作用在谁身上，问的是同一个对象', () => {
+  assert.ok(wsSrc.includes('this.viewFor(slot)?.ink?.canUndo()'), 'disabled 也走 viewFor');
+  assert.ok(wsSrc.includes('this.viewFor(slot)?.ink?.canRedo()'), '重做同理');
+});
+
+test('viewFor 在草稿纸上给的是草稿纸那块画布', () => {
+  assert.ok(/viewFor\(slot\) \{[\s\S]{0,240}?ENTRY_KINDS\.SCRATCH[\s\S]{0,90}?scratchPanes/
+    .test(wsSrc), 'viewFor 按当前条目的类型给对应的面板');
+});
 console.log(`\nink active pane: ${failed ? 'FAIL' : 'PASS'} (${passed} checks${failed ? `, ${failed} failed` : ''})`);
 if (failed) process.exit(1);

@@ -2849,3 +2849,32 @@ body.is-library-open .ink-card-layer { display: none; }
 }
 
 .pdf-picker-count { font-size: 0.76rem; color: var(--muted, rgba(15, 23, 42, 0.5)); }
+
+/* 跨栏拖笔迹：手指底下的那一栏。
+
+   一片被拖到半空中的笔迹，如果没有任何东西表示它会落在哪，人只会以为自己把它拖
+   丢了——于是松手前就缩回来了，这个功能等于不存在。所以这条不是装饰，是它能不能
+   被用起来的前提。
+
+   用内描边而不是外发光：外发光会被相邻那一栏盖住一半（两栏是紧挨着的），而内描
+   边永远整圈都在。底色只加一层很淡的 accent，不动文档本身的亮度——那底下是正在
+   读的一页，不该因为旁边在拖东西就变色。*/
+
+.pdf-ws-slot.is-ink-drop {
+  box-shadow: inset 0 0 0 2px var(--accent, #2563eb);
+  border-radius: 10px;
+}
+
+.pdf-ws-slot.is-ink-drop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent, #2563eb) 6%, transparent);
+}
+
+/* 「减少动态效果」下不做渐变，但**不取消这条提示**：它传的是信息，不是动效。 */
+@media (prefers-reduced-motion: no-preference) {
+  .pdf-ws-slot { transition: box-shadow 0.14s ease; }
+}
