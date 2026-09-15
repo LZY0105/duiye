@@ -47,3 +47,5 @@ corpus/
 *.zip
 *.tar
 *.gz
+# Desktop local Agent proxy build output.
+native/agent-proxy/build/

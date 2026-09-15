@@ -45,10 +45,12 @@ target_compile_options(agent-proxy
     PRIVATE
         /W4
         /permissive-
+        /utf-8
 )
 
 target_link_libraries(agent-proxy
     PRIVATE
         httplib::httplib
         nlohmann_json::nlohmann_json
+        winhttp
 )
