@@ -107,11 +107,32 @@ try {
 
     $buildTemp = Join-Path $repoDrive '.build-temp'
     $gradleCache = Join-Path $repoDrive '.gradle-hybrid-j21'
-    New-Item -ItemType Directory -Force -Path $buildTemp, $gradleCache | Out-Null
+    $androidHome = Join-Path $repoDrive '.android-local'
+    New-Item -ItemType Directory -Force -Path $buildTemp, $gradleCache, $androidHome | Out-Null
+
+    # Seed the debug keystore from the real one, once.
+    #
+    # ANDROID_USER_HOME points into the repo so a build touches nothing outside
+    # it. The cost is that the debug signing key lives in an ignored directory:
+    # a fresh clone generates a NEW one, and Android refuses to install over a
+    # package signed by the old key -- so every re-clone turned "adb install -r"
+    # into "uninstall first, and lose the notebooks on that tablet". That was
+    # found the hard way, by re-cloning and then having to re-sign by hand.
+    #
+    # Copying the user's own debug key in keeps both properties: the build still
+    # writes only inside the repo, and a device that trusts this machine's debug
+    # builds goes on trusting them. Nothing is copied back out, and if there is
+    # no key to copy, Gradle generates one exactly as before.
+    $localDebugKey = Join-Path $androidHome 'debug.keystore'
+    $userDebugKey = Join-Path $env:USERPROFILE '.android\debug.keystore'
+    if (-not (Test-Path -LiteralPath $localDebugKey) -and (Test-Path -LiteralPath $userDebugKey)) {
+        Copy-Item -LiteralPath $userDebugKey -Destination $localDebugKey
+        Write-Host 'Seeded the debug keystore from ~/.android so debug installs stay upgradable.'
+    }
 
     $env:JAVA_HOME = "$jdkDrive\"
     $env:GRADLE_USER_HOME = $gradleCache
-    $env:ANDROID_USER_HOME = Join-Path $repoDrive '.android-local'
+    $env:ANDROID_USER_HOME = $androidHome
     $env:TEMP = $buildTemp
     $env:TMP = $buildTemp
     $env:GRADLE_OPTS = "-Djava.io.tmpdir=$buildTemp -Dorg.gradle.vfs.watch=false"
