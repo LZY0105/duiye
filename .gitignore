@@ -49,3 +49,8 @@ corpus/
 *.gz
 # Desktop local Agent proxy build output.
 native/agent-proxy/build/
+
+# Cloud Agent deployment secrets and runtime state.
+native/agent-proxy/deploy/.env
+native/agent-proxy/deploy/caddy_data/
+native/agent-proxy/deploy/caddy_config/

@@ -1,0 +1,4 @@
+build/
+deploy/.env
+deploy/caddy_data/
+deploy/caddy_config/

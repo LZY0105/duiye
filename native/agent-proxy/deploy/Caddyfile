@@ -1,0 +1,10 @@
+api.duiye-agent.xyz {
+    encode zstd gzip
+
+    reverse_proxy agent-proxy:8787 {
+        transport http {
+            dial_timeout 5s
+            response_header_timeout 65s
+        }
+    }
+}

@@ -33,24 +33,39 @@ FetchContent_MakeAvailable(httplib nlohmann_json)
 
 add_executable(agent-proxy
     src/main.cpp
-)
-
-target_compile_definitions(agent-proxy
-    PRIVATE
-        WIN32_LEAN_AND_MEAN
-        NOMINMAX
-)
-
-target_compile_options(agent-proxy
-    PRIVATE
-        /W4
-        /permissive-
-        /utf-8
+    src/upstream_http.cpp
 )
 
 target_link_libraries(agent-proxy
     PRIVATE
         httplib::httplib
         nlohmann_json::nlohmann_json
-        winhttp
 )
+
+if (WIN32)
+    target_compile_definitions(agent-proxy
+        PRIVATE
+            WIN32_LEAN_AND_MEAN
+            NOMINMAX
+    )
+
+    target_compile_options(agent-proxy
+        PRIVATE
+            /W4
+            /permissive-
+            /utf-8
+    )
+
+    target_link_libraries(agent-proxy PRIVATE winhttp)
+else()
+    find_package(CURL REQUIRED)
+
+    target_compile_options(agent-proxy
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+    )
+
+    target_link_libraries(agent-proxy PRIVATE CURL::libcurl)
+endif()
