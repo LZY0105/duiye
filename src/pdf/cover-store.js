@@ -36,6 +36,18 @@ function getDB() {
  * 改名不该让封面作废——名字不在封面上。真正会让这张图不对的是：文件换了
  * （字节数变了）、页数变了、草稿纸换了纸样。签名对不上才重渲。
  */
+/**
+ * 封面的长边像素。
+ *
+ * 放在这里而不是 book-cover：画组合那张版面图的 combo-cover 也要它，而
+ * book-cover 反过来要引 combo-cover（组合的封面走它那条流水线）。两边互引，
+ * 模块初始化时先跑的那一个会读到还没赋值的常量——真炸过一次，整个书架的测试
+ * 停在「Cannot access 'COVER_LONG_EDGE' before initialization」。
+ *
+ * 这个文件谁也不引，所以它是唯一不会成环的落脚点。
+ */
+export const COVER_LONG_EDGE = 440;
+
 export function coverSignature(item) {
   if (!item) return '';
   const style = item.style

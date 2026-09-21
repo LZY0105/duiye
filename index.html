@@ -98,6 +98,39 @@
             </div>
           </div>
           <button type="button" class="pdf-bar-btn" data-role="open-library" data-i18n="pdf.library">文档库</button>
+          <!-- 组合：一套「书是怎么摆的」。
+
+               两项而不是一颗按钮，是因为这件事有两个方向：把现在这套摆法记
+               下来，和回到以前记下的某一套。两个方向都该在横杠上够得着——
+               只留「存」的话，人存完之后要自己想起去文档库里找它。 -->
+          <div class="pdf-bar-menu-host">
+            <button type="button" class="pdf-bar-btn" data-role="combo-open"
+                    aria-haspopup="menu" aria-expanded="false" data-i18n="combo.bar">组合</button>
+            <div class="pdf-bar-menu" data-role="combo-menu" role="menu" hidden>
+              <button type="button" class="pdf-bar-menu-item" role="menuitem" data-role="combo-save">
+                <svg class="pdf-bar-menu-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="3.2" y="4.6" width="7.4" height="14.8" rx="1.4"
+                        fill="none" stroke="currentColor" stroke-width="1.6"/>
+                  <rect x="13.4" y="4.6" width="7.4" height="14.8" rx="1.4"
+                        fill="none" stroke="currentColor" stroke-width="1.6"/>
+                  <path d="M17.1 9.4v5.6M14.3 12.2h5.6" fill="none" stroke="currentColor"
+                        stroke-width="1.6" stroke-linecap="round"/>
+                </svg>
+                <span data-i18n="combo.saveItem">存为组合</span>
+              </button>
+              <button type="button" class="pdf-bar-menu-item" role="menuitem" data-role="combo-use">
+                <svg class="pdf-bar-menu-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="3.2" y="4.6" width="7.4" height="14.8" rx="1.4"
+                        fill="none" stroke="currentColor" stroke-width="1.6"/>
+                  <rect x="13.4" y="4.6" width="7.4" height="14.8" rx="1.4"
+                        fill="none" stroke="currentColor" stroke-width="1.6"/>
+                  <path d="M6.2 12.2l2 2 4-4.6" fill="none" stroke="currentColor"
+                        stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span data-i18n="combo.useItem">打开组合…</span>
+              </button>
+            </div>
+          </div>
           <!-- Beside the import actions, never instead of them: creating a
                scratchpad is a third way to fill a pane, and it is available
                before any PDF has been opened. -->

@@ -2413,9 +2413,14 @@ check('nothing offers to update itself unless it was asked to', () => {
 
 const importHtml = $read('index.html');
 const importUi = $read('src/pdf/pdf-workspace-ui.js');
+// 切到「导入」那张单子本身为止，不是切到底下某个碰巧在后面的东西。
+//
+// 原来的下界是 data-role="file-exercise"，中间隔着整条横杠。横杠上多出第二
+// 张下拉单子（组合）的那一天，这几条「单子里有两项」当场数成了四项——断言没
+// 错，是切片切得太松。
 const importMenuHtml = importHtml.slice(
   importHtml.indexOf('data-role="import-menu"'),
-  importHtml.indexOf('data-role="file-exercise"'));
+  importHtml.indexOf('data-role="open-library"'));
 
 ok(
   new RegExp('data-role="import-open"[\\s\\S]{0,200}?aria-haspopup="menu"').test(importHtml),
@@ -2445,9 +2450,18 @@ ok(
   && importUi.includes('host.contains(e.target)'),
   '点单子以外的地方能关（pointerdown 捕获，不是 click）',
 );
+// 横杠上两张单子共用同一个 bindBarMenu，所以这一条现在盯的是那一处。
+//
+// 原来写的是 indexOf('close();') < indexOf('pickAndImport(role)')。抽出公共实
+// 现之后，菜单里已经没有 pickAndImport(role) 这个写法了，而这条断言还是绿
+// 的——它匹配到的是几百行外一句毫不相干的 onImport 赋值。靠巧合过的断言比没
+// 有断言更坏：它会在真正坏掉的那天继续绿着。
+const barMenuBody = importUi.slice(
+  importUi.indexOf('function bindBarMenu('),
+  importUi.indexOf('function bindImportMenu('));
 ok(
-  importUi.indexOf('close();') < importUi.indexOf('pickAndImport(role)'),
-  '选完一项先关单子再开选择器 —— 反过来的话选完文件回来它还开着',
+  barMenuBody.indexOf('close();') < barMenuBody.indexOf('run();'),
+  '选完一项先关单子再做那件事 —— 反过来的话选完文件回来它还开着',
 );
 
 // 挑文件有两条路，但只有一套导入逻辑。

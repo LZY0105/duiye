@@ -34,12 +34,14 @@ import {
 import {
   ENTRY_KINDS,
   activeEntry,
+  createEntry,
   deckLength,
   entryAtOffset,
   findByResource,
   findEntry,
   isPagedKind,
 } from './deck-state.js';
+import { comboFromWorkspace } from './combo-state.js';
 import {
   activateInSlot,
   collapseSlot,
@@ -3737,6 +3739,126 @@ export class PdfWorkspace {
     this._zoomBadgeTimers[slot] = setTimeout(() => {
       badge.classList.remove('is-visible');
     }, 900);
+  }
+
+  // ── 组合：一套「书是怎么摆的」 ─────────────────────────────────────────
+
+  /**
+   * 两栏此刻各自开着的那一本叫什么。左边在前，按屏幕上的左右，不是按槽位。
+   *
+   * 「会换掉现在开着的东西」这句话，人要看见换掉的是**哪两本**才能决定要不要
+   * 换。所以名字得由工作区来给——只有它同时知道摞、窗格和左右有没有对调过。
+   */
+  facingNames() {
+    const order = this.state.swapped
+      ? [SLOTS.SECONDARY, SLOTS.PRIMARY]
+      : [SLOTS.PRIMARY, SLOTS.SECONDARY];
+    return order.map((slot) => {
+      const entry = activeEntryIn(this.state, slot);
+      if (!entry) return '';
+      return this.describeEntry(slot, entry).name || '';
+    });
+  }
+
+  /**
+   * 把此刻的摆法拍成一个组合。
+   *
+   * 拍之前先把两栏停在哪一页记进「这本书最后读到哪儿」。不记的话，一个刚存完
+   * 就拿来用的组合会把书开回它们上一次落盘时的页，而不是屏幕上这一页——而人刚
+   * 刚看着屏幕按下了保存。
+   *
+   * 组合本身**不含页码**，理由见 combo-state.js 开头。
+   */
+  snapshotCombo({ id = '', name = '', now = Date.now() } = {}) {
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) this._rememberSlotView(slot);
+    return comboFromWorkspace(this.state, { id, name, now });
+  }
+
+  /**
+   * 用一个组合替换现在开着的一切。
+   *
+   * 顺序是有讲究的：
+   *
+   * ① 先把两栏此刻停在哪一页记下来。**被盖掉的东西也要留下退出页**——不记的
+   *    话，人用一个组合换过去、再换回来，那两本书会退回更早的某一页，而他什么
+   *    都没做错。被盖掉的是另一个组合时同理：组合不存页码，页码存在书上，所以
+   *    「记住被盖掉的组合」和「记住被盖掉的书」本来就是同一件事。
+   * ② 把两栏卸空。草稿纸要 flush 再 unload —— 它的笔迹还没落盘。
+   * ③ 按组合建**新条目**（新 id 现发），摞摆好，再开每一栏的活动项。开的时候
+   *    不指定视图：showEntry 自己会去问 recallDocView，问到的正是 ① 刚写进去的
+   *    那一页，以及这些书各自上次离开时留下的页码。
+   *
+   * 开不起来的那一本不删、不跳过整栏：和会话恢复一样，往下换这一摞里的下一本，
+   * 摞本身一条不动。一次打不开不等于这本书没了。
+   *
+   * @returns {Promise<{opened: number, missing: number}>}
+   */
+  async applyCombo(combo) {
+    if (!combo) return { opened: 0, missing: 0 };
+
+    // ①
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) this._rememberSlotView(slot);
+
+    // ②
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+      this._openTokens[slot] = (this._openTokens[slot] || 0) + 1;
+      if (this.agentTarget?.slot === slot) this._closeAgentPanel();
+      if (this.scratchPanes[slot]?.isLoaded?.()) {
+        await this.scratchPanes[slot].flush();
+        this.scratchPanes[slot].unload();
+        this.pads[slot] = null;
+      }
+      this.panes[slot]?.unload();
+      this._resetOutline(slot);
+    }
+    this._invalidatePairCaches();
+
+    // ③
+    const decks = {};
+    const wanted = {};
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+      const plan = combo.slots?.[slot];
+      const entries = (plan?.entries || []).map(
+        (e) => createEntry({ kind: e.kind, resourceId: e.resourceId }),
+      );
+      const at = Number.isInteger(plan?.active) ? plan.active : 0;
+      const activeId = entries[at]?.id ?? entries[0]?.id ?? null;
+      decks[slot] = { entries, activeId };
+      // 活动项排在前面，其余按摞的顺序——开不起来时就是这个次序往下试。
+      wanted[slot] = activeId
+        ? [entries[at] || entries[0], ...entries.filter((e) => e.id !== activeId)]
+        : [];
+    }
+
+    this._setState(createWorkspaceState({
+      decks,
+      dividerRatio: combo.dividerRatio,
+      orientation: orientationForViewport(this.root.clientWidth, this.root.clientHeight),
+      swapped: combo.swapped,
+    }));
+
+    let opened = 0;
+    let missing = 0;
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+      let ok = false;
+      for (const entry of wanted[slot]) {
+        if (!entry) continue;
+        try {
+          ok = await this.showEntry(slot, entry.id, { force: true });
+          if (ok) break;
+        } catch (error) {
+          Logger.warn('PDF', `组合里这一本打不开：${entry.resourceId}（${error.message}）`);
+        }
+      }
+      if (ok) opened += 1;
+      else if (wanted[slot].length) missing += 1;
+    }
+
+    this._resizePanes();
+    this._layout();
+    this._resolveNames();
+    this._persist();
+    return { opened, missing };
   }
 
   /** Files the pane's current place under the document it is showing, now. */

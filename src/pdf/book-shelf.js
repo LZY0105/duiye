@@ -92,7 +92,16 @@ export class BookShelf {
     this.host.replaceChildren(frag);
     // 顺着书架的顺序要封面：人先看第一本，第一本就先画出来。队列一次只画一张，
     // 所以这个顺序就是它们出现的顺序。
-    for (const item of items) this._loadCover(item);
+    //
+    // 只有组合排到最后，哪怕它摆在架子最前面：它那张图是借两本书的封面拼出来
+    // 的，轮到它的时候那两张得已经在缓存里。按架子顺序走的话，组合永远第一个
+    // 画——而那一刻它要借的封面一张都还没有，于是人第一次看到的是两个空框。
+    const later = [];
+    for (const item of items) {
+      if (item.kind === SHELF_KINDS.COMBO) later.push(item);
+      else this._loadCover(item);
+    }
+    for (const item of later) this._loadCover(item);
   }
 
   _tile(item) {
@@ -110,15 +119,30 @@ export class BookShelf {
     const block = document.createElement('span');
     block.className = 'pdf-book-block';
     if (item.kind === SHELF_KINDS.PAD) block.classList.add('is-pad');
+    if (item.kind === SHELF_KINDS.COMBO) block.classList.add('is-combo');
 
     const cover = document.createElement('span');
     cover.className = 'pdf-book-cover';
     block.appendChild(cover);
 
     // 书脊那一叠纸。没有它，书就是一张卡片；有了它，厚薄是能看出来的。
-    const edge = document.createElement('span');
-    edge.className = 'pdf-book-edge';
-    block.appendChild(edge);
+    //
+    // 组合没有这一叠：它不是一本书，没有厚薄可言。给它加一道书脊，等于说
+    // 「点开它会翻开一本书」——而它其实会换掉两栏。
+    if (item.kind !== SHELF_KINDS.COMBO) {
+      const edge = document.createElement('span');
+      edge.className = 'pdf-book-edge';
+      block.appendChild(edge);
+    }
+
+    // 组合在角上挂一枚牌子。人在架子上一眼要分出「这是一本书」和「这是一套
+    // 摆法」——它们点下去的后果差得很远，一个是翻开一本，一个是换掉两栏。
+    if (item.kind === SHELF_KINDS.COMBO) {
+      const badge = document.createElement('span');
+      badge.className = 'pdf-book-tag is-combo';
+      badge.textContent = t('combo.badge');
+      block.appendChild(badge);
+    }
 
     const tag = ROLE_KEYS[item.role] ? t(ROLE_KEYS[item.role]) : null;
     if (tag) {

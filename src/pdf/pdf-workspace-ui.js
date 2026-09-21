@@ -21,6 +21,16 @@ import { deleteDocumentInk } from '../ink/ink-store.js';
 import { ENTRY_KINDS } from './deck-state.js';
 import { chooseAction, confirmDestructive, promptText } from './deck-dialogs.js';
 import { SHELF_KINDS, shelfItems, shelfSubtitle } from './shelf-state.js';
+import {
+  COMBO_ERRORS,
+  deleteCombo,
+  getCombo,
+  listCombos,
+  renameCombo,
+  replaceCombo,
+  saveCombo,
+} from './combo-store.js';
+import { comboFacing, comboSize, pruneCombo } from './combo-state.js';
 import { BookShelf } from './book-shelf.js';
 import { fitRect, playBookOpen } from './book-open.js';
 import { openGuide } from './user-guide.js';
@@ -106,7 +116,19 @@ async function refreshLibrary() {
   shelf?.destroy();
   shelf = null;
 
-  const items = shelfItems(docs, pads, docViewOrder(), notes);
+  // 组合里可能指着已经被删掉的书。在摆上架子之前修剪一次：一个点开只会开出
+  // 半套的组合，比一个不存在的组合更让人困惑，而修剪的信息只有这里齐全。
+  const alive = new Set([
+    ...docs.map((d) => d.id), ...pads.map((p) => p.id), ...notes.map((n) => n.id),
+  ]);
+  const combos = [];
+  for (const combo of listCombos()) {
+    const { combo: trimmed, changed } = pruneCombo(combo, (id) => alive.has(id));
+    if (changed) replaceCombo(trimmed);
+    if (comboSize(trimmed)) combos.push(trimmed);
+  }
+
+  const items = shelfItems(docs, pads, docViewOrder(), notes, combos);
 
   // 一本书都没有时也要把架子搭出来。
   //
@@ -180,6 +202,7 @@ function beginFlight(item, slot) {
  * 会各自去要「下一个空栏」，而那时谁都还没填上。
  */
 async function openItem(item) {
+  if (item?.kind === SHELF_KINDS.COMBO) return useCombo(item);
   if (openingId === item.id) return;
   openingId = item.id;
   let flight = null;
@@ -209,6 +232,118 @@ async function openItem(item) {
   }
 }
 
+// ── 组合：一套「书是怎么摆的」 ─────────────────────────────────────────────
+
+/**
+ * 两栏此刻摆着什么，说给人听。
+ *
+ * 用在那句提醒里。说「会换掉现在开着的东西」是不够的——人得看见换掉的是**哪
+ * 两本**才能决定要不要换。
+ */
+function describeOpen() {
+  const names = workspace?.facingNames?.() || [];
+  return names.filter(Boolean);
+}
+
+/**
+ * 用一个组合。
+ *
+ * 这一下会换掉两栏里的东西，所以先问。问的时候把「换掉的是哪两本」和「它们会
+ * 不会丢位置」都说出来——后半句是人真正担心的那件事，而答案恰好是「不会」：
+ * 换过去之前每一栏停在哪一页都会记进那本书自己身上，下次再打开还回到那儿。
+ */
+async function useCombo(item) {
+  const combo = getCombo(item.id);
+  if (!combo) {
+    setStatus(t('combo.gone'), true);
+    await refreshLibrary();
+    return;
+  }
+
+  const open = describeOpen();
+  const ok = await confirmDestructive({
+    title: t('combo.useTitle', { name: item.name }),
+    body: open.length
+      ? t('combo.useBodyOpen', { open: open.join(t('combo.join')) })
+      : t('combo.useBody'),
+    confirmLabel: t('combo.use'),
+  });
+  if (!ok) return;
+
+  setStatus(t('combo.applying', { name: item.name }));
+  try {
+    const { opened, missing } = await workspace.applyCombo(combo);
+    closeLibrary();
+    // 有开不起来的就说出来，而不是让人自己去发现少了一栏。
+    setStatus(missing
+      ? t('combo.appliedPartly', { name: item.name, missing })
+      : t('combo.applied', { name: item.name, count: opened }));
+  } catch (error) {
+    Logger.error('PDF', 'apply combo failed', error);
+    setStatus(t('combo.failed'), true);
+  }
+}
+
+/**
+ * 横杠上那条「打开组合…」：先列出来让人挑一个。
+ *
+ * 挑完走的是和书架上点开它完全同一条路（useCombo），所以那句提醒、那次覆盖、
+ * 那份退出页记录，两个入口一模一样。两条路各写一遍的话，迟早只有一条记得问。
+ */
+async function pickCombo() {
+  const combos = listCombos();
+  if (!combos.length) {
+    setStatus(t('combo.none'), true);
+    return;
+  }
+  const chosen = await chooseAction({
+    title: t('combo.pickTitle'),
+    note: t('combo.pickNote'),
+    actions: combos.slice(0, 12).map((c) => ({
+      id: c.id,
+      label: `${c.name}（${comboSize(c)}${t('combo.booksSuffix')}）`,
+    })),
+  });
+  if (!chosen) return;
+  const combo = combos.find((c) => c.id === chosen);
+  if (combo) await useCombo({ id: combo.id, name: combo.name });
+}
+
+/**
+ * 把此刻的摆法存成一个组合。
+ *
+ * 存的是「哪几本、在哪一栏、什么顺序、怎么切」，**不含页码**——页码属于书，见
+ * combo-state.js 开头。所以一个组合过几天再用，书还是回到你最后读到的那一页。
+ */
+async function saveCurrentCombo() {
+  const draft = workspace.snapshotCombo();
+  if (!comboSize(draft)) {
+    setStatus(t('combo.nothingOpen'), true);
+    return;
+  }
+
+  // 预填两本书的名字，但那只是个建议：输入框是空着等人改的，整段选中不了才
+  // 叫「强加」。人给组合起的名字通常和书名无关——「考前那一套」「批作业」——
+  // 而那种名字才是他下次一眼认出它的方式。
+  const name = await promptText({
+    title: t('combo.saveTitle'),
+    label: t('combo.nameLabel'),
+    value: describeOpen().filter(Boolean).join(t('combo.nameJoin')).slice(0, 40),
+    max: 40,
+    confirm: t('combo.save'),
+  });
+  // 空名字不是名字：一个没有名字的组合在架子上认不出来。和书、草稿纸一样，
+  // 清空等同于取消。
+  if (!name) return;
+
+  try {
+    saveCombo({ ...draft, name });
+    setStatus(t('combo.saved', { name }));
+  } catch (error) {
+    setStatus(error.message === COMBO_ERRORS.FULL ? t('combo.full') : t('combo.saveFailed'), true);
+  }
+}
+
 /** 书架上的一样东西，在摞里是哪一种。 */
 function kindForShelf(item) {
   if (item?.kind === SHELF_KINDS.PAD) return ENTRY_KINDS.SCRATCH;
@@ -220,10 +355,11 @@ function kindForShelf(item) {
 async function openItemMenu(item) {
   const isPad = item.kind === SHELF_KINDS.PAD;
   const isNote = item.kind === SHELF_KINDS.NOTE;
+  const isCombo = item.kind === SHELF_KINDS.COMBO;
   const actions = [{ id: 'rename', label: '重命名' }];
   // 「标为练习册 / 答案册」只对 PDF 有意义：对题靠的是文字层，而草稿纸和笔记本
   // 上只有手写的笔迹。给它们这两个选项，是让人去设一个永远不会起作用的角色。
-  if (!isPad && !isNote) {
+  if (!isPad && !isNote && !isCombo) {
     if (item.role !== DOC_ROLES.EXERCISE) actions.push({ id: 'role-exercise', label: '标为练习册' });
     if (item.role !== DOC_ROLES.ANSWER) actions.push({ id: 'role-answer', label: '标为答案册' });
   }
@@ -239,14 +375,16 @@ async function openItemMenu(item) {
   if (chosen === 'rename') {
     const next = await promptText({
       title: '重命名',
-      label: isPad ? '草稿纸名称' : isNote ? t('deck.note') : '书名',
+      label: isCombo ? t('combo.nameLabel')
+        : isPad ? '草稿纸名称' : isNote ? t('deck.note') : '书名',
       value: item.name,
       confirm: '保存',
     });
     // 空名字不是名字。清空对书签是「去掉这个名字」，对一本书不是——书没有名字
     // 就没法在架子上被认出来，所以这里把空串和取消一样对待。
     if (!next) return;
-    if (isPad) await renameScratchpad(item.id, next);
+    if (isCombo) renameCombo(item.id, next);
+    else if (isPad) await renameScratchpad(item.id, next);
     else if (isNote) await renameNotebook(item.id, next);
     else await renameDocument(item.id, next);
     await refreshLibrary();
@@ -272,6 +410,20 @@ async function openItemMenu(item) {
  * 不是变空：丢一本书不该连带赔上同一栏里的另外两本。
  */
 async function deleteItem(item) {
+  // 删一个组合只是删掉一套摆法。书一本都不动——这一点必须在问话里说清楚，
+  // 不然人会以为自己正要把那几本书一起删掉，而那恰恰是他最怕的事。
+  if (item.kind === SHELF_KINDS.COMBO) {
+    const ok = await confirmDestructive({
+      title: t('combo.deleteTitle'),
+      body: t('combo.deleteBody', { name: item.name }),
+      confirmLabel: t('scratch.delete'),
+    });
+    if (!ok) return;
+    deleteCombo(item.id);
+    await refreshLibrary();
+    return;
+  }
+
   const isPad = item.kind === SHELF_KINDS.PAD;
   const isNote = item.kind === SHELF_KINDS.NOTE;
   const ok = await confirmDestructive({
@@ -368,10 +520,22 @@ function confirmRole(file, suggested) {
  * 里那张栏内单子是同一套做法——用 click 的话，落在别的按钮上的那一下会先触发它自
  * 己的动作，单子还开着。
  */
-function bindImportMenu() {
-  const host = elRoot.querySelector('.pdf-bar-menu-host');
-  const button = elRoot.querySelector('[data-role="import-open"]');
-  const menu = elRoot.querySelector('[data-role="import-menu"]');
+/**
+ * 横杠上的一张下拉单子：开合、点外面关掉、Esc、上下键。
+ *
+ * 两张单子（导入、组合）共用这一套。照抄一遍的话，两边迟早会长岔——而人不会认
+ * 为那是两个功能，只会觉得这个应用时好时坏。
+ *
+ * @param {string} openRole  按钮的 data-role
+ * @param {string} menuRole  单子的 data-role
+ * @param {Object} actions   {菜单项的 data-role: 点了做什么}
+ */
+function bindBarMenu(openRole, menuRole, actions) {
+  const button = elRoot.querySelector(`[data-role="${openRole}"]`);
+  const menu = elRoot.querySelector(`[data-role="${menuRole}"]`);
+  // 各自认各自那一个宿主。用 elRoot.querySelector('.pdf-bar-menu-host') 的话，
+  // 第二张单子会拿到第一张的宿主，于是「点外面关掉」判错地方。
+  const host = button?.closest('.pdf-bar-menu-host');
   if (!host || !button || !menu) return;
 
   const items = [...menu.querySelectorAll('.pdf-bar-menu-item')];
@@ -412,20 +576,30 @@ function bindImportMenu() {
     items[(at + step + items.length) % items.length].focus();
   });
 
-  const ROLES = {
-    'import-exercise': DOC_ROLES.EXERCISE,
-    'import-answer': DOC_ROLES.ANSWER,
-  };
   for (const item of items) {
-    const role = ROLES[item.dataset.role];
-    if (!role) continue;
+    const run = actions[item.dataset.role];
+    if (!run) continue;
     item.addEventListener('click', () => {
-      // 先关再开选择器：反过来的话，选择器盖上来时单子还留在底下，选完回来它仍
-      // 然开着。
+      // 先关再做：反过来的话，选择器或对话框盖上来时单子还留在底下，做完回来它
+      // 仍然开着。
       close();
-      pickAndImport(role);
+      run();
     });
   }
+}
+
+function bindImportMenu() {
+  bindBarMenu('import-open', 'import-menu', {
+    'import-exercise': () => pickAndImport(DOC_ROLES.EXERCISE),
+    'import-answer': () => pickAndImport(DOC_ROLES.ANSWER),
+  });
+}
+
+function bindComboMenu() {
+  bindBarMenu('combo-open', 'combo-menu', {
+    'combo-save': () => saveCurrentCombo(),
+    'combo-use': () => pickCombo(),
+  });
 }
 
 /**
@@ -552,6 +726,7 @@ export async function initPdfWorkspace() {
   });
 
   bindImportMenu();
+  bindComboMenu();
   elRoot.querySelector('[data-role="file-exercise"]')?.addEventListener('change', (e) => {
     handleImport(Array.from(e.target.files || []), DOC_ROLES.EXERCISE);
     e.target.value = '';

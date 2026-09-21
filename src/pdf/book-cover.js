@@ -20,11 +20,20 @@ import { drawScratchBackground } from '../scratch/scratch-background.js';
 import { ORIGIN_CAMERA } from '../scratch/scratch-camera.js';
 import { SHELF_KINDS } from './shelf-state.js';
 import { openNoteDocument } from '../note/note-document.js';
-import { coverSignature, readCover, writeCover } from './cover-store.js';
+import {
+  COVER_LONG_EDGE,
+  coverSignature,
+  readCover,
+  writeCover,
+} from './cover-store.js';
+import { getCombo } from './combo-store.js';
+import { renderComboCover } from './combo-cover.js';
 import Logger from '../core/logger.js';
 
 /** 封面长边的像素数。书架上一本宽 168–220 CSS px，2 倍屏下 440 足够清楚。 */
-export const COVER_LONG_EDGE = 440;
+// 常量住在 cover-store（那边说明了为什么）。这里转出去，是因为它本来就是从
+// 这个模块导出的，外面已经有人在引。
+export { COVER_LONG_EDGE };
 /** 草稿纸是无限画布，封面取它原点处的一块，比例跟 A4 一样。 */
 const PAD_ASPECT = 1 / 1.414;
 
@@ -124,6 +133,13 @@ async function renderPadCover(id, style) {
 export function requestCover(item) {
   const signature = coverSignature(item);
   return enqueue(async () => {
+    // 组合不走缓存，每次现画。它画的是别人的封面拼起来的版面——那些封面这一
+    // 刻可能还没渲出来，缓存一张「两个空框」的图，人下次看到的还是空框。现画
+    // 的代价是两次 drawImage，而它会随着别人的封面渐渐变完整。
+    if (item.kind === SHELF_KINDS.COMBO) {
+      const combo = getCombo(item.id);
+      return combo ? renderComboCover(combo) : null;
+    }
     const cached = await readCover(item.id, signature);
     if (cached) return cached;
     try {

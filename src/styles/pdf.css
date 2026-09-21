@@ -2878,3 +2878,28 @@ body.is-library-open .ink-card-layer { display: none; }
 @media (prefers-reduced-motion: no-preference) {
   .pdf-ws-slot { transition: box-shadow 0.14s ease; }
 }
+
+/* 组合在书架上的样子。
+
+   它不是一本书，所以不该长得像一本书。三处不一样：没有书脊那一叠纸（它没有厚
+   薄）、封面是一张「版面图」而不是一页纸（所以要完整显示，不能裁）、角上挂一枚
+   牌子。人一眼要分出「点这个会翻开一本书」和「点这个会换掉两栏」——后果差得很
+   远，而书架上原本没有任何东西提示这个区别。 */
+
+.pdf-book-block.is-combo {
+  /* 版面图是完整的一张，裁掉任何一边都会让「怎么切的」读不出来——而那正是它
+     要说的唯一一件事。 */
+  background: var(--glass-bg-subtle, #f4f6fa);
+}
+
+.pdf-book-block.is-combo .pdf-book-cover {
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.pdf-book-tag.is-combo {
+  background: color-mix(in srgb, var(--accent, #2563eb) 14%, #ffffff);
+  color: var(--accent, #2563eb);
+  border: 1px solid color-mix(in srgb, var(--accent, #2563eb) 30%, transparent);
+}

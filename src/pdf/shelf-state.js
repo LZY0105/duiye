@@ -17,7 +17,9 @@
  * 草稿纸和笔记本也是书，只是它们的封面是纸本身。笔记本和 PDF 一样有页数，所以
  * 书脊上印的是页数；草稿纸只有一张纸，印的是它自己是什么。
  */
-export const SHELF_KINDS = Object.freeze({ DOC: 'doc', PAD: 'pad', NOTE: 'note' });
+export const SHELF_KINDS = Object.freeze({
+  DOC: 'doc', PAD: 'pad', NOTE: 'note', COMBO: 'combo',
+});
 
 const str = (v, fallback = '') => (typeof v === 'string' && v.trim() ? v : fallback);
 const num = (v, fallback = 0) => (Number.isFinite(v) ? v : fallback);
@@ -29,9 +31,10 @@ const num = (v, fallback = 0) => (Number.isFinite(v) ? v : fallback);
  * @param {Array} pads    listScratchpads() 的结果
  * @param {Array<string>} recent  最近打开过的 id，越靠前越近
  * @param {Array} notes   listNotebooks() 的结果
+ * @param {Array} combos  listCombos() 的结果
  * @returns {ReadonlyArray} 冻结的书架条目
  */
-export function shelfItems(docs = [], pads = [], recent = [], notes = []) {
+export function shelfItems(docs = [], pads = [], recent = [], notes = [], combos = []) {
   // 名次表：查一次 O(1)，而不是每次比较都去数组里找。
   const rank = new Map();
   if (Array.isArray(recent)) {
@@ -88,12 +91,52 @@ export function shelfItems(docs = [], pads = [], recent = [], notes = []) {
     }));
   }
 
+  // 组合不是一份文件，是一套摆法：它没有页数、没有体积、也不会被「读过」。
+  //
+  // 它排在最前面，而且不参与上面那套「最近读过的在前」。理由是用法不同——
+  // 书是一本一本挑的，组合是「我要回到那个状态」，那是进文档库之前就想好的
+  // 事。让它和书混在一起按时间浮沉，人每次都得先找一遍。
+  const combined = [];
+  for (const combo of Array.isArray(combos) ? combos : []) {
+    if (!combo?.id) continue;
+    combined.push(Object.freeze({
+      id: combo.id,
+      kind: SHELF_KINDS.COMBO,
+      name: str(combo.name, '组合'),
+      role: '',
+      pageCount: 0,
+      sizeBytes: 0,
+      hasOutline: false,
+      style: null,
+      addedAt: num(combo.updatedAt) || num(combo.createdAt),
+      rank: Infinity,
+      /** 摆了几本。书脊那一行印它，而不是印页数——组合没有页数。 */
+      comboSize: countCombo(combo),
+    }));
+  }
+  combined.sort((a, b) => (b.addedAt - a.addedAt) || (a.id < b.id ? -1 : 1));
+
   // 两级：先看多久以前读过，读过的里面按远近；都没读过就按什么时候进来的。
   // 第三级按 id，只是为了让两份时间戳一模一样的东西也有个定死的先后——顺序
   // 稳定比顺序「对」更要紧，人是靠位置记住书的。
   items.sort((a, b) => (a.rank - b.rank) || (b.addedAt - a.addedAt)
     || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  return Object.freeze(items);
+  return Object.freeze([...combined, ...items]);
+}
+
+/**
+ * 一个组合摆了几本。
+ *
+ * 这里自己数，不从 combo-state 引：那边会引回 deck-state 和 workspace-state，
+ * 而这个文件是刻意没有依赖的——顺序是数据的性质，要能在 Node 里单独测。
+ */
+function countCombo(combo) {
+  let n = 0;
+  for (const slot of ['a', 'b']) {
+    const entries = combo?.slots?.[slot]?.entries;
+    if (Array.isArray(entries)) n += entries.length;
+  }
+  return n;
 }
 
 /**
@@ -111,6 +154,8 @@ export const BOOK_MIN_WIDTH = 240;
 /** 书脊上印什么——没有别名时就印它自己是什么。 */
 export function shelfSubtitle(item) {
   if (!item) return '';
+  // 组合印的是它摆了几本。页数对它没有意义——它不是一份文件。
+  if (item.kind === SHELF_KINDS.COMBO) return `${item.comboSize || 0} 本`;
   if (item.kind === SHELF_KINDS.PAD) return '草稿纸';
   // 笔记本落到下面那行：它有页数，而页数正是「这本厚不厚」这个问题的答案。
   return item.pageCount > 0 ? `${item.pageCount} 页` : '';
