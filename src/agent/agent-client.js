@@ -1,9 +1,20 @@
 const configuredProxyUrl = typeof import.meta !== 'undefined'
   ? import.meta.env?.VITE_AGENT_PROXY_URL
   : '';
+
+const configuredAccessToken = typeof import.meta !== 'undefined'
+  ? import.meta.env?.VITE_AGENT_ACCESS_TOKEN
+  : '';
+
 const AGENT_PROXY_URL = (configuredProxyUrl || 'http://127.0.0.1:8787').replace(/\/+$/, '');
 const REQUEST_TIMEOUT_MS = 65_000;
 const HEALTH_TIMEOUT_MS = 3_000;
+
+function clientTokenHeaders() {
+  return configuredAccessToken
+    ? { 'X-Duiye-Agent-Token': configuredAccessToken }
+    : {};
+}
 
 function failure(answer, payload = {}) {
   return {
@@ -40,7 +51,10 @@ export async function getAgentProxyHealth() {
   try {
     const response = await fetchWithTimeout(
       `${AGENT_PROXY_URL}/health`,
-      { method: 'GET' },
+      {
+        method: 'GET',
+       headers: clientTokenHeaders(),
+      },
       HEALTH_TIMEOUT_MS,
     );
     const payload = await responsePayload(response);
@@ -66,6 +80,7 @@ export async function requestAgent({
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...clientTokenHeaders(),
       },
       body: JSON.stringify({
         version,
