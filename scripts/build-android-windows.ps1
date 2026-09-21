@@ -9,10 +9,23 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $androidRoot = Join-Path $repoRoot 'android'
 $localPropertiesPath = Join-Path $androidRoot 'local.properties'
+$sdkFromLocalProperties = $null
+if (Test-Path -LiteralPath $localPropertiesPath) {
+    $sdkProperty = Get-Content -LiteralPath $localPropertiesPath |
+        Where-Object { $_ -match '^\s*sdk\.dir\s*=' } |
+        Select-Object -First 1
+
+    if ($sdkProperty) {
+$sdkFromLocalProperties = (($sdkProperty -split '=', 2)[1].Trim()).Replace('\:', ':').Replace('\\', '\')
+    }
+}
+
 $sdkRoot = if ($env:ANDROID_SDK_ROOT) {
     $env:ANDROID_SDK_ROOT
 } elseif ($env:ANDROID_HOME) {
     $env:ANDROID_HOME
+} elseif ($sdkFromLocalProperties) {
+    $sdkFromLocalProperties
 } else {
     Join-Path $env:LOCALAPPDATA 'Android\Sdk'
 }
@@ -37,8 +50,13 @@ if (Get-PSDrive -Name $jdkDriveName -ErrorAction SilentlyContinue) {
 if (-not (Test-Path -LiteralPath (Join-Path $sdkRoot 'cmake\3.31.6\bin\cmake.exe'))) {
     throw "Android CMake 3.31.6 is not installed under $sdkRoot"
 }
-if (-not (Test-Path -LiteralPath (Join-Path $sdkRoot 'ndk\29.0.13113456'))) {
-    throw "Android NDK 29.0.13113456 is not installed under $sdkRoot"
+$installedNdkVersions = @(
+    Get-ChildItem -LiteralPath (Join-Path $sdkRoot 'ndk') `
+        -Directory -ErrorAction SilentlyContinue
+)
+
+if ($installedNdkVersions.Count -eq 0) {
+    throw "No Android NDK is installed under $sdkRoot"
 }
 
 $knownJdk21 = Join-Path $env:USERPROFILE '.jdks\jbr-21.0.11'

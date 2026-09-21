@@ -54,3 +54,7 @@ native/agent-proxy/build/
 native/agent-proxy/deploy/.env
 native/agent-proxy/deploy/caddy_data/
 native/agent-proxy/deploy/caddy_config/
+
+# Local Vite environment files may contain build-time configuration.
+.env.local
+.env.*.local
