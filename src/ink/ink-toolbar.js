@@ -21,6 +21,7 @@ import {
   LASSO_MODES,
   LASSO_SHAPES,
   LASSO_TOOL,
+  SHAPE_TOOL,
   ORIENTATION,
   TOOLBAR_PHASE,
   closeCard,
@@ -30,6 +31,7 @@ import {
   isCornerPoint,
   isDocked,
   isEraser,
+  isShape,
   isYielded,
   moveDrag,
   openCard,
@@ -42,6 +44,8 @@ import {
   setLassoMode,
   setLassoShape,
   setOpacity,
+  setShapeFill,
+  setShapeKind,
   setWidth,
   startDrag,
   yieldToCorner,
@@ -51,6 +55,7 @@ import {
 import { t } from '../core/i18n.js';
 import { INK_TOOLS } from './stroke.js';
 import { ERASER_MODES } from './ink-eraser.js';
+import { SHAPE_ORDER } from './shape-geometry.js';
 
 const STORAGE_KEY = 'ls_ink_toolbar';
 
@@ -108,6 +113,8 @@ const ICON = {
   // read as chrome rather than as two more tools.
   grip: '<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>',
   more: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
+  // 一个圆压着一条斜线：这支工具的两头，一头是闭合的图形，一头是线。
+  shape: '<circle cx="9.5" cy="9.5" r="5.5"/><path d="M5 20L20 5"/>',
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
 };
 
@@ -132,7 +139,30 @@ const TOOL_META = [
   { tool: INK_TOOLS.HIGHLIGHTER, key: 'ink.highlighter', icon: 'highlighter' },
   { tool: ERASER_TOOL, key: 'ink.eraser', icon: 'eraser' },
   { tool: LASSO_TOOL, key: 'ink.lasso', icon: 'lasso' },
+  { tool: SHAPE_TOOL, key: 'ink.shape', icon: 'shape' },
 ];
+
+/**
+ * 面板上那十个形状的图标，照着视频里那张面板画的。
+ *
+ * 顺序也照抄：上一排是开着口的（线、箭头、双箭头、直角、弧），下一排是闭合的
+ * （圆、三角、方、五边、星）。五边形和星形的坐标是按正多边形算出来的，和
+ * shape-geometry 里画真家伙用的是同一套公式——图标和画出来的东西不该长得不一样。
+ */
+const SHAPE_ICON = Object.freeze({
+  line: '<path d="M6 26L26 6"/>',
+  arrow: '<path d="M6 26L26 6"/><path d="M17.5 6H26v8.5"/>',
+  darrow: '<path d="M6 26L26 6"/><path d="M17.5 6H26v8.5"/><path d="M14.5 26H6v-8.5"/>',
+  corner: '<path d="M7 26V7h19"/>',
+  arc: '<path d="M6 25A19 19 0 0 1 25 6"/>',
+  circle: '<circle cx="16" cy="16" r="10.5"/>',
+  // 正三角形：底 22，高 22×√3/2 ≈ 19。画成底高相等的那种，图标说的就是另一个
+  // 形状了——而这支工具吸住的时候给的正是正三角形。
+  triangle: '<path d="M16 6.5L27 25.5H5Z"/>',
+  rect: '<rect x="6.5" y="8.5" width="19" height="15" rx="1"/>',
+  pentagon: '<path d="M16.0 4.5L26.9 12.4L22.8 25.3L9.2 25.3L5.1 12.4Z"/>',
+  star: '<path d="M16.0 3.5L18.8 12.1L27.9 12.1L20.5 17.5L23.3 26.1L16.0 20.8L8.7 26.1L11.5 17.5L4.1 12.1L13.2 12.1Z"/>',
+});
 
 const metaFor = (tool) => TOOL_META.find(t => t.tool === tool) || TOOL_META[0];
 const iconFor = (tool, size) => icon(metaFor(tool).icon, size);
@@ -301,6 +331,15 @@ export class InkToolbar {
       surface.eraserRadius = this.state.eraserWidth;
       return;
     }
+    if (isShape(this.state)) {
+      // 形状要颜色、粗细和填充——视频里那张卡片上「边框」和「填充」两栏正是这
+      // 几样。
+      surface.setShape?.(this.state.shapeKind, this.state.shapeFill);
+      surface.setColor(this.state.color);
+      surface.setWidth(this.state.width);
+      if (typeof surface.setOpacity === 'function') surface.setOpacity(this.state.opacity);
+      return;
+    }
     surface.setTool(this.state.tool);
     surface.setColor(this.state.color);
     surface.setWidth(this.state.width);
@@ -464,7 +503,9 @@ export class InkToolbar {
     // Placement was computed from the PREVIOUS contents, so the bar's real size
     // is only known now. Clamp once it exists.
     this._clampIntoHost();
-    if (!this._keepCard) this._renderCard();
+    // 卡片：要么重建，要么就地刷一遍。两条路都得有人走——见 _syncCard。
+    if (this._keepCard) this._syncCard();
+    else this._renderCard();
   }
 
   /**
@@ -951,7 +992,8 @@ export class InkToolbar {
         if (tool === this.state.tool) {
           const card = tool === ERASER_TOOL ? CARDS.ERASER
             : tool === LASSO_TOOL ? CARDS.LASSO
-              : CARDS.TOOL;
+              : tool === SHAPE_TOOL ? CARDS.SHAPE
+                : CARDS.TOOL;
           this._set(openCard(this.state, card), { pushTools: false });
           return;
         }
@@ -1220,6 +1262,43 @@ export class InkToolbar {
    * Cards are absolutely positioned in an overlay layer, so opening one does
    * not re-layout or resize the workspace (§8.2).
    */
+  /**
+   * 卡片不重建，只把「现在选的是哪一个」重新刷一遍。
+   *
+   * 挑一个形状、挑一个颜色，变的只是哪一格亮着。整张卡片重建也能得到对的结果，
+   * 但 `.ink-card` 带着一段 200ms 的入场动画，重建等于让它**重播一次**——人看
+   * 到的就是「闪一下才更新」。何况重建还会把人正按着的滑杆从手指底下换掉。
+   *
+   * 所以这里只动 class 和那条预览线的内联样式。卡片的结构一个字节都不重排，
+   * 动画自然也就无从重播。
+   */
+  _syncCard() {
+    const card = this.cardLayer.querySelector('.ink-card');
+    if (!card) return;
+    const { state } = this;
+    const mark = (selector, isOn) => {
+      for (const el of card.querySelectorAll(selector)) {
+        el.classList.toggle('is-selected', isOn(el));
+      }
+    };
+    mark('[data-shape-kind]', el => el.dataset.shapeKind === state.shapeKind);
+    mark('[data-shape-fill]', el => sameColor(el.dataset.shapeFill || '', state.shapeFill || ''));
+    mark('[data-swatch]', el => sameColor(el.dataset.swatch, state.color));
+
+    // 笔的那张卡片上有一条预览线，颜色粗细透明度都画在它身上。它不是「选中」，
+    // 是一个值，所以单独写一句。
+    const preview = card.querySelector('.ink-preview-line');
+    if (preview) {
+      preview.style.background = state.color;
+      preview.style.height = `${Math.max(1, state.width)}px`;
+      preview.style.opacity = state.opacity;
+    }
+    const width = card.querySelector('[data-role="width-readout"]');
+    if (width) width.textContent = state.width.toFixed(1);
+    const opacity = card.querySelector('[data-role="opacity-readout"]');
+    if (opacity) opacity.textContent = String(Math.round(state.opacity * 100));
+  }
+
   _renderCard() {
     const { state } = this;
     if (state.openCard === CARDS.NONE) {
@@ -1234,6 +1313,7 @@ export class InkToolbar {
     if (state.openCard === CARDS.TOOL) card.innerHTML = this._toolCardHtml();
     else if (state.openCard === CARDS.ERASER) card.innerHTML = this._eraserCardHtml();
     else if (state.openCard === CARDS.LASSO) card.innerHTML = this._lassoCardHtml();
+    else if (state.openCard === CARDS.SHAPE) card.innerHTML = this._shapeCardHtml();
     else if (state.openCard === CARDS.COLOR) card.innerHTML = this._colorCardHtml();
     else card.innerHTML = this._overflowCardHtml();
 
@@ -1282,6 +1362,55 @@ export class InkToolbar {
         ${state.swatches.map(c => `<button type="button" class="ink-swatch${sameColor(c, state.color) ? ' is-selected' : ''}"
           data-swatch="${escapeAttr(c)}" style="background:${escapeAttr(c)}"></button>`).join('')}
       </div>`;
+  }
+
+  /**
+   * 形状卡片：挑一种形状，再定边框的粗细和颜色。
+   *
+   * 照着视频里那张面板收的：上面一排形状（它那张有十个，这里先只有直线和圆），
+   * 底下是「边框」——一根粗细滑杆加一排颜色。选中的那一个在视频里是金色的，这里
+   * 也是金色，用的还是套索、选区把手那同一支金。
+   *
+   * 粗细和颜色走的是工具栏自己那两个部件（data-role="width"、data-swatch），
+   * 所以它们不需要单独接线，也天然和笔共用同一排色——人刚用某个色写完字，换成
+   * 形状去画个圈，手会往同一组颜色上去找。
+   */
+  _shapeCardHtml() {
+    const { state } = this;
+    const pick = (kind) => `
+      <button type="button" class="ink-shape-btn${state.shapeKind === kind ? ' is-selected' : ''}"
+              data-shape-kind="${kind}" aria-label="${escapeAttr(t(`ink.shape.${kind}`))}"
+              title="${escapeAttr(t(`ink.shape.${kind}`))}">
+        <svg viewBox="0 0 32 32" width="26" height="26" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+             aria-hidden="true">${SHAPE_ICON[kind]}</svg>
+      </button>`;
+    const row = (kinds) => `<div class="ink-shape-row">${kinds.map(pick).join('')}</div>`;
+    // 「无」那一格画的是一个打叉的圈，和视频里填充那一排头一个一样：它不是一种
+    // 颜色，是「别填」。
+    const fill = (colour) => `
+      <button type="button" class="ink-swatch${colour ? '' : ' is-none'}${sameColor(colour || '', state.shapeFill || '') ? ' is-selected' : ''}"
+              data-shape-fill="${escapeAttr(colour || '')}"
+              aria-label="${escapeAttr(colour || t('ink.shapeNoFill'))}"
+              ${colour ? `style="background:${escapeAttr(colour)}"` : ''}></button>`;
+    return `
+      <div class="ink-card-title">${t('ink.shape')}</div>
+      ${row(SHAPE_ORDER.slice(0, 5))}
+      ${row(SHAPE_ORDER.slice(5))}
+      <div class="ink-card-label">${t('ink.shapeBorder')}</div>
+      <label class="ink-field">
+        <span>${t('ink.width')} <b data-role="width-readout">${state.width.toFixed(1)}</b> mm</span>
+        <input type="range" min="0.2" max="20" step="0.1" value="${state.width}" data-role="width">
+      </label>
+      <div class="ink-card-swatches">
+        ${state.swatches.map(c => `<button type="button" class="ink-swatch${sameColor(c, state.color) ? ' is-selected' : ''}"
+          data-swatch="${escapeAttr(c)}" style="background:${escapeAttr(c)}"></button>`).join('')}
+      </div>
+      <div class="ink-card-label">${t('ink.shapeFill')}</div>
+      <div class="ink-card-swatches">
+        ${[null, ...state.swatches].map(fill).join('')}
+      </div>
+      <p class="ink-note">${t('ink.shapeNote')}</p>`;
   }
 
   _eraserCardHtml() {
@@ -1393,8 +1522,11 @@ export class InkToolbar {
       slider.style.touchAction = 'none';
     });
 
+    // 换颜色同理：卡片不重建，那条预览线和那一圈高亮由 _syncCard 就地改。
     card.querySelectorAll('[data-swatch]').forEach((button) => {
-      button.addEventListener('click', () => this._set(setColor(this.state, button.dataset.swatch)));
+      button.addEventListener('click', () => this._set(
+        setColor(this.state, button.dataset.swatch), { keepCard: true },
+      ));
     });
 
     const width = card.querySelector('[data-role="width"]');
@@ -1410,6 +1542,29 @@ export class InkToolbar {
         const out = card.querySelector('[data-role="opacity-readout"]');
         if (out) out.textContent = String(Math.round(Number(slider.value)));
       });
+    });
+
+    // 挑形状、挑填充色：keepCard，靠 _syncCard 就地把高亮挪过去。
+    //
+    // 这里先后错过两次，两次都被人在机上看出来了，所以两条都写下来：
+    //
+    // 一开始传 keepCard 但没有 _syncCard，于是形状真的换了、笔落下去也确实是新
+    // 形状，卡片上那个高亮却留在旧的那一格——看着像没点上。
+    //
+    // 改成重建卡片之后高亮是对了，但 `.ink-card` 带着一段 200ms 的入场动画，重
+    // 建等于重播它一次——「闪一下才更新」。
+    //
+    // 两样都要：不重建（所以不闪），但把选中的那一格刷过去（所以看得见）。
+    card.querySelectorAll('[data-shape-fill]').forEach((button) => {
+      button.addEventListener('click', () => this._set(
+        setShapeFill(this.state, button.dataset.shapeFill), { keepCard: true },
+      ));
+    });
+
+    card.querySelectorAll('[data-shape-kind]').forEach((button) => {
+      button.addEventListener('click', () => this._set(
+        setShapeKind(this.state, button.dataset.shapeKind), { keepCard: true },
+      ));
     });
 
     card.querySelectorAll('[data-lasso-shape]').forEach((button) => {

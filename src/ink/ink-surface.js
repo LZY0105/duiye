@@ -53,10 +53,26 @@ import {
   createTransform,
   documentToScreen,
   drawLasso,
+  drawShapeGuides,
+  drawShapeHandles,
+  drawShapeLabels,
   drawStroke,
   renderLayer,
   screenToDocument,
 } from './ink-renderer.js';
+import {
+  SHAPE_KINDS,
+  createShape,
+  handleAt as shapeHandleAt,
+  hitShape,
+  isClosedShape,
+  reshape,
+  shapeGuides,
+  shapeHandles,
+  shapeLabels,
+  shapePoints,
+  tooSmall,
+} from './shape-geometry.js';
 
 /** Whether a gesture actually changed anything worth recording. */
 function moved(before, after) {
@@ -98,6 +114,20 @@ const HANDLE_MAX = 20;
 const HANDLE_SHARE = 0.18;
 /** The hit target may not follow the dot all the way down. */
 const HANDLE_HIT_MIN = 15;
+
+/**
+ * 形状那几颗圆点：画出来多大、多近算摸到。
+ *
+ * 比选区那颗把手小一档，因为视频里就是小一档——它是压在线上的一小颗，不是一个
+ * 白心金边的环。和把手一样按 sqrt(缩放) 阻尼，也一样上下夹住：它仍然是个要用笔
+ * 尖去戳的东西。
+ */
+const SHAPE_HANDLE = 4.5;
+const SHAPE_HANDLE_MIN = 3.5;
+const SHAPE_HANDLE_MAX = 10;
+const SHAPE_HIT_MIN = 16;
+/** 按在已有形状上之后走多远才算「在画新的」而不是「点了一下」。 */
+const SHAPE_TAP_SLOP = 6;
 
 /**
  * How far outside a finished lasso a press still counts as grabbing it, to
@@ -164,6 +194,13 @@ export class InkSurface {
     this.opacity = undefined;
     this.eraserMode = ERASER_MODES.STROKE;
     this.eraserRadius = 8;
+    /** 形状工具画哪一种、填什么色，以及正在拖的那个形状。见 shape-geometry.js。 */
+    this.shapeKind = SHAPE_KINDS.LINE;
+    this.shapeFill = null;
+    this._shape = null;      // 正在拖的那个（还没落进层里）
+    this._shapeSel = null;   // 亮着圆点的那个：{ shape, strokeId }
+    this._shapeGrab = null;  // 正在拖的那颗圆点
+    this._shapePress = null; // 按在一个已有形状上，还没决定是「选它」还是「画新的」
     this.inputMode = INPUT_MODES.NO_FINGER;
     this.enabled = true;
 
@@ -225,8 +262,12 @@ export class InkSurface {
     // Leaving the lasso drops the selection: a highlighted set that no gesture
     // can act on any more is just decoration on the page.
     if (this.selecting && mode !== 'select') this.clearSelection();
+    // 换掉形状工具，那几颗圆点也该走：它们是「这一个形状还能改」的意思，而换了
+    // 工具之后再拖它们，改的是一个人已经不在编辑的东西。
+    if (this.shaping && mode !== 'shape') this._dropShapeSelection();
     this.erasing = mode === 'erase';
     this.selecting = mode === 'select';
+    this.shaping = mode === 'shape';
     // 那条动作小条也跟着这个模式走，而且要单独说一句。
     //
     // 只靠上面那句 clearSelection 是不够的：它开头就写着「没选东西也没在画就直接
@@ -240,9 +281,24 @@ export class InkSurface {
   setTool(tool) {
     if (tool === 'eraser') { this._setMode('erase'); return; }
     if (tool === 'lasso') { this._setMode('select'); return; }
+    if (tool === 'shape') { this._setMode('shape'); return; }
     this._setMode('draw');
     this.tool = tool;
     this.width = TOOL_DEFAULTS[tool]?.width ?? this.width;
+  }
+
+  /**
+   * 形状工具：画直线还是画圆。
+   *
+   * 形状落下来是一条普通笔迹，用的是**钢笔**那套渲染（等宽、不带颗粒）——所以
+   * this.tool 保持不动，只有模式变了。换句话说：形状不是第七支笔，是一种画法。
+   */
+  setShape(kind, fill) {
+    this._setMode('shape');
+    if (Object.values(SHAPE_KINDS).includes(kind) && kind !== SHAPE_KINDS.POLY) {
+      this.shapeKind = kind;
+    }
+    if (fill !== undefined) this.shapeFill = fill || null;
   }
 
   /** Shape of the loop, and what counts as caught. */
@@ -256,8 +312,28 @@ export class InkSurface {
     if (mode === 'touch' || mode === 'inside') this.lassoInside = mode === 'inside';
   }
 
+  /**
+   * 收掉形状上那几颗圆点。
+   *
+   * 形状本身留在纸上——它已经是一条笔迹了。走的只是「还能改它」这件事。
+   */
+  _dropShapeSelection() {
+    if (!this._shapeSel && !this._shape && !this._shapeGrab && !this._shapePress) return false;
+    this._shapeSel = null;
+    this._shape = null;
+    this._shapeGrab = null;
+    this._shapePress = null;
+    return true;
+  }
+
   clearSelection() {
-    if (!this.selection.length && !this._loop) return;
+    // 形状那几颗圆点和套索的选区是同一类东西：「这一片现在还听我的」。所以翻页、
+    // 换工具、剪切之后统统该走，而那些地方叫的都是这一扇门。
+    const hadShape = this._dropShapeSelection();
+    if (!this.selection.length && !this._loop) {
+      if (hadShape) this.render();
+      return;
+    }
     this.selection = [];
     this.selectionLoop = null;
     this._bar?.hide();
@@ -366,6 +442,30 @@ export class InkSurface {
         tip: this.lassoShape !== 'rect',
         closed: this.lassoShape === 'rect',
       });
+    }
+    // 形状：正在拖的那一个，和松手之后还挂着圆点的那一个。
+    //
+    // 预览就是拿最终那条笔迹去画的——同一个 _strokeFromShape、同一个 drawStroke。
+    // 另画一条细一点的「预览线」看着更轻快，代价是松手那一瞬间粗细和颜色都会
+    // 跳一下，而那一下正是人在对比「我想要的」和「它给我的」。
+    const live = this._shapeGrab?.shape || this._shape;
+    if (live && !tooSmall(live)) {
+      drawStroke(this.ctx, this._strokeFromShape(live), this.transform);
+      drawShapeGuides(this.ctx, shapeGuides(live), this.transform);
+    }
+    // 撤销掉、擦掉、被套索删掉之后，那几颗圆点指着的笔迹已经不在层里了。
+    //
+    // 真机上撞到的就是这个：画完一个形状按撤销，形状没了，四颗琥珀点还浮在纸
+    // 上——它们拖不动（按下去那条笔迹已经查无此人）、擦不掉（橡皮擦的是笔迹），
+    // 但看着像是页面上的内容。下一次按下去才收掉已经太晚了。
+    if (this._shapeSel && !this.layer.has(this._shapeSel.strokeId)) this._shapeSel = null;
+    // 圆点和角度标签：正在拖的那个要看着改，没在拖的那个是「它还听我的」。
+    const marked = this._shapeGrab?.shape || (this._shape ? null : this._shapeSel?.shape);
+    if (marked) {
+      drawShapeLabels(this.ctx, shapeLabels(marked), this.transform);
+      drawShapeHandles(
+        this.ctx, shapeHandles(marked), this.transform, this._shapeHandleRadius(),
+      );
     }
     if (this.selection.length) this._drawSelection();
     this._placeBar();
@@ -733,6 +833,11 @@ export class InkSurface {
         return;
       }
 
+      if (this.shaping) {
+        this._beginShapeGesture(pt);
+        return;
+      }
+
       if (this.erasing) {
         // Both modes are a head you drag; they differ in what they take.
         // STROKE lifts a whole stroke it touches. REGION clears the area under
@@ -793,6 +898,33 @@ export class InkSurface {
           this._loop.push(pt);
           this.render();
         }
+        return;
+      }
+
+      if (this._shapeGrab) {
+        // 拖一颗圆点：形状照着新的那一头重算，吸附规则和画的时候一样。
+        this._shapeGrab.shape = reshape(
+          this._shapeGrab.shape, this._shapeGrab.handleId, pt,
+        );
+        this.render();
+        return;
+      }
+      if (this._shapePress) {
+        // 按在已有形状上之后手走了：这一下不是「选它」，是从按下那一点开始画一
+        // 个新的。阈值按屏幕像素给，缩放到 400% 的时候手指抖那几下才不会算数。
+        const slop = SHAPE_TAP_SLOP / (this.transform.scale || 1);
+        const from = this._shapePress.at;
+        if (Math.hypot(pt.x - from.x, pt.y - from.y) < slop) return;
+        this._shapePress = null;
+        this._shape = createShape(this.shapeKind, from, pt);
+        this.render();
+        return;
+      }
+      if (this._shape) {
+        // 锚不动，另一头跟着笔。吸附在 createShape 里做，所以屏幕上看到的就是
+        // 松手会留下的那一个——预览和结果是同一次计算。
+        this._shape = createShape(this._shape.kind, this._shape.from, pt);
+        this.render();
         return;
       }
 
@@ -892,6 +1024,23 @@ export class InkSurface {
         return;
       }
 
+      if (this._shapeGrab) {
+        this._commitReshape();
+        return;
+      }
+      if (this._shapePress) {
+        // 手没走：这一下就是「选中它」。
+        const press = this._shapePress;
+        this._shapePress = null;
+        this._shapeSel = { shape: press.shape, strokeId: press.strokeId };
+        this.render();
+        return;
+      }
+      if (this._shape) {
+        this._commitShape();
+        return;
+      }
+
       if (this._eraserDot) {
         this._eraserDot = null;
         this._eraserPath = null;
@@ -986,6 +1135,184 @@ export class InkSurface {
     this._loopFrom = pt;
     this._loop = this.lassoShape === 'rect' ? rectLoop(pt, pt) : [pt];
     this.render();
+  }
+
+  // ── 形状 ──────────────────────────────────────────────────────────────────
+
+  /**
+   * 形状工具按下去意味着什么，看按在哪儿。
+   *
+   * 按在上一个形状的圆点上就是改它；按在别处就是画新的一个，同时把那几颗圆点
+   * 收走——视频里正是这样：圆点在人下一次碰屏幕的那一帧灭掉。
+   */
+  _beginShapeGesture(pt) {
+    // 它还在层里吗？撤销过、擦掉了、被套索删了，那几颗圆点就成了指向空处的东
+    // 西——再拖一下会照着一条不存在的笔迹复制出新的一条来。
+    if (this._shapeSel && !this.layer.has(this._shapeSel.strokeId)) {
+      this._dropShapeSelection();
+    }
+    if (this._shapeSel) {
+      const radius = this._shapeHitRadius() / (this.transform.scale || 1);
+      const handle = shapeHandleAt(this._shapeSel.shape, pt, radius);
+      if (handle) {
+        // 拖之前先把旧的那条从层里拿走，拖完再放回去（改过的那一条）。
+        //
+        // 不拿走的话，整个拖动过程中屏幕上是两个形状：旧的还在层里，新的画在上
+        // 面。人以为自己复制了一份。拿走的这一份留着——万一这一下什么也没改成，
+        // 得原样放回原来那个层序里去。
+        this._shapeGrab = {
+          handleId: handle.id,
+          shape: this._shapeSel.shape,
+          strokeId: this._shapeSel.strokeId,
+          removed: this.layer.removeByIds([this._shapeSel.strokeId]),
+        };
+        this.render();
+        return;
+      }
+    }
+
+    // 按在一个已经画好的形状上。
+    //
+    // 视频第 2706 帧那一下点在矩形**当中的空白处**，十八帧之后四颗圆点和四个
+    // 「90°」一起亮起来——所以点一个已有的形状就是把它选中，不是在它上面开始画
+    // 新的一个。
+    //
+    // 但也不能就此断了「在已有形状上面再画一个」这条路，所以这一下先不定性：
+    // 手没走就是选中，走了就当作从按下那一点开始画新的。松手时在 _commitShape
+    // 里分岔。
+    const under = this._shapeStrokeAt(pt);
+    if (under) {
+      this._dropShapeSelection();
+      this._shapePress = { at: pt, ...under };
+      this.render();
+      return;
+    }
+
+    this._dropShapeSelection();
+    this._shape = createShape(this.shapeKind, pt, pt);
+    this.render();
+  }
+
+  /**
+   * 这一点底下那条**形状笔迹**，从上往下找，找不到就是 null。
+   *
+   * 只认还带着形状的那些笔迹：手写的线、以及被套索搬动过、被区域橡皮切开过的形
+   * 状，都不在其列——见 _shapeIsLive。
+   */
+  _shapeStrokeAt(point) {
+    const all = this.layer.getAll();
+    const tolerance = Math.max(6, 10 / (this.transform.scale || 1));
+    for (let i = all.length - 1; i >= 0; i--) {
+      const stroke = all[i];
+      if (!stroke.shape || !this._shapeIsLive(stroke)) continue;
+      if (hitShape(stroke.shape, point, tolerance)) {
+        return { shape: stroke.shape, strokeId: stroke.id };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 这条笔迹身上那个形状还作数吗。
+   *
+   * 形状记的是「这些点是怎么算出来的」，而套索搬过、转过、区域橡皮切过之后，点
+   * 已经不是那么算出来的了。那种情况下它就该变回一条普通笔迹——还看得见、还擦得
+   * 掉，只是不再亮圆点。
+   *
+   * 判据是头一个点：形状生成的点是定死的顺序（圆从正上开始，多边形从第一个顶点
+   * 开始），所以头一个点对得上，这条笔迹就还是那个形状生出来的。
+   */
+  _shapeIsLive(stroke) {
+    const first = stroke.points?.[0];
+    if (!first) return false;
+    const made = shapePoints(stroke.shape, { width: stroke.width })[0];
+    if (!made) return false;
+    return Math.abs(made.x - first.x) < 0.5 && Math.abs(made.y - first.y) < 0.5;
+  }
+
+  /**
+   * 照一个形状做一条笔迹。用钢笔那套渲染，等宽，颜色粗细听工具栏的。
+   *
+   * 形状本身跟着笔迹存下来：之后点一下它、拖一个顶点，靠的就是这一份。
+   * 填充只给闭合的形状——一条直线「里面」是没有面积的。
+   */
+  _strokeFromShape(shape) {
+    const stroke = createStroke({
+      tool: INK_TOOLS.PEN,
+      color: this.color,
+      width: this.width,
+      opacity: this.opacity,
+      fill: isClosedShape(shape) ? this.shapeFill : null,
+      shape,
+    });
+    stroke.points = shapePoints(shape, { width: this.width });
+    recomputeBounds(stroke);
+    return stroke;
+  }
+
+  /**
+   * 松手：形状落进层里，圆点留在它身上。
+   *
+   * 没拖出大小的那一下不落——它是「点了一下」，意思是把上一个形状的圆点收走，
+   * 而那件事在 _beginShapeGesture 里已经做完了。往纸上留一个点不是任何人的意思。
+   */
+  _commitShape() {
+    const shape = this._shape;
+    this._shape = null;
+    if (!shape || tooSmall(shape)) { this.render(); return; }
+    const stroke = this._strokeFromShape(shape);
+    const index = this.layer.add(stroke);
+    this.history.recordAdd(stroke, index);
+    this._shapeSel = { shape, strokeId: stroke.id };
+    this.handlers.onChange?.(this.layer);
+    this.render();
+  }
+
+  /**
+   * 拖完一颗圆点：换掉那条笔迹。
+   *
+   * 记成一次 SPLIT（拿掉旧的、放回新的），不是「擦一次 + 画一次」——那会在撤销
+   * 栈上留下两步，而人做的是一下。新笔迹的 id 是新的，所以 _shapeSel 也要跟着
+   * 换，不然下一次拖圆点找的是一条已经不在层里的笔画。
+   */
+  _commitReshape() {
+    const grab = this._shapeGrab;
+    this._shapeGrab = null;
+    if (!grab) { this.render(); return; }
+    const removed = grab.removed || [];
+
+    // 拖没了（拖成一条零长的线、一个零宽的圆）：当这一下没发生过，原样放回去。
+    // 把一条笔迹拖到消失不该是「改形状」这个动作的一种结果。
+    if (tooSmall(grab.shape)) {
+      for (const entry of removed) this.layer.insertAt(entry.index, entry.stroke);
+      this.render();
+      return;
+    }
+
+    const stroke = this._strokeFromShape(grab.shape);
+    const index = this.layer.add(stroke);
+    if (removed.length) {
+      // 一次 SPLIT：拿掉旧的、放回新的，记成**一步**。记成「擦一次 + 画一次」
+      // 的话，人拖一下圆点要按两次撤销才回得去。
+      this.history.recordSplit(removed, [{ index, stroke }]);
+    } else {
+      this.history.recordAdd(stroke, index);
+    }
+    this._shapeSel = { shape: grab.shape, strokeId: stroke.id };
+    this.handlers.onChange?.(this.layer);
+    this.render();
+  }
+
+  /** 圆点画出来多大（屏幕像素）。规矩和选区那颗把手一样，只是小一档。 */
+  _shapeHandleRadius() {
+    const zoom = this.transform?.scale || 1;
+    const r = SHAPE_HANDLE * Math.sqrt(zoom);
+    return Math.min(SHAPE_HANDLE_MAX, Math.max(SHAPE_HANDLE_MIN, r));
+  }
+
+  /** 多近算摸到它。画出来那么小一颗，光靠它自己是戳不中的。 */
+  _shapeHitRadius() {
+    return Math.max(SHAPE_HIT_MIN, this._shapeHandleRadius() * 3);
   }
 
   /**

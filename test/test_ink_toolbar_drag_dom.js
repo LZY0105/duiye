@@ -1062,6 +1062,99 @@ test('一次落笔只放一张静像出去', () => {
   assert.ok(ghosts <= 1, `一根横杠上同时挂 ${ghosts} 张静像，看着就是多出来一个`);
 });
 
+// ── 形状卡片：点了就得看得见 ──────────────────────────────────────────────────
+//
+// 真机上报的：点卡片上的形状，笔落下去确实换了，可卡片上那个高亮还留在旧的那一
+// 格——人看着像没点上，于是又点一次。填充那一排也一样。
+//
+// 原因是那两处传了 keepCard。keepCard 的意思不是「别关卡片」（关不关只看
+// state.openCard），而是「这一次别重建卡片的 DOM」——它是给滑杆用的：重建会把人
+// 正按着的那个 input 拆掉。用在一次性的挑选上，就等于挑完不刷新。
+
+/** 把形状卡片摊开：选中这支工具，再点一次打开它的卡片。 */
+function openShapeCard(bar) {
+  const tap = () => bar.root.querySelector('.ink-tool[data-tool="shape"]')
+    ?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  tap();
+  tap();
+  const card = document.querySelector('.ink-card');
+  assert.ok(card, '形状卡片没摊开');
+  return card;
+}
+
+const pickedShape = () => [...document.querySelectorAll('[data-shape-kind]')]
+  .filter(b => b.classList.contains('is-selected')).map(b => b.dataset.shapeKind);
+
+test('点一下形状，卡片上的高亮跟着走——而且卡片不重建', () => {
+  const { bar } = mountToolbar();
+  const card = openShapeCard(bar);
+  assert.deepEqual(pickedShape(), ['line'], '默认是直线');
+
+  document.querySelector('[data-shape-kind="triangle"]')
+    .dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+
+  assert.equal(bar.state.shapeKind, 'triangle', 'state 换了');
+  assert.deepEqual(pickedShape(), ['triangle'],
+    '高亮没跟着走的话，人只会再点一次——而它本来就已经换了');
+  // 同一个节点，不是换了一个新的。`.ink-card` 带着一段 200ms 的入场动画，重建
+  // 就是重播它一次，看着是「闪一下才更新」——人在平板上正是这么说的。
+  assert.equal(document.querySelector('.ink-card'), card, '卡片得是原来那一张');
+  assert.ok(card.isConnected, '挑完卡片还开着');
+});
+
+test('点一下填充色，那一排的高亮也跟着走，卡片同样不重建', () => {
+  const { bar } = mountToolbar();
+  const card = openShapeCard(bar);
+  const chosen = () => [...document.querySelectorAll('[data-shape-fill]')]
+    .filter(b => b.classList.contains('is-selected')).map(b => b.dataset.shapeFill || 'none');
+  assert.deepEqual(chosen(), ['none'], '默认不填');
+
+  document.querySelector('[data-shape-fill="#dc2626"]')
+    .dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+
+  assert.equal(bar.state.shapeFill, '#dc2626');
+  assert.deepEqual(chosen(), ['#dc2626']);
+  assert.equal(document.querySelector('.ink-card'), card, '卡片得是原来那一张');
+});
+
+test('换颜色：高亮和预览线一起改，卡片还是那一张', () => {
+  // 笔那张卡片上有一条预览线，颜色粗细透明度都画在它身上。卡片不重建了，那条
+  // 线就得有人单独去改——不改的话，颜色换了、预览还是旧色。
+  const { bar } = mountToolbar();
+  const tap = () => bar.root.querySelector('.ink-tool[data-tool="pen"]')
+    ?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  // 笔本来就是选中的那一支，所以一下就开（再点一下反而会把它合上）。
+  tap();
+  const card = document.querySelector('.ink-card');
+  assert.ok(card, '笔的卡片没摊开');
+  const line = card.querySelector('.ink-preview-line');
+  assert.ok(line, '卡片上有一条预览线');
+
+  card.querySelector('[data-swatch="#dc2626"]')
+    .dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+
+  assert.equal(bar.state.color, '#dc2626');
+  assert.equal(document.querySelector('.ink-card'), card, '卡片得是原来那一张');
+  assert.ok(line.style.background.includes('220') || line.style.background.includes('#dc2626'),
+    `预览线得跟着换色，现在是 ${line.style.background}`);
+  const selected = [...card.querySelectorAll('[data-swatch]')]
+    .filter(b => b.classList.contains('is-selected')).map(b => b.dataset.swatch);
+  assert.deepEqual(selected, ['#dc2626']);
+});
+
+test('滑杆还是不能被自己的 input 拆掉', () => {
+  // 上面那两处去掉了 keepCard，而滑杆必须留着它：重建卡片会把人正按着的那个
+  // input 换成一个新的，手指下面那一根就没了。
+  const { bar } = mountToolbar();
+  const card = openShapeCard(bar);
+  const slider = card.querySelector('[data-role="width"]');
+  assert.ok(slider, '边框那一栏有一根粗细滑杆');
+  slider.value = '7.5';
+  slider.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  assert.equal(bar.state.width, 7.5);
+  assert.ok(slider.isConnected, '滑杆得是原来那一根，不然拖到一半手就空了');
+});
+
 test('信号来自落笔，不是来自「这一栏被点了一下」', () => {
   // 两块画布都要报，而且都要和 onFocus 分开报：onFocus 是手指碰到窗格就发的。
   for (const file of ['src/pdf/pdf-pane.js', 'src/scratch/scratch-pane.js']) {

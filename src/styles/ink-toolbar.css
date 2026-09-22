@@ -599,6 +599,53 @@
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
+/* ── 形状卡片上那一排形状 ────────────────────────────────────────────────────
+   视频里那张面板上，选中的形状是金色的，没选中的是黑描边。这里照做，金色用的
+   是套索和选区把手同一支——在这个应用里，金色只有一个意思：「这是软件替你摆的
+   东西」。格子按触控目标给，不按图标大小给。 */
+.ink-shape-row {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+.ink-shape-row:last-of-type { margin-bottom: 0.7rem; }
+
+.ink-shape-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  border: var(--glass-border-subtle);
+  background: var(--glass-bg-subtle, rgba(0, 0, 0, 0.04));
+  color: var(--fg);
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast),
+              box-shadow var(--transition-fast);
+}
+
+.ink-shape-btn.is-selected {
+  background: var(--card-bg, #fff);
+  color: var(--math-gold, #d97706);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .ink-shape-btn:hover { background: var(--card-bg, #fff); }
+}
+
+/* 填充那一排的头一格：不是颜色，是「别填」。画一个打叉的圈，和视频里一样。 */
+.ink-card-swatches .ink-swatch.is-none {
+  background:
+    linear-gradient(to bottom right, transparent calc(50% - 1px),
+      var(--danger, #dc2626) calc(50% - 1px), var(--danger, #dc2626) calc(50% + 1px),
+      transparent calc(50% + 1px)),
+    var(--card-bg, #fff);
+  border: 1px solid var(--border-color, rgba(15, 23, 42, 0.16));
+}
+
 .ink-check {
   display: flex;
   align-items: center;

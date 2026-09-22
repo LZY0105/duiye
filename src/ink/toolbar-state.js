@@ -15,6 +15,7 @@
 
 import { INK_TOOLS, TOOL_DEFAULTS } from './stroke.js';
 import { ERASER_MODES } from './ink-eraser.js';
+import { SHAPE_KINDS, SHAPE_ORDER } from './shape-geometry.js';
 
 /**
  * How far into the workspace a corner reaches, as a fraction of each axis.
@@ -110,6 +111,7 @@ export const CARDS = Object.freeze({
   COLOR: 'color',
   ERASER: 'eraser',
   LASSO: 'lasso',
+  SHAPE: 'shape',
   OVERFLOW: 'overflow',
 });
 
@@ -143,6 +145,14 @@ export const LASSO_MODES = Object.freeze({
 export const ERASER_TOOL = 'eraser';
 /** Selection, not drawing: the lasso catches strokes and transforms them. */
 export const LASSO_TOOL = 'lasso';
+/**
+ * 形状：拖出来一条直线或一个圆。
+ *
+ * 它画出来的是普普通通的笔迹——落进同一个层、同一段撤销、同一把橡皮——只是那些
+ * 点不是手抖出来的，而是算出来的。所以它在这里和笔并列，而不是另立一套东西。
+ * 几何和吸附规则在 shape-geometry.js，那里的数字是从视频里逐帧量的。
+ */
+export const SHAPE_TOOL = 'shape';
 
 /** Four quick swatches, as observed in the reference layout. */
 export const DEFAULT_SWATCHES = Object.freeze(['#111827', '#dc2626', '#2563eb', '#16a34a']);
@@ -213,6 +223,11 @@ export function createToolbarState(initial = {}) {
       ? LASSO_SHAPES.RECT : LASSO_SHAPES.FREE,
     lassoMode: initial.lassoMode === LASSO_MODES.INSIDE
       ? LASSO_MODES.INSIDE : LASSO_MODES.TOUCH,
+    /** 形状工具画哪一种。视频里的默认是直线（第一格，亮着的那个）。 */
+    shapeKind: SHAPE_ORDER.includes(initial.shapeKind) ? initial.shapeKind : SHAPE_KINDS.LINE,
+    /** 闭合形状的填充色；null 是「别填」，也是默认——视频里那一排选的正是它。 */
+    shapeFill: typeof initial.shapeFill === 'string' && initial.shapeFill
+      ? initial.shapeFill : null,
     swatches: Object.freeze([...(initial.swatches || DEFAULT_SWATCHES)]),
 
     openCard: CARDS.NONE,
@@ -477,6 +492,18 @@ export function selectTool(state, tool) {
   if (tool === LASSO_TOOL) {
     return next(state, { tool: LASSO_TOOL, openCard: CARDS.NONE });
   }
+  if (tool === SHAPE_TOOL) {
+    // 形状有自己记得的粗细——它就是视频里那根「边框」滑杆。没记过的时候从钢笔
+    // 那儿借一个默认值，而不是留着上一支工具的：拿荧光笔的 16 去画圆，出来的
+    // 是一个环。
+    const remembered = state.byTool?.[SHAPE_TOOL] || TOOL_DEFAULTS[INK_TOOLS.PEN];
+    return next(state, {
+      tool: SHAPE_TOOL,
+      width: remembered.width,
+      opacity: remembered.opacity,
+      openCard: CARDS.NONE,
+    });
+  }
   if (!Object.values(INK_TOOLS).includes(tool)) return state;
   const remembered = state.byTool?.[tool] || TOOL_DEFAULTS[tool];
   return next(state, {
@@ -544,6 +571,24 @@ export function setAutoMinimize(state, enabled) {
   return next(state, { autoMinimize: !!enabled });
 }
 
+export function setShapeKind(state, kind) {
+  if (!SHAPE_ORDER.includes(kind)) return state;
+  // 换形状顺手也把工具切过去：人是在形状那张卡片上点的，他要的显然是画那个。
+  return kind === state.shapeKind && state.tool === SHAPE_TOOL
+    ? state
+    : next(state, { shapeKind: kind, tool: SHAPE_TOOL });
+}
+
+/** 填充色。空字符串是「别填」，那一排头一格就是它。 */
+export function setShapeFill(state, colour) {
+  const value = colour || null;
+  return value === state.shapeFill ? state : next(state, { shapeFill: value });
+}
+
+export function isShape(state) {
+  return state.tool === SHAPE_TOOL;
+}
+
 // ── cards ───────────────────────────────────────────────────────────────────
 
 export function openCard(state, card) {
@@ -588,6 +633,8 @@ export function serializeToolbarState(state) {
     eraserWidth: state.eraserWidth,
     lassoShape: state.lassoShape,
     lassoMode: state.lassoMode,
+    shapeKind: state.shapeKind,
+    shapeFill: state.shapeFill,
     swatches: [...state.swatches],
     autoMinimize: state.autoMinimize,
   };
