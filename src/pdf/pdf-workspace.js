@@ -410,6 +410,8 @@ export class PdfWorkspace {
       this.panes[slot] = new PdfPane(host, {
         onStateChange: () => { this._syncSlotChrome(slot); this._persist(); },
         onFocus: () => this._markActive(slot),
+        // 笔一落到纸上，工具栏就该让开——前提是人在设置里要过这件事。
+        onInkDraw: () => this.toolbar?.minimizeOnDraw?.(),
         onInkHistoryChange: () => this._syncSlotChrome(slot),
         onInkDragOver: (at) => this._markInkDropTarget(slot, at),
         onInkDragDrop: (payload) => this._dropInkIntoOtherSlot(slot, payload),
@@ -2267,6 +2269,8 @@ export class PdfWorkspace {
     const pane = new ScratchPane(host, {
       onStateChange: () => { this._syncSlotChrome(slot); this._persist(); },
       onFocus: () => this._markActive(slot),
+      // 同 PdfPane：草稿纸上落笔一样算落笔。
+      onInkDraw: () => this.toolbar?.minimizeOnDraw?.(),
       onInkHistoryChange: () => this._syncSlotChrome(slot),
       onSaveStateChange: () => this._syncSlotChrome(slot),
       onInkDragOver: (at) => this._markInkDropTarget(slot, at),

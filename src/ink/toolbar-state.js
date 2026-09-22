@@ -306,6 +306,27 @@ export function undock(state) {
 }
 
 /**
+ * 展开的横杠 → 角上那颗球，没有拖动，也不欠谁。
+ *
+ * 这是「自动最小化」的那一步：人把横杠点开、挑好笔，然后把笔落到纸上——横杠
+ * 的活已经干完了，该让开，直到他再要它。
+ *
+ * 和 yieldToCorner 不是一回事，虽然屏幕上看着一模一样。让开是暂时的，因为压住
+ * 它的那块面板会关上；而「把笔落在纸上」不是一件会结束的事，没有哪一刻可以说
+ * 「现在该还回去了」——真要还，还的那一下正好落在人写字的纸上。所以这里什么都
+ * 不记：要它回来的是一次点按，和人自己亲手把球点开一样。
+ *
+ * 拖动途中不收（球正在人手里），已经让开的时候也不收（位置是借来的，再折一次
+ * 会让那笔账指向一个角，而不是指向横杠真正的家）。
+ */
+export function dockToCorner(state, corner) {
+  if (!Object.values(CORNERS).includes(corner)) return state;
+  if (state.phase !== TOOLBAR_PHASE.EXPANDED) return state;
+  if (state.yielded) return state;
+  return next(state, { phase: TOOLBAR_PHASE.DOCKED, corner, openCard: CARDS.NONE });
+}
+
+/**
  * Folds the bar into a corner to get it off something else, remembering where
  * it was so it can be handed back.
  *

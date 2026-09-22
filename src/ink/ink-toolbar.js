@@ -25,6 +25,7 @@ import {
   TOOLBAR_PHASE,
   closeCard,
   createToolbarState,
+  dockToCorner,
   endDrag,
   isCornerPoint,
   isDocked,
@@ -200,6 +201,14 @@ export class InkToolbar {
      * much room to leave; the bar does not guess.
      */
     this._safe = { top: 0, bottom: 0 };
+    /**
+     * 人上一次亲手把球停在哪个角。
+     *
+     * 点开之后 state.corner 就没了，而「自动最小化」要收回那个角，所以这笔记
+     * 在横杠自己身上，跨过展开这一步。开机第一次的值从存下来的位置里来——它本
+     * 来就是球的话，那个角就是他上次放的地方。
+     */
+    this._homeCorner = this.state.corner || null;
 
     this.root = document.createElement('div');
     this.root.className = 'ink-toolbar';
@@ -251,6 +260,13 @@ export class InkToolbar {
   _set(nextState, { pushTools = true, keepCard = false } = {}) {
     if (nextState === this.state) return;
     this.state = nextState;
+    // 人自己把球停在哪个角，记着。点开之后 state.corner 就清空了（展开的横杠
+    // 没有角），而「自动最小化」要把它收回**他放它的那个角**——收到别处去，
+    // 等于每画一笔就让他重新找一次。让开借走的那个角不算数：那个位置不是他
+    // 挑的，是一块面板逼出来的。
+    if (isDocked(nextState) && nextState.corner && !isYielded(nextState)) {
+      this._homeCorner = nextState.corner;
+    }
     this._keepCard = keepCard;
     this.render();
     this._keepCard = false;
@@ -665,6 +681,50 @@ export class InkToolbar {
       this.root.classList.remove('is-instant');
       this._clampIntoHost();
     });
+  }
+
+  /**
+   * 笔落到纸上了：如果人要求过，就把横杠收起来。
+   *
+   * 「自动最小化」原来是一颗只会记住自己被勾上的复选框——设置在，行为从来不
+   * 在。这里补的就是那个行为：点开横杠、挑一支笔、开始写，横杠回到它出来的那
+   * 个角上变回一颗球。
+   *
+   * 收的是真的（dockToCorner），不是让开（yieldTo）：没有谁欠它一个位置，也没
+   * 有哪一刻该把它还回来。要它回来就点那颗球，和平时一样。
+   *
+   * 已经是球、正在被拖、或者正为某块面板让着的时候，这里什么都不做——前两种
+   * 是人手上的事，第三种的位置是借来的，把借条改写成「他自己收的」，面板关掉
+   * 之后横杠就再也回不到原处了。
+   */
+  minimizeOnDraw() {
+    if (!this.state.autoMinimize) return;
+    if (this.state.phase !== TOOLBAR_PHASE.EXPANDED) return;
+    if (isYielded(this.state)) return;
+
+    const corner = this._minimizeCorner();
+    // 上一次折叠留在半空中的那张静像先收掉：一根横杠上同时挂两张，是这一下唯
+    // 一会被看成「多出来一个」而不是「一个东西在动」的情形。
+    this._clearGhosts();
+    const from = this.root.getBoundingClientRect();
+    const ghost = this._ghost(from);
+    const before = this.state;
+    this._set(dockToCorner(this.state, corner), { pushTools: false });
+    if (this.state === before) { ghost?.remove(); return; }
+    this._playFold(ghost, from, this.root.getBoundingClientRect());
+  }
+
+  /** 自动最小化该往哪个角收。 */
+  _minimizeCorner() {
+    // 它自己出来的那个角。人是从那儿把它点开的，那儿就是他再去找它的地方。
+    if (this._homeCorner) return this._homeCorner;
+    // 从来没当过球（一直贴在某条边上）：落到自己这半边的下角，和「为面板让
+    // 开」用的是同一条规矩——见 pdf-workspace 的 _cornerFor。
+    const host = this.host?.getBoundingClientRect?.();
+    if (!host || !host.width) return CORNERS.BOTTOM_RIGHT;
+    const bar = this.root.getBoundingClientRect();
+    const mid = (bar.left + bar.right) / 2;
+    return mid < host.left + host.width / 2 ? CORNERS.BOTTOM_LEFT : CORNERS.BOTTOM_RIGHT;
   }
 
   /**

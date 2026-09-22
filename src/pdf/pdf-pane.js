@@ -263,7 +263,12 @@ export class PdfPane {
       onHistoryChange: () => this.handlers.onInkHistoryChange?.(this.ink),
       // A stroke starting here makes this the active pane, which is what makes
       // the shared toolbar push its tool, colour and width to THIS surface.
-      onDrawStart: () => this.handlers.onFocus?.(),
+      onDrawStart: () => {
+        this.handlers.onFocus?.();
+        // 「笔落在纸上」和「这一栏被点了一下」是两件事，所以分开报。自动最小
+        // 化只认前者：拿 onFocus 当信号的话，人手指碰一下窗格工具栏就躲走了。
+        this.handlers.onInkDraw?.();
+      },
       // 跨栏拖拽：这块画布不知道另一栏在哪，交给工作区去找。
       onDragOver: (at) => this.handlers.onInkDragOver?.(at),
       // 原样回传，不要折成布尔：落地的那一侧给的是一组把手，源那边要靠它把

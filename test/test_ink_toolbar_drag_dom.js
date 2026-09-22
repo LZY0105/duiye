@@ -17,6 +17,7 @@
 // genuine PointerEvents and asserts on what is left in the tree afterwards.
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 
 let passed = 0;
@@ -927,6 +928,153 @@ test('and a real tap on a tool straight afterwards still works', () => {
   assert.equal(bar.state.tool, 'pencil', 'the reader deliberate tap is not eaten');
 });
 
+
+
+// ── 自动最小化 ───────────────────────────────────────────────────────────────
+//
+// 「工具栏的自动最小化不起作用」——设置里那颗复选框一直在，勾上它会被存下来，
+// 下次开机还在，唯独没有任何代码读过它。这一组钉的是它现在读了，以及读法：
+//
+//   收起来的信号是**落笔**，不是「这一栏被点了一下」。后者每次把手放上去都在
+//   发，拿它当信号的话，人碰哪儿工具栏就躲哪儿。
+//
+//   收是真的收（dockToCorner），不是为面板让开（yieldTo）。两者在屏幕上是同一
+//   颗球，区别只在一件事上：让开欠着一个位置，面板关掉要还；自动收起来不欠，
+//   因为「笔在纸上」不是一件会结束、会有人来还账的事。
+
+/** 勾上设置里那颗「自动最小化」，走真正那颗复选框。 */
+function turnOnAutoMinimize(bar) {
+  bar.root.querySelector('[data-role="overflow"]')
+    .dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+  const box = document.querySelector('[data-role="auto-minimize"]');
+  assert.ok(box, '设置卡片上得有这颗复选框');
+  box.checked = true;
+  box.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.equal(bar.state.autoMinimize, true, '勾上了就该记下来');
+}
+
+/** 把球点开成横杠，和人用手指做的那一下一样。 */
+function tapOpen(bar, at = [970, 770]) {
+  const handle = bar.root.querySelector('[data-role="handle"]');
+  pointer('pointerdown', { x: at[0], y: at[1], target: handle || bar.root });
+  pointer('pointerup', { x: at[0], y: at[1] });
+}
+
+test('没勾这项，落笔的时候横杠一动不动', () => {
+  const { bar } = mountToolbar();
+  const before = bar.state.phase;
+  bar.minimizeOnDraw();
+  assert.equal(bar.state.phase, before, '没要求过的事不能自己发生');
+  assert.equal(bar.root.classList.contains('is-docked'), false);
+});
+
+test('勾上之后，笔一落到纸上横杠就收成角上那颗球', () => {
+  const { bar } = mountToolbar();
+  turnOnAutoMinimize(bar);
+  bar.minimizeOnDraw();
+  assert.equal(bar.state.phase, 'docked', '这就是那句「自动缩小到角落」');
+  assert.equal(bar.root.classList.contains('is-docked'), true);
+});
+
+test('收回去的是人自己停过球的那个角', () => {
+  const { bar } = mountToolbar();
+  turnOnAutoMinimize(bar);
+  drag(bar, { from: [40, 40], to: [980, 780] });
+  assert.equal(bar.state.corner, 'bottom-right', '人把它停在了右下');
+  tapOpen(bar);
+  assert.equal(bar.state.phase, 'expanded', '点开了');
+
+  bar.minimizeOnDraw();
+  assert.equal(bar.state.corner, 'bottom-right',
+    '收去别的角，等于每画一笔就让他重新找一次工具栏');
+});
+
+test('从来没当过球的横杠，收去自己这半边的下角', () => {
+  const { bar } = mountToolbar();
+  turnOnAutoMinimize(bar);
+  bar.root.getBoundingClientRect = () => RECT(940, 300, 992, 600);
+  bar.minimizeOnDraw();
+  assert.equal(bar.state.corner, 'bottom-right', '它本来就贴在右边');
+
+  const second = mountToolbar();
+  turnOnAutoMinimize(second.bar);
+  second.bar.root.getBoundingClientRect = () => RECT(8, 300, 60, 600);
+  second.bar.minimizeOnDraw();
+  assert.equal(second.bar.state.corner, 'bottom-left');
+});
+
+test('这样收起来不欠谁：它不是「让开」，没有人会来把它还回去', () => {
+  const { bar } = mountToolbar();
+  turnOnAutoMinimize(bar);
+  bar.minimizeOnDraw();
+  assert.equal(bar.isYielded(), false, '欠账一旦记上，面板一关它就自己弹回纸上了');
+  bar.restoreFromYield();
+  assert.equal(bar.state.phase, 'docked', '没有账可还，所以什么都不该发生');
+});
+
+test('正为一块面板让着的时候落笔，那笔账不能被改写', () => {
+  const { bar } = mountToolbar();
+  turnOnAutoMinimize(bar);
+  const home = { phase: bar.state.phase, edge: bar.state.edge, offset: bar.state.offset };
+  bar.yieldTo('bottom-left');
+  bar.minimizeOnDraw();
+  assert.equal(bar.isYielded(), true, '账还在');
+  bar.restoreFromYield();
+  assert.equal(bar.state.phase, home.phase, '面板关掉，横杠还是回到它自己的位置');
+  assert.equal(bar.state.edge, home.edge);
+  assert.equal(bar.state.offset, home.offset);
+});
+
+test('已经是球了就不再折一次', () => {
+  const { bar } = mountToolbar();
+  turnOnAutoMinimize(bar);
+  drag(bar, { from: [40, 40], to: [980, 780] });
+  const before = bar.state;
+  bar.minimizeOnDraw();
+  assert.equal(bar.state, before, '一颗球缩成一颗球，是一段什么都没说的动画');
+  assert.equal(document.querySelectorAll('[data-role="toolbar-ghost"]').length, 0);
+});
+
+test('拖动途中落笔不收：那根横杠正在人手里', () => {
+  const { bar } = mountToolbar();
+  turnOnAutoMinimize(bar);
+  const handle = bar.root.querySelector('[data-role="handle"]');
+  pointer('pointerdown', { x: 40, y: 40, target: handle });
+  pointer('pointermove', { x: 400, y: 400 });
+  assert.equal(bar.state.phase, 'dragging');
+  bar.minimizeOnDraw();
+  assert.equal(bar.state.phase, 'dragging', '不能从人手里把它收走');
+});
+
+test('收起来的同时，摊开的那张卡片也跟着合上', () => {
+  const { bar } = mountToolbar();
+  turnOnAutoMinimize(bar);
+  assert.equal(bar.state.openCard, 'overflow', '设置卡片还开着');
+  bar.minimizeOnDraw();
+  assert.equal(bar.state.openCard, null, '一颗球上挂不住一张卡片');
+});
+
+test('一次落笔只放一张静像出去', () => {
+  const { bar } = mountToolbar();
+  turnOnAutoMinimize(bar);
+  bar.minimizeOnDraw();
+  const ghosts = document.querySelectorAll('[data-role="toolbar-ghost"]').length;
+  assert.ok(ghosts <= 1, `一根横杠上同时挂 ${ghosts} 张静像，看着就是多出来一个`);
+});
+
+test('信号来自落笔，不是来自「这一栏被点了一下」', () => {
+  // 两块画布都要报，而且都要和 onFocus 分开报：onFocus 是手指碰到窗格就发的。
+  for (const file of ['src/pdf/pdf-pane.js', 'src/scratch/scratch-pane.js']) {
+    const code = readFileSync(new URL(`../${file}`, import.meta.url), 'utf-8');
+    const at = code.indexOf('onDrawStart:');
+    assert.ok(at > -1, `${file} 得有 onDrawStart`);
+    const body = code.slice(at, at + 400);
+    assert.ok(/onInkDraw\?\.\(\)/.test(body), `${file} 落笔时要把这件事报出去`);
+  }
+  const ws = readFileSync(new URL('../src/pdf/pdf-workspace.js', import.meta.url), 'utf-8');
+  const hooks = ws.match(/onInkDraw: \(\) => this\.toolbar\?\.minimizeOnDraw\?\.\(\)/g) || [];
+  assert.equal(hooks.length, 2, '书和草稿纸两边都要接上，少一边就有一半的纸不灵');
+});
 
 
 console.log(`\nink toolbar drag lifecycle: ${failed ? 'FAIL' : 'PASS'} (${passed} checks${failed ? `, ${failed} failed` : ''})`);
