@@ -79,6 +79,11 @@ export class BookShelf {
     return this._tiles.get(id)?.dataset.cover || '';
   }
 
+  /** 架子上这一格写的是什么名字。没有封面可飞的时候，素封面上印的就是它。 */
+  nameOf(id) {
+    return this._tiles.get(id)?.querySelector('.pdf-book-name')?.textContent || '';
+  }
+
   setItems(items) {
     this._release();
     const frag = document.createDocumentFragment();

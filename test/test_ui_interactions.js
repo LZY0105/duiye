@@ -713,7 +713,9 @@ check('ink is transformed at the scale the page is painted at', () => {
 
 check('an animated ratio change previews the refit too, frame by frame', () => {
   const code = $code('src/pdf/pdf-workspace.js');
-  for (const fn of ['animateToRatio(targetRatio)', 'animateToFocus(slot)']) {
+  // 名字带前括号就够了：animateToRatio 后来多了一个「要不要那块百分比牌子」的
+  // 参数，把整个签名写死在这里，等于每加一个参数就假报一次失败。
+  for (const fn of ['animateToRatio(targetRatio', 'animateToFocus(slot)']) {
     const at = code.indexOf(fn);
     assert.ok(at > -1, fn);
     const body = code.slice(at, at + 700);

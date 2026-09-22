@@ -908,7 +908,13 @@ export class PdfWorkspace {
     this._trackFrame = requestAnimationFrame(step);
   }
 
-  animateToRatio(targetRatio) {
+  /**
+   * 分栏滑到某个比例。
+   *
+   * `badge` 是那块写着百分比的小牌子。拖动和双击时要有——那是对「你松手会停在
+   * 哪」的回答；而用一个组合开书的时候没人在拖，牌子只是凭空闪一下的数字。
+   */
+  animateToRatio(targetRatio, { badge = true } = {}) {
     targetRatio = clamp(targetRatio, MIN_RATIO, MAX_RATIO);
     if (this.state.focusedSlot) {
       this.state = clearFocus(this.state);
@@ -916,7 +922,7 @@ export class PdfWorkspace {
     this.root.classList.add('is-animating');
     this._trackPaneFits(380);
     this._setState(setDividerRatio(this.state, targetRatio));
-    this._showRatioBadge(targetRatio);
+    if (badge) this._showRatioBadge(targetRatio);
 
     clearTimeout(this._animTimer);
     this._animTimer = setTimeout(() => {
@@ -926,7 +932,7 @@ export class PdfWorkspace {
       this._stopTrackingPaneFits();
       this._resizePanes();
       this._persist();
-      this._hideRatioBadge();
+      if (badge) this._hideRatioBadge();
     }, 380);
   }
 
@@ -1417,11 +1423,21 @@ export class PdfWorkspace {
    *
    * 栏在动画中途或者被收起来时量出来是 0，那时候没有「那一页」可言，交给
    * 调用方去退到整个工作区。
+   *
+   * 一栏里挂着**两块**窗格——书的那块和草稿纸的那块——同一时刻只有一块是摊开
+   * 的，另一块收成 1×1。所以这里挑有面积的那一块，而不是文档顺序里的第一块：
+   * 原来取第一块，于是这一栏正开着草稿纸或笔记本时量到的永远是 0，翻开的动画
+   * 没有落点，整段就不演了。和 _inkSurfaceAt 用的是同一条判据。
    */
   slotRect(slot) {
-    const pane = this.elSlots?.[slot]?.querySelector('.pdf-slot-pane');
-    const rect = pane?.getBoundingClientRect();
-    return rect && rect.width > 1 && rect.height > 1 ? rect : null;
+    const panes = this.elSlots?.[slot]?.querySelectorAll?.('.pdf-slot-pane') || [];
+    let best = null;
+    for (const pane of panes) {
+      const rect = pane.getBoundingClientRect();
+      if (rect.width <= 1 || rect.height <= 1) continue;
+      if (!best || rect.width * rect.height > best.width * best.height) best = rect;
+    }
+    return best;
   }
 
   /**
@@ -3753,10 +3769,21 @@ export class PdfWorkspace {
    * 「会换掉现在开着的东西」这句话，人要看见换掉的是**哪两本**才能决定要不要
    * 换。所以名字得由工作区来给——只有它同时知道摞、窗格和左右有没有对调过。
    */
-  facingNames() {
-    const order = this.state.swapped
+  /**
+   * 两栏按**屏幕上的先后**排：左边那个在前，右边那个在后（竖分栏时是上、下）。
+   *
+   * slot 的身份和它画在哪一边是两回事——对调过之后 PRIMARY 在右边。凡是要按
+   * 位置说事的地方（说给人听的「现在开着哪两本」、翻开组合时书该飞到哪一块）
+   * 都该问这个，而不是自己再写一遍那个三元。
+   */
+  screenSlots() {
+    return this.state.swapped
       ? [SLOTS.SECONDARY, SLOTS.PRIMARY]
       : [SLOTS.PRIMARY, SLOTS.SECONDARY];
+  }
+
+  facingNames() {
+    const order = this.screenSlots();
     return order.map((slot) => {
       const entry = activeEntryIn(this.state, slot);
       if (!entry) return '';
@@ -3795,10 +3822,37 @@ export class PdfWorkspace {
    * 开不起来的那一本不删、不跳过整栏：和会话恢复一样，往下换这一摞里的下一本，
    * 摞本身一条不动。一次打不开不等于这本书没了。
    *
+   * 给了 `revealed`，分栏就不是跳过去而是滑过去：书先按**此刻屏幕上这副分栏**
+   * 落地，等这个钩子说「新的两栏真的露出来了」，分栏再自己走到组合存的那个比
+   * 例上。不等的话那段滑动是白演的——书架那层纱要到翻书动画的最后四分之一才
+   * 淡掉，而落地的那张纸还要再盖一会儿，分栏在底下怎么动都没人看得见。
+   *
+   * 走不走这条路，比例的终点都是组合里那个数：滑动是 applyCombo 自己收的尾，
+   * 不是交给调用方的一件待办。
+   *
+   * @param {Function} [opts.revealed] 等到新分栏真的露出来为止
    * @returns {Promise<{opened: number, missing: number}>}
    */
-  async applyCombo(combo) {
+  async applyCombo(combo, { revealed = null } = {}) {
     if (!combo) return { opened: 0, missing: 0 };
+    // 起点是「此刻屏幕上这副分栏」，而且是按**屏幕**算的，不是按 slot。
+    //
+    // 问 paneFractions 而不是 dividerRatio：有一栏收着的时候屏幕上是 0 和 1，
+    // 而 dividerRatio 记的是「拉开来该多宽」。拿后者当起点，书架一收人就看见
+    // 分栏先跳一下。0 和 1 照收：那下滑动正好把收着的那栏拉开，和人自己把它
+    // 拖回来是同一段动画。
+    //
+    // 再换算一次是因为 dividerRatio 说的是 PRIMARY 的份额，而 PRIMARY 画在
+    // 哪边要看 swapped——一套左右对调过的组合会把它挪到另一边去。要的是「左栏
+    // 还是那么宽」，所以把左栏此刻的份额算出来，再按新的 swapped 折回去。不折
+    // 的话，两栏的宽窄会在书架收起来的那一瞬间对调，而飞过去的书是照着旧的那
+    // 副分栏量的终点。
+    const leftNow = this.state.swapped
+      ? 1 - paneFractions(this.state)[SLOTS.PRIMARY]
+      : paneFractions(this.state)[SLOTS.PRIMARY];
+    const from = revealed
+      ? (combo.swapped ? 1 - leftNow : leftNow)
+      : combo.dividerRatio;
 
     // ①
     for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) this._rememberSlotView(slot);
@@ -3836,7 +3890,7 @@ export class PdfWorkspace {
 
     this._setState(createWorkspaceState({
       decks,
-      dividerRatio: combo.dividerRatio,
+      dividerRatio: from,
       orientation: orientationForViewport(this.root.clientWidth, this.root.clientHeight),
       swapped: combo.swapped,
     }));
@@ -3862,6 +3916,13 @@ export class PdfWorkspace {
     this._layout();
     this._resolveNames();
     this._persist();
+    // 最后才走分栏，而且要等书都装好：`_trackPaneFits` 在这 380 毫秒里每一帧
+    // 都按新宽度预览一次缩放，而一个空窗格没有位图可预览——滑完才装书的话，
+    // 人会看见页面在分栏停下之后又跳一次大小。
+    if (revealed) {
+      try { await revealed(); } catch (_) { /* 动画收不了场也不该拦住摆法 */ }
+      if (from !== combo.dividerRatio) this.animateToRatio(combo.dividerRatio, { badge: false });
+    }
     return { opened, missing };
   }
 

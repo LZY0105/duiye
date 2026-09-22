@@ -31,6 +31,9 @@ import {
   saveCombo,
 } from './combo-store.js';
 import { comboFacing, comboSize, pruneCombo } from './combo-state.js';
+// 组合的显示图上两栏各画在哪一块 —— 翻开它的时候那两本书就从那两块起飞。
+import { comboPaneBoxes } from './combo-cover.js';
+import { SLOTS } from './workspace-state.js';
 import { BookShelf } from './book-shelf.js';
 import { fitRect, playBookOpen } from './book-open.js';
 import { openGuide } from './user-guide.js';
@@ -271,17 +274,92 @@ async function useCombo(item) {
   if (!ok) return;
 
   setStatus(t('combo.applying', { name: item.name }));
+  const flights = beginComboFlight(item, combo);
   try {
-    const { opened, missing } = await workspace.applyCombo(combo);
-    closeLibrary();
+    // 先让这几下站稳，再去干那件会占住主线程的活。顺序反过来，书会先愣三百
+    // 毫秒再飞——和点开一本书那条路一模一样的理由。
+    await Promise.all(flights.map((f) => f.ready()));
+    const { opened, missing } = await workspace.applyCombo(combo, {
+      // 分栏要等这几张纸收干净才滑。在那之前它们整个盖在两栏上，底下怎么动都
+      // 看不见。没有飞行可演的时候，这一下就是「把书架收掉」。
+      revealed: flights.length
+        ? () => Promise.all(flights.map((f) => f.land()))
+        : () => { closeLibrary(); },
+    });
     // 有开不起来的就说出来，而不是让人自己去发现少了一栏。
     setStatus(missing
       ? t('combo.appliedPartly', { name: item.name, missing })
       : t('combo.applied', { name: item.name, count: opened }));
   } catch (error) {
+    // 半路出事就把纸收掉、留在书架上。不收的话屏幕上会停着一张永远不落地的
+    // 封面，而底下是没换成的两栏。
+    for (const flight of flights) flight.cancel();
     Logger.error('PDF', 'apply combo failed', error);
     setStatus(t('combo.failed'), true);
   }
+}
+
+/**
+ * 翻开一个组合：两本一起飞。
+ *
+ * 一本书飞的是它那一格封面；一个组合的显示图上本来就画着两栏，每一栏里是那一
+ * 栏当前开着的那本书。所以这里让那两块各自起飞——画在左边的飞去左栏，画在右边
+ * 的飞去右栏。起点问 comboPaneBoxes，而那张图正是它排的版，所以书是从人刚才
+ * 看着的那一块离开的，不是从某个重新算出来的近似位置。
+ *
+ * 一栏此刻量不出来就不飞那一栏：收起来的那半边在屏幕上没有位置，没有位置就没
+ * 有终点。它会在最后那下分栏滑动里自己张开。两栏都量不出来（书架还没画完、
+ * 组合是空的）就整个不演，和 beginFlight 一样——没有起点的翻书是凭空长出来一
+ * 本书，比直接切过去更难看。
+ *
+ * 书架那层纱只交给第一段飞行去淡，收书架也只挂在它身上：两段都收的话，第二次
+ * 收的是一层已经不在了的纱。
+ */
+function beginComboFlight(item, combo) {
+  const tile = shelf?.tileRect(item.id);
+  if (!tile || !tile.width) return [];
+  const boxes = comboPaneBoxes(combo);
+  const facing = comboFacing(combo);
+  // 起点和终点用同一个形状：书架上的格子是 1:1.414，落地的那一块也按这个比例
+  // 放进栏里。一头一个形状的话，书在半路会被抻扁。
+  const aspect = tile.width / tile.height;
+
+  // 按**屏幕位置**对位，不按 slot 对位。
+  //
+  // 一套左右对调过的组合会把 PRIMARY 挪到右边去，而此刻画在右边的可能是
+  // SECONDARY。照 slot 飞的话，两本书会各自飞到对面那一栏，落地时那一栏里
+  // 却是另一本——看着就像它们在半路上换了个身。applyCombo 那边保证了这两块
+  // 的几何在换过去的一瞬间不变，所以「换过去之后画在左边的那一栏」，量的就
+  // 是此刻左边那一栏。
+  const after = combo.swapped
+    ? [SLOTS.SECONDARY, SLOTS.PRIMARY]
+    : [SLOTS.PRIMARY, SLOTS.SECONDARY];
+  const now = workspace.screenSlots?.() || after;
+
+  const flights = [];
+  for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+    const entry = facing[slot];
+    if (!entry) continue;
+    const box = workspace.slotRect?.(now[after.indexOf(slot)]);
+    if (!box || !box.width) continue;
+    const cell = boxes[slot];
+    const from = fitRect(aspect, {
+      left: tile.left + cell.x * tile.width,
+      top: tile.top + cell.y * tile.height,
+      width: cell.w * tile.width,
+      height: cell.h * tile.height,
+    });
+    if (!(from.width > 1)) continue;
+    flights.push(playBookOpen({
+      from,
+      to: fitRect(aspect, box),
+      coverUrl: shelf.coverUrl(entry.resourceId),
+      title: shelf.nameOf(entry.resourceId),
+      veil: flights.length ? null : libraryEl(),
+      onSettled: flights.length ? null : closeLibrary,
+    }));
+  }
+  return flights;
 }
 
 /**
