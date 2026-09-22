@@ -1,36 +1,34 @@
 apply plugin: 'com.android.application'
 
-// 签名材料从哪里来。
-//
-// 两个来源，本地文件优先：
-//   keystore.properties  —— 本机开发用，被 .gitignore 拦着，永远不进仓库
-//   环境变量             —— CI 用，值来自仓库 Secret
-//
-// 找不到就留空。留空不是错误：debug 构建根本不需要它，assembleRelease 也能跑完
-// （下面 signingConfig 那一句会跳过），只是产出一个没签名、装不上去的包。要让
-// 它在没有密钥时直接报错听起来更严谨，但那会让「只想编译一下看看有没有语法错」
-// 这件事也必须先有密钥。
+// Release signing material is accepted only through temporary environment
+// variables. The secure PowerShell build entry point sets these variables for
+// the child build process and clears them after the build finishes.
 def signing = new Properties()
-def signingPropsFile = file('keystore.properties')
+def envKeystoreFile = System.getenv('KEYSTORE_FILE')
+def envKeystorePassword = System.getenv('KEYSTORE_PASSWORD')
 
-if (signingPropsFile.exists()) {
-    signingPropsFile.withInputStream { signing.load(it) }
-} else if (System.getenv('KEYSTORE_PASSWORD')) {
-    def pwd = System.getenv('KEYSTORE_PASSWORD')
+if (envKeystoreFile && envKeystorePassword) {
     signing.putAll([
-        storeFile    : 'release.keystore',
-        storePassword: pwd,
+        storeFile    : envKeystoreFile,
+        storePassword: envKeystorePassword,
         keyAlias     : System.getenv('KEY_ALIAS') ?: 'duiye',
-        keyPassword  : System.getenv('KEY_PASSWORD') ?: pwd,
+        keyPassword  : System.getenv('KEY_PASSWORD') ?: envKeystorePassword,
     ])
 }
 
-// 密钥齐不齐，只判断一次，下面两处都用它。
-// 原来那个判断写了两遍，一处在 signingConfigs、一处在 buildTypes.release；
-// 两处都只看 storeFile 在不在，于是一份缺了口令的 properties 能过第一关，
-// 到 Gradle 真去开密钥库时才炸，报的是 keystore password was incorrect。
 def canSign = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword']
         .every { signing[it] }
+
+def releaseRequested = gradle.startParameter.taskNames.any {
+    it.toLowerCase().contains('release')
+}
+
+if (releaseRequested && !canSign) {
+    throw new GradleException(
+        'Release signing credentials are required. ' +
+        'Use scripts/build-android-release-windows.ps1.'
+    )
+}
 
 // 版本号从 package.json 读，而不是在这里另抄一份。
 //
