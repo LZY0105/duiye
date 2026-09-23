@@ -426,12 +426,21 @@ check('the ring keeps its weight in proportion', () => {
 });
 
 check('the object-type row from the reference is deliberately absent', () => {
-  // The reference offers 手写 / 图片 / 文本框 / 图形. This app holds one kind
-  // of object, so those are four toggles that can only have one answer.
+  // The reference offers a row of object types: 手写 / 图片 / 文本框 / 图形.
+  // This app has no images and no text boxes, so two of those four toggles
+  // could only ever have one answer.
+  //
+  // 形状 is now a TOOL — it draws strokes into the same layer as the pen, and
+  // it is chosen from the same column as the pen. That is not the same thing
+  // as an object-type row, which asks "which kind of thing am I selecting?"
+  // before anything has been drawn. So the check is against the row, not
+  // against the word: a comment that happens to mention 图形 is not a toggle.
   const code = $read('src/ink/ink-toolbar.js');
-  for (const dead of ['图片', '文本框', '图形']) {
+  for (const dead of ['图片', '文本框']) {
     assert.ok(!code.includes(dead), `${dead} cannot be selected in this app`);
   }
+  assert.ok(!/data-object|objectType|对象类型/.test(code), 'no object-type selector');
+  assert.ok(/tool: SHAPE_TOOL/.test(code), '形状 is a tool, in the same column as the pen');
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -713,7 +722,9 @@ check('ink is transformed at the scale the page is painted at', () => {
 
 check('an animated ratio change previews the refit too, frame by frame', () => {
   const code = $code('src/pdf/pdf-workspace.js');
-  for (const fn of ['animateToRatio(targetRatio)', 'animateToFocus(slot)']) {
+  // 名字带前括号就够了：animateToRatio 后来多了一个「要不要那块百分比牌子」的
+  // 参数，把整个签名写死在这里，等于每加一个参数就假报一次失败。
+  for (const fn of ['animateToRatio(targetRatio', 'animateToFocus(slot)']) {
     const at = code.indexOf(fn);
     assert.ok(at > -1, fn);
     const body = code.slice(at, at + 700);

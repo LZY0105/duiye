@@ -298,6 +298,25 @@ export function drawStroke(ctx, stroke, transform) {
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
+  // 填充。只有形状带得上 fill，手写笔迹永远是 null。
+  //
+  // 填在描边**底下**：反过来的话，那一圈描边会被填充盖掉一半宽度，同一个粗细
+  // 在填了色和没填色的形状上看起来就不一样粗。
+  if (stroke.fill && points.length > 2) {
+    ctx.save();
+    ctx.fillStyle = stroke.fill;
+    ctx.beginPath();
+    const start = documentToScreen(transform, points[0].x, points[0].y);
+    ctx.moveTo(start.x, start.y);
+    for (let i = 1; i < points.length; i++) {
+      const p = documentToScreen(transform, points[i].x, points[i].y);
+      ctx.lineTo(p.x, p.y);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
   // A single tap is a dot, not a zero-length line.
   if (points.length === 1) {
     const p0 = documentToScreen(transform, points[0].x, points[0].y);
@@ -389,6 +408,11 @@ function isVisible(stroke, transform, viewport) {
  */
 export const LASSO_STROKE = '#d97706';
 const LASSO_DASH = [7, 5];
+/** 形状吸附时那两条虚线，比套索细一档。见 drawShapeGuides。 */
+const SHAPE_GUIDE_DASH = [5, 4];
+/** 角度标签的字号，和直角符号那一小段的长度，都按屏幕像素给。 */
+const SHAPE_LABEL_PX = 12;
+const SHAPE_RIGHT_MARK = 11;
 
 /**
  * The lasso loop: the line the hand actually drew, dashed, and nothing else.
@@ -435,6 +459,95 @@ export function drawLasso(ctx, polygon, transform, { closed = false, tip = false
     ctx.fill();
     ctx.lineWidth = 1.6;
     ctx.stroke();
+  }
+  ctx.restore();
+}
+
+
+/**
+ * 形状吸附时的辅助线：琥珀色虚线，和套索同一个色。
+ *
+ * 同一个金色是故意的。这页上的深色是人的笔迹，蓝色是各种控件，红色是橡皮——
+ * 金色在这个应用里只有一个意思：「这是软件替你摆的一条线，不是你画的东西」。
+ * 套索的轮廓、选区的把手、形状的十字，说的都是这句话。
+ *
+ * 虚线比套索的 [7,5] 细一档（[5,4]），照着视频量的：实 8 空 6，在它那个分辨率
+ * 上折过来差不多就是这个数。
+ */
+export function drawShapeGuides(ctx, guides, transform) {
+  if (!Array.isArray(guides) || !guides.length) return;
+  ctx.save();
+  ctx.setLineDash(SHAPE_GUIDE_DASH);
+  ctx.lineWidth = 1.6;
+  ctx.lineCap = 'butt';
+  ctx.strokeStyle = LASSO_STROKE;
+  ctx.beginPath();
+  for (const line of guides) {
+    const a = documentToScreen(transform, line.x1, line.y1);
+    const b = documentToScreen(transform, line.x2, line.y2);
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * 形状松手之后那几颗圆点：实心，压在形状自己身上。
+ *
+ * 和选区那颗把手不一样——那是白心金边的一个环，这是实心的一小颗。视频里就是实
+ * 心的，而且两者确实该长得不一样：选区的把手只有一颗、管旋转和缩放；形状这几颗
+ * 是一组，各管一条边。
+ */
+export function drawShapeHandles(ctx, handles, transform, radius) {
+  if (!Array.isArray(handles) || !handles.length) return;
+  ctx.save();
+  ctx.setLineDash([]);
+  ctx.fillStyle = LASSO_STROKE;
+  for (const handle of handles) {
+    const at = documentToScreen(transform, handle.x, handle.y);
+    ctx.beginPath();
+    ctx.arc(at.x, at.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+
+/**
+ * 顶点旁边那个角度标签，和正好 90° 时那个直角符号。
+ *
+ * 视频第 2724 帧：矩形一被选中，四个角上各一个「90°」，外加四个直角符号；拖走一
+ * 个角之后当场变成 83°/92°/95°/90°，直角符号只留在还是 90° 的那个角上。
+ *
+ * 字号不跟着缩放走。它是**说明**，不是画在纸上的东西——把页面放到 400%，人要的是
+ * 更大的图，不是更大的「90°」三个字；缩到 50% 也还得看得清。
+ */
+export function drawShapeLabels(ctx, labels, transform) {
+  if (!Array.isArray(labels) || !labels.length) return;
+  ctx.save();
+  ctx.setLineDash([]);
+  ctx.strokeStyle = LASSO_STROKE;
+  ctx.fillStyle = LASSO_STROKE;
+  ctx.lineWidth = 1.4;
+  ctx.font = `${SHAPE_LABEL_PX}px system-ui, -apple-system, "PingFang SC", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const label of labels) {
+    const v = documentToScreen(transform, label.vertex.x, label.vertex.y);
+    if (label.right) {
+      // 直角符号画在角里：沿两条臂各走一小段，把那个小方块补齐。
+      const d = SHAPE_RIGHT_MARK;
+      const a = { x: v.x + label.arm1.x * d, y: v.y + label.arm1.y * d };
+      const b = { x: v.x + label.arm2.x * d, y: v.y + label.arm2.y * d };
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(a.x + label.arm2.x * d, a.y + label.arm2.y * d);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+    const at = documentToScreen(transform, label.x, label.y);
+    ctx.fillText(`${Math.round(label.degrees)}°`, at.x, at.y);
   }
   ctx.restore();
 }

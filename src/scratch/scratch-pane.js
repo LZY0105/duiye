@@ -105,7 +105,11 @@ export class ScratchPane {
     this.ink = new InkSurface(this.elInk, {
       onChange: () => this._inkChanged(),
       onHistoryChange: () => this.handlers.onInkHistoryChange?.(this.ink),
-      onDrawStart: () => this.handlers.onFocus?.(),
+      onDrawStart: () => {
+        this.handlers.onFocus?.();
+        // 同 PdfPane：落笔和点一下是两回事，自动最小化只认落笔。
+        this.handlers.onInkDraw?.();
+      },
       // 同 PdfPane：另一栏在哪只有工作区知道。
       onDragOver: (at) => this.handlers.onInkDragOver?.(at),
       // 原样回传，不要折成布尔：落地的那一侧给的是一组把手，源那边要靠它把

@@ -19,8 +19,15 @@ import { ORIENTATIONS, SLOTS } from './workspace-state.js';
 // 走它那条流水线），两边互引会让先初始化的那个读到还没赋值的常量。
 import { COVER_LONG_EDGE, readCover } from './cover-store.js';
 
-/** 卡片本身是竖的，和书架上其它封面一样——它要占同一个格子。 */
-const CARD_W = Math.round(COVER_LONG_EDGE * 0.72);
+/**
+ * 卡片本身是竖的，和书架上其它封面一样——它要占同一个格子。
+ *
+ * 比例取 1:1.414，因为格子（.pdf-book-block）就是这个比例。原来写的是 0.72，
+ * 差着百分之二——平时看不出来，`background-size: cover` 会把多出来的那点裁掉；
+ * 但组合的飞行动画要按这张图上的位置算出「那一栏画在屏幕的哪一块」，一裁，
+ * 算出来的位置就和看到的差一点点。让两边严丝合缝，这笔账就不用算了。
+ */
+const CARD_W = Math.round(COVER_LONG_EDGE / 1.414);
 const CARD_H = COVER_LONG_EDGE;
 
 /**
@@ -40,6 +47,50 @@ const FALLBACK_FILL = Object.freeze({
   [ENTRY_KINDS.NOTE]: '#f3efe4',
   [ENTRY_KINDS.SCRATCH]: '#f6f2e6',
 });
+
+/**
+ * 这张图上，两栏各画在哪一块——用 0~1 的比例给，不用像素。
+ *
+ * 画图的是这个文件，而「翻开一个组合」那段飞行动画要从同一块地方起飞：一本书
+ * 得从它在这张小图里待的那一格飞到它在屏幕上要占的那一栏。两边各算一遍的话，
+ * 版面一改就只有一边跟着改，而那种错法在屏幕上看着像动画飘了，没人会想到是
+ * 缩略图的排版变了。所以位置只算一次，图和动画都问它。
+ *
+ * 比例是**按 slot 给的**，不是按左右：哪一栏画在左边要看 swapped，这件事在这
+ * 里办完，外面就不用再想一遍。
+ */
+export function comboPaneBoxes(combo) {
+  const boxX = PAD;
+  const boxY = PAD;
+  const boxW = CARD_W - PAD * 2;
+  const boxH = CARD_H - PAD * 2;
+
+  const column = combo?.orientation === ORIENTATIONS.COLUMN;
+  // 夹一下：真实的比例可以是 0.02，而那样画出来那一栏只有两个像素宽，看着像没
+  // 有。图要说的是「左宽右窄」，不是「左边 2%」。
+  const ratio = Math.min(0.85, Math.max(0.15, combo?.dividerRatio || 0.5));
+  // dividerRatio 永远是 PRIMARY 那一栏的份额，跟它画在哪一边无关（见
+  // workspace-state 的 paneFractions）。对调过的时候画在左边的是 SECONDARY，
+  // 它的份额是 1-ratio —— 原来这里不分，于是一套左右对调过的摆法，缩略图上
+  // 两栏的宽窄正好是反的。
+  const order = combo?.swapped
+    ? [SLOTS.SECONDARY, SLOTS.PRIMARY]
+    : [SLOTS.PRIMARY, SLOTS.SECONDARY];
+  const firstShare = order[0] === SLOTS.PRIMARY ? ratio : 1 - ratio;
+
+  const firstMain = Math.round((column ? boxH : boxW) * firstShare) - PANE_GAP / 2;
+  const secondMain = (column ? boxH : boxW) - firstMain - PANE_GAP;
+  const rects = column
+    ? [[boxX, boxY, boxW, firstMain], [boxX, boxY + firstMain + PANE_GAP, boxW, secondMain]]
+    : [[boxX, boxY, firstMain, boxH], [boxX + firstMain + PANE_GAP, boxY, secondMain, boxH]];
+
+  const out = {};
+  order.forEach((slot, i) => {
+    const [x, y, w, h] = rects[i];
+    out[slot] = { x: x / CARD_W, y: y / CARD_H, w: w / CARD_W, h: h / CARD_H };
+  });
+  return out;
+}
 
 function roundRect(ctx, x, y, w, h, r) {
   const radius = Math.min(r, w / 2, h / 2);
@@ -125,30 +176,18 @@ export async function renderComboCover(combo) {
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, CARD_W, CARD_H);
 
-  const boxX = PAD;
-  const boxY = PAD;
-  const boxW = CARD_W - PAD * 2;
-  const boxH = CARD_H - PAD * 2;
-
   const facing = comboFacing(combo);
-  // swapped 说的是「哪一栏画在哪一边」。组合要还原的是人看到的样子，所以这里也
-  // 得跟着换——不换的话，一套左右对调过的摆法在书架上看着和没调过的一样。
-  const first = combo.swapped ? facing[SLOTS.SECONDARY] : facing[SLOTS.PRIMARY];
-  const second = combo.swapped ? facing[SLOTS.PRIMARY] : facing[SLOTS.SECONDARY];
-  // 夹一下：真实的比例可以是 0.02，而那样画出来那一栏只有两个像素宽，看着像没
-  // 有。图要说的是「左宽右窄」，不是「左边 2%」。
-  const ratio = Math.min(0.85, Math.max(0.15, combo.dividerRatio || 0.5));
+  // 位置问 comboPaneBoxes 要，它给的是 0~1 的比例，乘回画布就是像素。飞行动画
+  // 问的是同一个函数，所以书起飞的那一格，就是这里画下去的那一格。
+  const boxes = comboPaneBoxes(combo);
 
-  const column = combo.orientation === ORIENTATIONS.COLUMN;
-  const firstMain = Math.round((column ? boxH : boxW) * ratio) - PANE_GAP / 2;
-  const secondMain = (column ? boxH : boxW) - firstMain - PANE_GAP;
-
-  const rects = column
-    ? [[boxX, boxY, boxW, firstMain], [boxX, boxY + firstMain + PANE_GAP, boxW, secondMain]]
-    : [[boxX, boxY, firstMain, boxH], [boxX + firstMain + PANE_GAP, boxY, secondMain, boxH]];
-
-  for (const [entry, rect] of [[first, rects[0]], [second, rects[1]]]) {
-    const [x, y, w, h] = rect;
+  for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+    const entry = facing[slot];
+    const box = boxes[slot];
+    const x = box.x * CARD_W;
+    const y = box.y * CARD_H;
+    const w = box.w * CARD_W;
+    const h = box.h * CARD_H;
     if (w < 2 || h < 2) continue;
     // 每一栏自己有一点投影，让两栏看着是两张纸并排，而不是一张纸上划了条线。
     ctx.save();

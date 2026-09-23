@@ -298,6 +298,168 @@ test('拍快照之前也要记一次', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+group('7. 翻开一个组合：书从哪儿飞来，分栏怎么就位');
+
+// 点开一本书会演一次翻开：封面从架子上那一格飞到它落地的那一栏。点开一个组合
+// 原来什么都不演——书架一收，屏幕已经是另一副样子，中间换了什么没人看见。
+//
+// 组合的显示图上本来就画着两栏，每栏里是那一栏当前开着的那本书。所以翻开它就
+// 是让那两块各自起飞。这里钉两件事：那两块的位置只算一次（画图和动画问同一个
+// 函数），以及分栏是**滑**到组合那个比例上的，而且要等纸收干净才滑。
+
+const { comboPaneBoxes } = await import('../src/pdf/combo-cover.js');
+const { PdfWorkspace } = await import('../src/pdf/pdf-workspace.js');
+
+async function testAsync(name, fn) {
+  try { await fn(); passed++; console.log(`  ✅ ${name}`); }
+  catch (err) { failed++; console.log(`  ❌ ${name}\n     ${err.message}`); }
+}
+
+const comboOf = (extra) => comboFromWorkspace(workspace(extra), { id: 'c', name: 'n', now: 1 });
+
+test('两栏画在卡片里，各占一块，不重叠', () => {
+  const boxes = comboPaneBoxes(comboOf({ swapped: false, dividerRatio: 0.5 }));
+  for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+    const b = boxes[slot];
+    assert.ok(b.x >= 0 && b.y >= 0, '不能画到卡片外面去');
+    assert.ok(b.x + b.w <= 1 && b.y + b.h <= 1, '也不能溢出右边和下边');
+    assert.ok(b.w > 0.05 && b.h > 0.05, '一栏小到看不见，这张图就什么也没说');
+  }
+  const a = boxes[SLOTS.PRIMARY];
+  const b = boxes[SLOTS.SECONDARY];
+  assert.ok(a.x + a.w <= b.x + 1e-9, '两块得是并排的，不是叠着的');
+});
+
+test('左右对调过之后，宽的还是原来那一栏，只是画到了另一边', () => {
+  // dividerRatio 永远是 PRIMARY 的份额，跟它画在哪边无关。原来这里不分，于是
+  // 一套对调过的摆法，缩略图上两栏的宽窄正好是反的——而那张图要说的就是宽窄。
+  const wide = comboOf({ swapped: true, dividerRatio: 0.75 });
+  const boxes = comboPaneBoxes(wide);
+  assert.ok(boxes[SLOTS.PRIMARY].w > boxes[SLOTS.SECONDARY].w,
+    'PRIMARY 占了 0.75，它就该是宽的那一栏');
+  assert.ok(boxes[SLOTS.SECONDARY].x < boxes[SLOTS.PRIMARY].x,
+    '对调过，所以 SECONDARY 画在左边');
+});
+
+test('竖着分栏的组合，两块是上下摞的', () => {
+  const boxes = comboPaneBoxes(comboOf({ orientation: ORIENTATIONS.COLUMN, swapped: false }));
+  const a = boxes[SLOTS.PRIMARY];
+  const b = boxes[SLOTS.SECONDARY];
+  assert.ok(Math.abs(a.x - b.x) < 1e-9 && Math.abs(a.w - b.w) < 1e-9, '两块一样宽');
+  assert.ok(a.y + a.h <= b.y + 1e-9, '一块在另一块上面');
+});
+
+test('画那张图的和演那段动画的，问的是同一个函数', () => {
+  const cover = readFileSync(new URL('../src/pdf/combo-cover.js', import.meta.url), 'utf-8');
+  const body = cover.slice(cover.indexOf('export async function renderComboCover'));
+  assert.ok(body.includes('comboPaneBoxes(combo)'),
+    '图自己再算一遍的话，版面一改就只有一边跟着改，而那种错看着像动画飘了');
+  const ui = readFileSync(new URL('../src/pdf/pdf-workspace-ui.js', import.meta.url), 'utf-8');
+  assert.ok(ui.includes('comboPaneBoxes'), '飞行动画要从图上那一块起飞');
+  assert.ok(/playBookOpen\(\{/.test(ui.slice(ui.indexOf('function beginComboFlight'))),
+    '翻开组合走的该是翻开一本书那一段，不是另写一段像它的');
+});
+
+/** 一个把 DOM 那几片叶子桩掉、事务留真的工作区。 */
+function comboWorkspace(state) {
+  const ws = Object.create(PdfWorkspace.prototype);
+  const glides = [];
+  Object.assign(ws, {
+    state,
+    root: { clientWidth: 1200, clientHeight: 800 },
+    panes: { [SLOTS.PRIMARY]: { unload() {} }, [SLOTS.SECONDARY]: { unload() {} } },
+    scratchPanes: {},
+    pads: {},
+    _openTokens: {},
+    glides,
+    _rememberSlotView() {}, _resetOutline() {}, _invalidatePairCaches() {},
+    _resizePanes() {}, _layout() {}, _resolveNames() {}, _persist() {},
+    _setState(next) { this.state = next; },
+    // 开书这一步在别处测；这里要看的是它前后那两件事。
+    async showEntry() { return true; },
+    animateToRatio(target, opts) {
+      glides.push({ target, opts });
+      this.state = { ...this.state, dividerRatio: target };
+    },
+  });
+  return ws;
+}
+
+await testAsync('不给钩子时照老样子：分栏直接就是组合那个比例', async () => {
+  const ws = comboWorkspace(workspace({ dividerRatio: 0.3, swapped: false }));
+  const combo = comboOf({ dividerRatio: 0.7, swapped: false });
+  await ws.applyCombo(combo);
+  assert.equal(ws.glides.length, 0, '没人在看的时候不必演');
+  assert.equal(ws.state.dividerRatio, 0.7);
+});
+
+await testAsync('给了钩子：书先按此刻这副分栏落地，之后分栏才走过去', async () => {
+  const ws = comboWorkspace(workspace({ dividerRatio: 0.3, swapped: false }));
+  const combo = comboOf({ dividerRatio: 0.7, swapped: false });
+  let ratioWhenRevealed = null;
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const done = ws.applyCombo(combo, {
+    revealed: () => { ratioWhenRevealed = ws.state.dividerRatio; return gate; },
+  });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(ratioWhenRevealed, 0.3,
+    '书要按人此刻看到的那副分栏落地——先跳过去的话，书架一收就先闪一下');
+  assert.equal(ws.glides.length, 0, '纸还盖在上面，这时候滑是白滑');
+  release();
+  await done;
+  assert.equal(ws.glides.length, 1, '纸收掉了，这一下才有人看得见');
+  assert.equal(ws.state.dividerRatio, 0.7, '终点永远是组合里那个比例');
+});
+
+await testAsync('一套左右对调过的组合，两栏的宽窄不会在书架收起来那一瞬对调', async () => {
+  // 左栏此刻占 0.3（没对调，所以那是 PRIMARY）。组合是对调过的，PRIMARY 要画
+  // 到右边去——那么 PRIMARY 的份额得变成 0.7，左栏才还是 0.3。不换算的话，人
+  // 会看见两栏的宽窄在书架收起来的一瞬间翻过来，而飞过去的书是照着旧的那副
+  // 分栏量的终点。
+  const ws = comboWorkspace(workspace({ dividerRatio: 0.3, swapped: false }));
+  const combo = comboOf({ dividerRatio: 0.9, swapped: true });
+  let leftAtLanding = null;
+  await ws.applyCombo(combo, {
+    revealed: () => {
+      const r = ws.state.dividerRatio;
+      leftAtLanding = ws.state.swapped ? 1 - r : r;
+    },
+  });
+  assert.ok(Math.abs(leftAtLanding - 0.3) < 1e-9,
+    `落地时左栏应该还是 0.3，实际是 ${leftAtLanding}`);
+  assert.equal(ws.state.dividerRatio, 0.9, '滑完还是组合里那个数');
+});
+
+test('飞行的终点按屏幕位置取，不按 slot 取', () => {
+  const ui = readFileSync(new URL('../src/pdf/pdf-workspace-ui.js', import.meta.url), 'utf-8');
+  const body = ui.slice(ui.indexOf('function beginComboFlight'));
+  assert.ok(/screenSlots/.test(body),
+    '照 slot 飞的话，一套对调过的组合会让两本书各自飞到对面那一栏去');
+  assert.ok(/slotRect\?\.\(now\[after\.indexOf\(slot\)\]\)/.test(body));
+});
+
+await testAsync('那块百分比牌子不跟着冒出来：没人在拖它', async () => {
+  const ws = comboWorkspace(workspace({ dividerRatio: 0.3, swapped: false }));
+  await ws.applyCombo(comboOf({ dividerRatio: 0.7, swapped: false }), { revealed: () => {} });
+  assert.equal(ws.glides[0].opts?.badge, false);
+});
+
+await testAsync('比例本来就一样就不演：一段原地不动的动画只是一次延迟', async () => {
+  const ws = comboWorkspace(workspace({ dividerRatio: 0.5, swapped: false }));
+  await ws.applyCombo(comboOf({ dividerRatio: 0.5, swapped: false }), { revealed: () => {} });
+  assert.equal(ws.glides.length, 0);
+});
+
+await testAsync('钩子自己出事也不能把摆法卡在半路', async () => {
+  const ws = comboWorkspace(workspace({ dividerRatio: 0.3, swapped: false }));
+  await ws.applyCombo(comboOf({ dividerRatio: 0.7, swapped: false }), {
+    revealed: () => { throw new Error('动画收不了场'); },
+  });
+  assert.equal(ws.state.dividerRatio, 0.7, '动画没演成，摆法也得是对的');
+});
+
+// ═══════════════════════════════════════════════════════════════
 console.log('\n═══════════════════════════════════════════════════════════════');
 console.log(`  ${passed} passed, ${failed} failed`);
 console.log('═══════════════════════════════════════════════════════════════');

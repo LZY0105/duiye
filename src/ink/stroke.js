@@ -9,6 +9,8 @@
 //
 // Pure and DOM-free so geometry, bounds and hit-testing are testable in Node.
 
+import { deserializeShape, serializeShape, translateShape } from './shape-geometry.js';
+
 export const INK_TOOLS = Object.freeze({
   PEN: 'pen',
   PENCIL: 'pencil',
@@ -37,7 +39,9 @@ function nextId() {
   return `s${Date.now().toString(36)}${idCounter.toString(36)}`;
 }
 
-export function createStroke({ tool = INK_TOOLS.PEN, color = '#111827', width, opacity } = {}) {
+export function createStroke({
+  tool = INK_TOOLS.PEN, color = '#111827', width, opacity, fill = null, shape = null,
+} = {}) {
   const defaults = TOOL_DEFAULTS[tool] || TOOL_DEFAULTS[INK_TOOLS.PEN];
   return {
     id: nextId(),
@@ -45,6 +49,20 @@ export function createStroke({ tool = INK_TOOLS.PEN, color = '#111827', width, o
     color,
     width: Number.isFinite(width) ? width : defaults.width,
     opacity: Number.isFinite(opacity) ? opacity : defaults.opacity,
+    /**
+     * 填充色，只有形状用得上，手写笔迹永远是 null。
+     *
+     * 放在笔迹上而不是「形状」上：填充是**画出来什么样**的一部分，和颜色、粗细
+     * 同级；而形状只管「这些点是怎么算出来的」。渲染器因此不必认识形状。
+     */
+    fill: fill || null,
+    /**
+     * 这条笔迹是从哪个形状来的（shape-geometry.js 的那个结构），手画的是 null。
+     *
+     * 带着它，这条笔迹之后还能被点中、亮出圆点、拖一个顶点重新算一遍。不带的
+     * 话，形状一旦落盘就只剩一串点，和手抖出来的线再也分不开。
+     */
+    shape: shape || null,
     points: [],
     // Kept incrementally so hit-testing and repaint regions never rescan points.
     bounds: null,
@@ -67,6 +85,10 @@ export function cloneStroke(stroke, dx = 0, dy = 0) {
     color: stroke.color,
     width: stroke.width,
     opacity: stroke.opacity,
+    fill: stroke.fill || null,
+    // 形状跟着挪：复制出来的那个圆还是一个圆，点一下照样亮出四颗点。不挪的话，
+    // 它的圆点会留在原来那一份身上，拖起来改的是另一个东西。
+    shape: stroke.shape ? translateShape(stroke.shape, dx, dy) : null,
     points: stroke.points.map(pt => ({ x: pt.x + dx, y: pt.y + dy, p: pt.p })),
     bounds: null,
   };
@@ -243,6 +265,10 @@ export function serializeStroke(stroke) {
     color: stroke.color,
     width: stroke.width,
     opacity: stroke.opacity,
+    // 两个都只在有的时候才写。手写笔迹占了页面上的绝大多数，给每一条都塞两个
+    // null 进去，存盘会白白长一截。
+    ...(stroke.fill ? { fill: stroke.fill } : null),
+    ...(stroke.shape ? { shape: serializeShape(stroke.shape) } : null),
     // Rounded to 0.01 document units: far finer than any display can show, and
     // roughly halves the stored size versus full float precision.
     points: stroke.points.map(pt => [round2(pt.x), round2(pt.y), round2(pt.p)]),
@@ -256,6 +282,8 @@ export function deserializeStroke(json) {
     color: json.color || '#111827',
     width: Number(json.width) || TOOL_DEFAULTS[INK_TOOLS.PEN].width,
     opacity: Number.isFinite(json.opacity) ? json.opacity : 1,
+    fill: json.fill || null,
+    shape: json.shape ? deserializeShape(json.shape) : null,
     points: (json.points || []).map(p => (
       Array.isArray(p) ? { x: p[0], y: p[1], p: p[2] } : { x: p.x, y: p.y, p: p.p }
     )),
