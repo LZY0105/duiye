@@ -387,6 +387,7 @@ export class PdfWorkspace {
     };
     this.agentPanel = createAgentPanel(this.root, {
       onOpen: () => this.openAgentForActiveDocument(),
+      onSubmit: (question) => this.submitAgentQuestion(question),
       onClose: () => { this.agentTarget = null; },
     });
 
@@ -3512,16 +3513,7 @@ export class PdfWorkspace {
 
   openAgentForActiveDocument() {
     const slot = this._activeAgentSlot();
-    if (slot) this.showAgentForPage(slot);
-  }
-
-  _isAgentTargetCurrent(target) {
-    return this.agentTarget === target
-      && this.panes[target.slot]?.doc === target.doc;
-  }
-
-  async showAgentForPage(slot) {
-    const pane = this.panes[slot];
+    const pane = slot ? this.panes[slot] : null;
     if (!pane?.isLoaded()) return;
 
     const target = {
@@ -3530,11 +3522,31 @@ export class PdfWorkspace {
       page: pane.state.pageNumber,
       documentName: pane.meta?.name || '当前文档',
     };
+
     this.agentTarget = target;
     this.agentPanel?.open({
       documentName: target.documentName,
       page: target.page,
     });
+  }
+
+  _isAgentTargetCurrent(target) {
+    return this.agentTarget === target
+      && this.panes[target.slot]?.doc === target.doc
+      && this.panes[target.slot]?.state.pageNumber === target.page;
+  }
+
+  async submitAgentQuestion(userQuestion) {
+    const target = this.agentTarget;
+    if (!target) return;
+
+    if (!this._isAgentTargetCurrent(target)) {
+      this.agentPanel?.showNotice(
+        '页面已经切换，请关闭 Agent 后在当前页重新打开。',
+      );
+      return;
+    }
+
     this.agentPanel?.showLoading();
 
     try {
@@ -3546,7 +3558,14 @@ export class PdfWorkspace {
         { needReadable: true },
       );
 
-      if (!this._isAgentTargetCurrent(target)) return;
+      if (this.agentTarget !== target) return;
+
+      if (!this._isAgentTargetCurrent(target)) {
+        this.agentPanel?.showNotice(
+          '页面已经切换，请关闭 Agent 后在当前页重新打开。',
+        );
+        return;
+      }
       if (!result.text || result.origin === TEXT_ORIGIN.NONE) {
         this.agentPanel?.showNotice(
           '当前页文字无法可靠提取，暂不调用 Agent。',
@@ -3559,10 +3578,18 @@ export class PdfWorkspace {
         version: 1,
         page: target.page,
         questionText: result.text,
+        userQuestion,
         textOrigin: result.origin,
       });
 
-      if (!this._isAgentTargetCurrent(target)) return;
+      if (this.agentTarget !== target) return;
+
+      if (!this._isAgentTargetCurrent(target)) {
+        this.agentPanel?.showNotice(
+          '页面已经切换，请关闭 Agent 后在当前页重新打开。',
+        );
+        return;
+      }
       this.agentPanel?.showResult({
         ...answer,
         textOrigin: result.origin,

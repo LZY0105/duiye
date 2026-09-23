@@ -238,12 +238,19 @@ std::optional<std::string> answerFromCompletion(const std::string& body) {
 }
 
 Json createCompletionRequest(const Json& payload, const AgentConfig& config) {
-    const std::string questionText = payload.at("questionText").get<std::string>();
+    const std::string pageText =
+        payload.at("questionText").get<std::string>();
     const long long page = payload.at("page").get<long long>();
-    const std::string origin = payload.at("textOrigin").get<std::string>();
+    const std::string origin =
+        payload.at("textOrigin").get<std::string>();
 
-    const std::string userPrompt = "以下是 PDF 第 " + std::to_string(page)
-        + " 页提取的文字（来源：" + origin + "）：\n\n" + questionText;
+    std::string userPrompt = "以下是 PDF 第 " + std::to_string(page)
+        + " 页提取的文字（来源：" + origin + "）：\n\n" + pageText;
+
+    if (payload.contains("userQuestion")) {
+        userPrompt += "\n\n用户问题：\n"
+            + trim(payload.at("userQuestion").get<std::string>());
+    }
 
     return Json{
         {"model", config.model},
@@ -253,9 +260,11 @@ Json createCompletionRequest(const Json& payload, const AgentConfig& config) {
         {"messages", Json::array({
             {
                 {"role", "system"},
-                {"content", "你是学习资料助手。只依据用户提供的 PDF 当前页文字回答，使用中文。"
-                            "若页面存在唯一明确问题，给出简洁的解题思路；若有多题或信息不足，"
-                            "说明不能唯一确定，不得编造页面外事实。"},
+                {"content",
+                    "你是学习资料助手。只依据用户提供的 PDF 当前页文字回答，使用中文。"
+                    "如果提供了“用户问题”，直接回答该问题并给出必要依据；"
+                    "如果没有提供问题，则分析页面中唯一明确的问题并给出简洁解题思路。"
+                    "若页面包含多题、依据不足或无法确定，必须明确说明，不得编造页面外事实。"},
             },
             {
                 {"role", "user"},
@@ -287,6 +296,33 @@ bool validPayload(const Json& payload, httplib::Response& response, const std::s
     if (text.empty() || text.size() > kMaxQuestionBytes) {
         writeError(response, 400, "invalid_question_text", "questionText 长度必须在 1 到 32768 字节之间。", origin);
         return false;
+    }
+
+    if (payload.contains("userQuestion")) {
+        if (!payload["userQuestion"].is_string()) {
+            writeError(
+                response,
+                400,
+                "invalid_user_question",
+                "userQuestion 必须是字符串。",
+                origin
+            );
+            return false;
+        }
+
+        const std::string userQuestion =
+            trim(payload["userQuestion"].get<std::string>());
+
+        if (userQuestion.empty() || userQuestion.size() > 2048) {
+            writeError(
+                response,
+                400,
+                "invalid_user_question",
+                "userQuestion 长度必须在 1 到 2048 字节之间。",
+                origin
+            );
+            return false;
+        }
     }
 
     if (!payload.contains("textOrigin") || !payload["textOrigin"].is_string()
