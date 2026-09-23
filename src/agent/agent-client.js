@@ -73,8 +73,13 @@ export async function requestAgent({
   version = 1,
   page,
   questionText,
+  userQuestion,
   textOrigin,
 }) {
+  const normalizedUserQuestion = typeof userQuestion === 'string'
+    ? userQuestion.trim()
+    : '';
+
   try {
     const response = await fetchWithTimeout(`${AGENT_PROXY_URL}/v1/agent/answer`, {
       method: 'POST',
@@ -86,6 +91,9 @@ export async function requestAgent({
         version,
         page,
         questionText,
+        ...(normalizedUserQuestion
+          ? { userQuestion: normalizedUserQuestion }
+          : {}),
         textOrigin,
       }),
     }, REQUEST_TIMEOUT_MS);

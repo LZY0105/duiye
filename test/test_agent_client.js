@@ -50,6 +50,35 @@ await check('forwards the page payload to the loopback proxy', async () => {
   assert.deepEqual(result, { version: 1, ok: true, source: 'cpp-mock', answer: 'ok' });
 });
 
+await check('forwards a trimmed custom question separately from page text', async () => {
+  let requestBody;
+  globalThis.fetch = async (_url, options) => {
+    requestBody = JSON.parse(options.body);
+    return jsonResponse({
+      version: 1,
+      ok: true,
+      source: 'cpp-mock',
+      answer: '100 摄氏度',
+    });
+  };
+
+  const result = await client.requestAgent({
+    page: 3,
+    questionText: '水在标准大气压下的沸点是 100 摄氏度。',
+    userQuestion: '  水的沸点是多少？  ',
+    textOrigin: 'LAYER',
+  });
+
+  assert.deepEqual(requestBody, {
+    version: 1,
+    page: 3,
+    questionText: '水在标准大气压下的沸点是 100 摄氏度。',
+    userQuestion: '水的沸点是多少？',
+    textOrigin: 'LAYER',
+  });
+  assert.equal(result.answer, '100 摄氏度');
+});
+
 await check('keeps a configured proxy error readable to the user', async () => {
   globalThis.fetch = async () => jsonResponse({
     version: 1,

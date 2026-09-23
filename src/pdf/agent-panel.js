@@ -31,7 +31,10 @@ function metadataLabel(metadata = {}) {
  * DOM and lifecycle, while this module should remain independent of document
  * loading, text quality and the eventual C++ transport.
  */
-export function createAgentPanel(root, { onOpen, onClose } = {}) {
+export function createAgentPanel(
+  root,
+  { onOpen, onClose, onSubmit } = {},
+) {
   const layer = document.createElement('div');
   layer.className = 'pdf-agent-layer';
   layer.innerHTML = `
@@ -67,6 +70,18 @@ export function createAgentPanel(root, { onOpen, onClose } = {}) {
       <div class="pdf-agent-dialog-content"
            data-role="agent-content"
            aria-live="polite"></div>
+      <form class="pdf-agent-form" data-role="agent-form">
+        <textarea class="pdf-agent-question"
+                  data-role="agent-question"
+                  rows="2"
+                  maxlength="500"
+                  aria-label="输入关于当前页的问题"
+                  placeholder="输入关于当前页的问题……"></textarea>
+        <button type="submit"
+                class="pdf-agent-submit"
+                data-role="agent-submit"
+                disabled>发送</button>
+      </form>
     </section>
   `;
   root.appendChild(layer);
@@ -76,9 +91,13 @@ export function createAgentPanel(root, { onOpen, onClose } = {}) {
   const closeButton = layer.querySelector('[data-role="agent-close"]');
   const metaEl = layer.querySelector('[data-role="agent-meta"]');
   const contentEl = layer.querySelector('[data-role="agent-content"]');
+  const form = layer.querySelector('[data-role="agent-form"]');
+  const questionInput = layer.querySelector('[data-role="agent-question"]');
+  const submitButton = layer.querySelector('[data-role="agent-submit"]');
 
   let available = false;
   let opened = false;
+  let busy = false;
   let metadata = {};
   let previousFocus = null;
 
@@ -87,27 +106,42 @@ export function createAgentPanel(root, { onOpen, onClose } = {}) {
     dialog.hidden = !opened;
   };
 
+  const syncForm = () => {
+    const hasQuestion = Boolean(questionInput.value.trim());
+    questionInput.disabled = busy;
+    submitButton.disabled = busy || !hasQuestion;
+    submitButton.textContent = busy ? '处理中…' : '发送';
+  };
+
   const renderMetadata = () => {
     metaEl.textContent = metadataLabel(metadata);
   };
 
   const open = (nextMetadata = {}) => {
     if (!available) return;
-    metadata = { ...nextMetadata };
     previousFocus = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
+    metadata = { ...nextMetadata };
     opened = true;
+    busy = false;
+    contentEl.dataset.state = 'notice';
+    contentEl.textContent = '输入一个关于当前页的问题。';
     renderMetadata();
     syncVisibility();
-    closeButton.focus();
+    syncForm();
+    questionInput.focus();
   };
 
   const close = ({ notify = true } = {}) => {
+    if (!opened) return;
     opened = false;
+    busy = false;
     metadata = {};
     contentEl.replaceChildren();
     contentEl.dataset.state = '';
+    questionInput.value = '';
+    syncForm();
     syncVisibility();
     if (notify) onClose?.();
     if (available) fab.focus();
@@ -117,6 +151,17 @@ export function createAgentPanel(root, { onOpen, onClose } = {}) {
 
   fab.addEventListener('click', () => onOpen?.());
   closeButton.addEventListener('click', () => close());
+
+  questionInput.addEventListener('input', syncForm);
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+
+    const question = questionInput.value.trim();
+    if (!question || busy) return;
+
+    onSubmit?.(question);
+  });
 
   return {
     setAvailable(value) {
@@ -130,30 +175,42 @@ export function createAgentPanel(root, { onOpen, onClose } = {}) {
     close,
 
     showLoading(nextMetadata = null) {
+      busy = true;
+
       if (nextMetadata) {
         metadata = { ...metadata, ...nextMetadata };
         renderMetadata();
       }
       contentEl.dataset.state = 'loading';
       contentEl.textContent = '正在检查当前页文字……';
+
+      syncForm();
     },
 
     showResult(result = {}) {
+      busy = false;
+
       if (result.textOrigin) {
         metadata = { ...metadata, textOrigin: result.textOrigin };
         renderMetadata();
       }
       contentEl.dataset.state = result.ok ? 'result' : 'error';
       contentEl.textContent = result.answer || 'Agent 暂时没有返回结果。';
+
+      syncForm();
     },
 
     showNotice(message, nextMetadata = null) {
+      busy = false;
+
       if (nextMetadata) {
         metadata = { ...metadata, ...nextMetadata };
         renderMetadata();
       }
       contentEl.dataset.state = 'notice';
       contentEl.textContent = message || '';
+
+      syncForm();
     },
 
     destroy() {
