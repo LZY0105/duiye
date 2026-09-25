@@ -1,3 +1,5 @@
+@import "katex/dist/katex.min.css";
+@import "markdown-it-texmath/css/texmath.css";
 /* PDF workspace — Apple Liquid Glass dual-document layout, animated resizing, divider, outline, library. */
 
 /* The workspace fills what is left between the top of the screen and the dock.
@@ -408,6 +410,56 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
 }
 
 .pdf-agent-dialog-content[data-state="error"] { color: #b42318; }
+
+.pdf-agent-dialog-content[data-state="result"],
+.pdf-agent-dialog-content[data-state="error"] {
+  white-space: normal;
+}
+
+.pdf-agent-dialog-content > :first-child {
+  margin-top: 0;
+}
+
+.pdf-agent-dialog-content > :last-child {
+  margin-bottom: 0;
+}
+
+.pdf-agent-dialog-content p {
+  margin: 0 0 0.8rem;
+}
+
+.pdf-agent-dialog-content ul,
+.pdf-agent-dialog-content ol {
+  margin: 0 0 0.8rem;
+  padding-inline-start: 1.5rem;
+}
+
+.pdf-agent-dialog-content li + li {
+  margin-top: 0.3rem;
+}
+
+.pdf-agent-dialog-content pre {
+  overflow: auto;
+  padding: 0.75rem;
+  border-radius: 8px;
+  background: #f3f4f6;
+  white-space: pre;
+}
+
+.pdf-agent-dialog-content code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.pdf-agent-dialog-content .katex {
+  overflow-wrap: normal;
+}
+
+.pdf-agent-dialog-content .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.25rem 0;
+}
 
 .pdf-agent-form {
   flex: 0 0 auto;
