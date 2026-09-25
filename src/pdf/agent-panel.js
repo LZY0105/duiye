@@ -5,6 +5,8 @@
 // workspace supplies metadata and result text through the small imperative API
 // returned by createAgentPanel().
 
+import { renderAgentAnswer } from '../agent/answer-renderer.js';
+
 const SOURCE_LABELS = Object.freeze({
   LAYER: 'PDF 文字层',
   OCR: 'OCR',
@@ -195,7 +197,7 @@ export function createAgentPanel(
         renderMetadata();
       }
       contentEl.dataset.state = result.ok ? 'result' : 'error';
-      contentEl.textContent = result.answer || 'Agent 暂时没有返回结果。';
+      contentEl.innerHTML = renderAgentAnswer(result.answer || 'Agent 暂时没有返回结果。',);
 
       syncForm();
     },

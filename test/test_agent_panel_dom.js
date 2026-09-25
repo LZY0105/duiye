@@ -121,6 +121,44 @@ await test('disables the form while loading and restores it after a result', () 
   view.panel.destroy();
 });
 
+await test('renders Markdown and math in an Agent answer', () => {
+  const view = mount();
+  view.fab.click();
+
+  view.panel.showResult({
+    ok: true,
+    answer: '**粗体** 和公式 $x^2$',
+  });
+
+  const content = document.querySelector('[data-role="agent-content"]');
+  assert.equal(content.querySelector('strong')?.textContent, '粗体');
+  assert.ok(content.querySelector('.katex'), 'the formula was rendered');
+
+  view.panel.destroy();
+});
+
+await test('does not create active content from an Agent answer', () => {
+  const view = mount();
+  view.fab.click();
+
+  view.panel.showResult({
+    ok: true,
+    answer: [
+      '<img src="x" onerror="alert(1)"><script>alert(2)</script>',
+      '[外部链接](https://example.com/)',
+      '![外部图片](https://example.com/a.png)',
+    ].join('\n'),
+  });
+
+  const content = document.querySelector('[data-role="agent-content"]');
+  assert.equal(
+    content.querySelector('a, img, script, [onerror], [onclick]'),
+    null,
+  );
+
+  view.panel.destroy();
+});
+
 await test('closing clears the question and notifies the owner', () => {
   const view = mount();
   view.fab.click();

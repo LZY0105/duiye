@@ -65,7 +65,10 @@
     "@capacitor/app": "^8.1.0",
     "@capacitor/filesystem": "^8.1.2",
     "@capacitor/share": "^8.0.1",
+    "dompurify": "^3.4.16",
     "idb": "^8.0.0",
+    "katex": "^0.18.9",
+    "markdown-it": "^15.0.2",
     "pdfjs-dist": "4.2.67"
   },
   "devDependencies": {
