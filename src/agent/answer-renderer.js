@@ -1,38 +1,47 @@
 import DOMPurify from 'dompurify';
-import katex from 'katex';
+import renderMathInElement from 'katex/contrib/auto-render';
 import MarkdownIt from 'markdown-it';
-import texmath from 'markdown-it-texmath';
 
 const markdown = new MarkdownIt({
-    html: false,
-}).use(texmath, {
-    engine: katex,
-    delimiters: 'dollars',
-    katexOptions: {
-        throwOnError: false,
-    },
+  html: false,
 }).disable([
-    'link',
-    'image',
-    'autolink',
+  'link',
+  'image',
+  'autolink',
 ]);
 
-export function renderAgentAnswer(answer) {
-    const rendered = markdown.render(String(answer ?? ''));
+const sanitize = (html) => DOMPurify.sanitize(html, {
+  USE_PROFILES: {
+    html: true,
+    mathMl: true,
+  },
+  FORBID_TAGS: [
+    'a',
+    'img',
+  ],
+  FORBID_ATTR: [
+    'href',
+    'src',
+    'srcset',
+  ],
+});
 
-    return DOMPurify.sanitize(rendered, {
-        USE_PROFILES: {
-            html: true,
-            mathMl: true,
-        },
-        FORBID_TAGS: [
-            'a',
-            'img',
-        ],
-        FORBID_ATTR: [
-            'href',
-            'src',
-            'srcset',
-        ],
-    });
+export function renderAgentAnswer(answer) {
+  const rendered = sanitize(
+    markdown.render(String(answer ?? '')),
+  );
+
+  const container = document.createElement('div');
+  container.innerHTML = rendered;
+
+  renderMathInElement(container, {
+    delimiters: [
+      { left: '$$', right: '$$', display: true },
+      { left: '$', right: '$', display: false },
+    ],
+    throwOnError: false,
+    trust: false,
+  });
+
+  return sanitize(container.innerHTML);
 }

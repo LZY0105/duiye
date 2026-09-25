@@ -69,7 +69,6 @@
     "idb": "^8.0.0",
     "katex": "^0.18.9",
     "markdown-it": "^15.0.2",
-    "markdown-it-texmath": "^1.0.0",
     "pdfjs-dist": "4.2.67"
   },
   "devDependencies": {
