@@ -79,6 +79,70 @@ await check('forwards a trimmed custom question separately from page text', asyn
   assert.equal(result.answer, '100 摄氏度');
 });
 
+await check('forwards v2 conversation messages without local metadata', async () => {
+  let requestBody;
+
+  globalThis.fetch = async (_url, options) => {
+    requestBody = JSON.parse(options.body);
+    return jsonResponse({
+      version: 2,
+      ok: true,
+      source: 'cpp-mock',
+      answer: '后续回答',
+    });
+  };
+
+  const result = await client.requestAgent({
+    version: 2,
+    page: 4,
+    questionText: '当前页包含容斥原理公式。',
+    textOrigin: 'LAYER',
+    messages: [
+      {
+        id: 'request-1:user',
+        role: 'user',
+        content: '  第一个公式表示什么？  ',
+        status: 'done',
+      },
+      {
+        id: 'request-1:assistant',
+        role: 'assistant',
+        content: '它表示交集补集的大小。',
+        status: 'done',
+      },
+      {
+        id: 'request-2:user',
+        role: 'user',
+        content: '为什么符号正负交替？',
+        status: 'done',
+      },
+    ],
+  });
+
+  assert.deepEqual(requestBody, {
+    version: 2,
+    page: 4,
+    questionText: '当前页包含容斥原理公式。',
+    messages: [
+      {
+        role: 'user',
+        content: '第一个公式表示什么？',
+      },
+      {
+        role: 'assistant',
+        content: '它表示交集补集的大小。',
+      },
+      {
+        role: 'user',
+        content: '为什么符号正负交替？',
+      },
+    ],
+    textOrigin: 'LAYER',
+  });
+  assert.equal(result.version, 2);
+  assert.equal(result.answer, '后续回答');
+});
+
 await check('keeps a configured proxy error readable to the user', async () => {
   globalThis.fetch = async () => jsonResponse({
     version: 1,
