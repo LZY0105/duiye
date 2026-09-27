@@ -26,6 +26,34 @@ function metadataLabel(metadata = {}) {
   return parts.filter(Boolean).join(' · ');
 }
 
+function createMessageElement(
+  role,
+  content,
+  { pending = false, status = 'done' } = {},
+) {
+  const messageEl = document.createElement('article');
+  messageEl.className = `pdf-agent-message is-${role}`;
+  messageEl.dataset.role = 'agent-message';
+  messageEl.dataset.messageRole = role;
+
+  if (pending) messageEl.classList.add('is-pending');
+
+  if (status === 'error') messageEl.classList.add('is-error');
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'pdf-agent-message-body';
+
+  if (role === 'assistant' && !pending) {
+    bodyEl.innerHTML = renderAgentAnswer(content);
+  } else {
+    // 用户消息和加载提示永远只作为文本处理。
+    bodyEl.textContent = content;
+  }
+
+  messageEl.appendChild(bodyEl);
+  return messageEl;
+}
+
 /**
  * Mounts the workspace-level Agent trigger and dialog.
  *
@@ -119,6 +147,56 @@ export function createAgentPanel(
     metaEl.textContent = metadataLabel(metadata);
   };
 
+  const renderConversation = (conversation = {}) => {
+    const messages = Array.isArray(conversation.messages)
+      ? conversation.messages
+      : [];
+    const fragment = document.createDocumentFragment();
+
+    for (const message of messages) {
+      if (
+        message?.role !== 'user'
+        && message?.role !== 'assistant'
+      ) {
+        continue;
+      }
+
+      const content = String(message.content ?? '').trim();
+      if (!content) continue;
+
+      fragment.appendChild(
+        createMessageElement(
+          message.role,
+          content,
+          { status: message.status },
+        ),
+      );
+    }
+
+    if (conversation.pendingRequestId) {
+      fragment.appendChild(
+        createMessageElement(
+          'assistant',
+          'Agent 正在思考……',
+          { pending: true },
+        ),
+      );
+    }
+
+    busy = Boolean(conversation.pendingRequestId);
+
+    if (fragment.childNodes.length === 0) {
+      contentEl.dataset.state = 'notice';
+      contentEl.textContent = '输入一个关于当前页的问题。';
+    } else {
+      contentEl.dataset.state = 'conversation';
+      contentEl.replaceChildren(fragment);
+      contentEl.scrollTop = contentEl.scrollHeight;
+    }
+
+    syncForm();
+  };
+
   const open = (nextMetadata = {}) => {
     if (!available) return;
     previousFocus = document.activeElement instanceof HTMLElement
@@ -163,6 +241,8 @@ export function createAgentPanel(
     if (!question || busy) return;
 
     onSubmit?.(question);
+    questionInput.value = '';
+    syncForm();
   });
 
   return {
@@ -175,6 +255,15 @@ export function createAgentPanel(
     open,
 
     close,
+
+    showConversation(conversation = {}, nextMetadata = null) {
+      if (nextMetadata) {
+        metadata = { ...metadata, ...nextMetadata };
+        renderMetadata();
+      }
+
+      renderConversation(conversation);
+    },
 
     showLoading(nextMetadata = null) {
       busy = true;

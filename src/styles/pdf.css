@@ -415,6 +415,59 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
   white-space: normal;
 }
 
+.pdf-agent-dialog-content[data-state="conversation"] {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.75rem;
+  white-space: normal;
+}
+
+.pdf-agent-message {
+  box-sizing: border-box;
+  max-width: 92%;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #fff;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.pdf-agent-message.is-user {
+  align-self: flex-end;
+  border-color: #bfdbfe;
+  background: #eaf2ff;
+}
+
+.pdf-agent-message.is-assistant {
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.pdf-agent-message.is-pending {
+  color: #6b7280;
+  font-style: italic;
+}
+
+.pdf-agent-message.is-error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b42318;
+}
+
+.pdf-agent-message-body > :first-child {
+  margin-top: 0;
+}
+
+.pdf-agent-message-body > :last-child {
+  margin-bottom: 0;
+}
+
+.pdf-agent-message.is-user .pdf-agent-message-body {
+  white-space: pre-wrap;
+}
+
 .pdf-agent-dialog-content > :first-child {
   margin-top: 0;
 }

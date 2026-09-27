@@ -98,6 +98,9 @@ await test('trims and submits a custom question', () => {
 
   assert.deepEqual(view.submitted, ['水的沸点是多少？']);
 
+  assert.equal(view.input.value, '');
+  assert.equal(view.submit.disabled, true);
+
   view.panel.destroy();
 });
 
@@ -155,6 +158,96 @@ await test('does not create active content from an Agent answer', () => {
     content.querySelector('a, img, script, [onerror], [onclick]'),
     null,
   );
+
+  view.panel.destroy();
+});
+
+await test('renders a multi-message conversation safely', () => {
+  const view = mount();
+  view.fab.click();
+
+  view.panel.showConversation({
+    messages: [
+      {
+        role: 'user',
+        content: '<img src="x" onerror="alert(1)">解释这个公式',
+      },
+      {
+        role: 'assistant',
+        content: '**容斥原理**使用公式 $x^2$。',
+      },
+    ],
+    pendingRequestId: null,
+  });
+
+  const messages = [
+    ...document.querySelectorAll('[data-role="agent-message"]'),
+  ];
+
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].dataset.messageRole, 'user');
+  assert.match(messages[0].textContent, /<img/);
+  assert.equal(messages[0].querySelector('img'), null);
+
+  assert.equal(messages[1].dataset.messageRole, 'assistant');
+  assert.equal(messages[1].querySelector('strong')?.textContent, '容斥原理');
+  assert.ok(messages[1].querySelector('.katex'));
+
+  view.panel.destroy();
+});
+
+await test('shows a pending reply and disables the composer', () => {
+  const view = mount();
+  view.fab.click();
+
+  view.panel.showConversation({
+    messages: [
+      {
+        role: 'user',
+        content: '为什么符号正负交替？',
+      },
+    ],
+    pendingRequestId: 'request-1',
+  });
+
+  const pending = document.querySelector(
+    '[data-role="agent-message"].is-pending',
+  );
+
+  assert.match(pending?.textContent || '', /正在思考/);
+  assert.equal(view.input.disabled, true);
+  assert.equal(view.submit.disabled, true);
+  assert.equal(view.submit.textContent, '处理中…');
+
+  view.panel.destroy();
+});
+
+await test('marks failed assistant messages as errors', () => {
+  const view = mount();
+  view.fab.click();
+
+  view.panel.showConversation({
+    messages: [
+      {
+        role: 'user',
+        content: '解释这一页',
+        status: 'done',
+      },
+      {
+        role: 'assistant',
+        content: 'Agent 处理失败。',
+        status: 'error',
+      },
+    ],
+    pendingRequestId: null,
+  });
+
+  const errorMessage = document.querySelector(
+    '[data-role="agent-message"][data-message-role="assistant"]',
+  );
+
+  assert.equal(errorMessage?.classList.contains('is-error'), true);
+  assert.match(errorMessage?.textContent || '', /处理失败/);
 
   view.panel.destroy();
 });
