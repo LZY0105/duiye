@@ -395,6 +395,7 @@ export class PdfWorkspace {
     this.agentPanel = createAgentPanel(this.root, {
       onOpen: () => this.openAgentForActiveDocument(),
       onSubmit: (question) => this.submitAgentQuestion(question),
+      onClear: () => this.clearAgentConversation(),
       onClose: () => { this.agentTarget = null; },
     });
 
@@ -416,7 +417,12 @@ export class PdfWorkspace {
     for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
       const host = this.elSlots[slot].querySelector('[data-role="pane"]');
       this.panes[slot] = new PdfPane(host, {
-        onStateChange: () => { this._syncSlotChrome(slot); this._persist(); },
+        onStateChange: () => {
+          this._syncSlotChrome(slot);
+          this._persist();
+          // 翻页即收起 Agent：面板上那一轮属于上一页的会话，不能留在新页上。
+          this._syncAgentTargetPage(slot);
+        },
         onFocus: () => this._markActive(slot),
         // 笔一落到纸上，工具栏就该让开——前提是人在设置里要过这件事。
         onInkDraw: () => this.toolbar?.minimizeOnDraw?.(),
@@ -3552,6 +3558,28 @@ export class PdfWorkspace {
       && this.panes[target.slot]?.state.pageNumber === target.page;
   }
 
+  /**
+   * 翻页就把 Agent 收起来。
+   *
+   * 会话是按「文档页」分区的，面板上那一轮对话属于它打开时的那一页。翻到下一页
+   * 还留着它，等于把上一页的历史挂在这一页上。
+   *
+   * 这个函数挂在窗格的 onStateChange 上，而那一条链在缩放、滚动、落墨的每一帧
+   * 都会响——所以这里先比页码，只有页码真的换了才动。缩放和滚动不是换会话。
+   */
+  _syncAgentTargetPage(slot) {
+    const target = this.agentTarget;
+    if (!target || target.slot !== slot) return;
+
+    const pane = this.panes[slot];
+    if (!pane?.isLoaded() || pane.doc !== target.doc) {
+      this._closeAgentPanel();
+      return;
+    }
+
+    if (pane.state?.pageNumber !== target.page) this._closeAgentPanel();
+  }
+
   _showAgentConversation(sessionKey, nextMetadata = null) {
     const activeTarget = this.agentTarget;
 
@@ -3566,6 +3594,27 @@ export class PdfWorkspace {
     this.agentPanel?.showConversation(
       this.agentConversations.get(sessionKey),
       nextMetadata,
+    );
+  }
+
+  /**
+   * 清空当前文档当前页的会话。
+   *
+   * 只动这一条 sessionKey：隔壁页、另一本书都不受影响。有请求在飞的时候不清——
+   * 那会让回答回来时落在一个已经被抹掉的会话上。落盘由 store 负责，这里随后
+   * 按 store 重画一次，保证面板显示的与会话里存的完全一致。
+   */
+  clearAgentConversation() {
+    const target = this.agentTarget;
+    if (!target) return;
+
+    if (this.agentConversations.get(target.sessionKey).pendingRequestId) {
+      return;
+    }
+
+    this.agentConversations.clear(target.sessionKey);
+    this.agentPanel?.showConversation(
+      this.agentConversations.get(target.sessionKey),
     );
   }
 

@@ -63,7 +63,7 @@ function createMessageElement(
  */
 export function createAgentPanel(
   root,
-  { onOpen, onClose, onSubmit } = {},
+  { onOpen, onClose, onSubmit, onClear } = {},
 ) {
   const layer = document.createElement('div');
   layer.className = 'pdf-agent-layer';
@@ -91,11 +91,18 @@ export function createAgentPanel(
           <h2 id="pdf-agent-dialog-title">Agent</h2>
           <div class="pdf-agent-dialog-meta" data-role="agent-meta"></div>
         </div>
-        <button type="button"
-                class="pdf-agent-dialog-close"
-                data-role="agent-close"
-                aria-label="关闭 Agent 对话框"
-                title="关闭">×</button>
+        <div class="pdf-agent-dialog-actions">
+          <button type="button"
+                  class="pdf-agent-dialog-clear"
+                  data-role="agent-clear"
+                  aria-label="清空当前页的 Agent 对话"
+                  title="清空当前页的对话">清空</button>
+          <button type="button"
+                  class="pdf-agent-dialog-close"
+                  data-role="agent-close"
+                  aria-label="关闭 Agent 对话框"
+                  title="关闭">×</button>
+        </div>
       </header>
       <div class="pdf-agent-dialog-content"
            data-role="agent-content"
@@ -119,6 +126,7 @@ export function createAgentPanel(
   const fab = layer.querySelector('[data-role="agent-fab"]');
   const dialog = layer.querySelector('[data-role="agent-dialog"]');
   const closeButton = layer.querySelector('[data-role="agent-close"]');
+  const clearButton = layer.querySelector('[data-role="agent-clear"]');
   const metaEl = layer.querySelector('[data-role="agent-meta"]');
   const contentEl = layer.querySelector('[data-role="agent-content"]');
   const form = layer.querySelector('[data-role="agent-form"]');
@@ -128,6 +136,8 @@ export function createAgentPanel(
   let available = false;
   let opened = false;
   let busy = false;
+  /** 面板上是否真的有一轮对话可清——决定「清空」按钮能不能按。 */
+  let hasConversation = false;
   let metadata = {};
   let previousFocus = null;
 
@@ -141,6 +151,8 @@ export function createAgentPanel(
     questionInput.disabled = busy;
     submitButton.disabled = busy || !hasQuestion;
     submitButton.textContent = busy ? '处理中…' : '发送';
+    // 正在飞的请求不能一边等回答一边被清掉。
+    clearButton.disabled = busy || !hasConversation;
   };
 
   const renderMetadata = () => {
@@ -152,6 +164,7 @@ export function createAgentPanel(
       ? conversation.messages
       : [];
     const fragment = document.createDocumentFragment();
+    let renderedMessages = 0;
 
     for (const message of messages) {
       if (
@@ -171,6 +184,7 @@ export function createAgentPanel(
           { status: message.status },
         ),
       );
+      renderedMessages += 1;
     }
 
     if (conversation.pendingRequestId) {
@@ -184,6 +198,7 @@ export function createAgentPanel(
     }
 
     busy = Boolean(conversation.pendingRequestId);
+    hasConversation = renderedMessages > 0;
 
     if (fragment.childNodes.length === 0) {
       contentEl.dataset.state = 'notice';
@@ -205,6 +220,7 @@ export function createAgentPanel(
     metadata = { ...nextMetadata };
     opened = true;
     busy = false;
+    hasConversation = false;
     contentEl.dataset.state = 'notice';
     contentEl.textContent = '输入一个关于当前页的问题。';
     renderMetadata();
@@ -217,6 +233,7 @@ export function createAgentPanel(
     if (!opened) return;
     opened = false;
     busy = false;
+    hasConversation = false;
     metadata = {};
     contentEl.replaceChildren();
     contentEl.dataset.state = '';
@@ -231,6 +248,14 @@ export function createAgentPanel(
 
   fab.addEventListener('click', () => onOpen?.());
   closeButton.addEventListener('click', () => close());
+
+  clearButton.addEventListener('click', () => {
+    if (busy) return;
+
+    // 先请 owner 把这一页的会话清掉，再立刻回到空会话——不等 owner 回画。
+    onClear?.();
+    renderConversation({ messages: [], pendingRequestId: null });
+  });
 
   questionInput.addEventListener('input', syncForm);
 
@@ -267,6 +292,7 @@ export function createAgentPanel(
 
     showLoading(nextMetadata = null) {
       busy = true;
+      hasConversation = false;
 
       if (nextMetadata) {
         metadata = { ...metadata, ...nextMetadata };
@@ -280,6 +306,7 @@ export function createAgentPanel(
 
     showResult(result = {}) {
       busy = false;
+      hasConversation = false;
 
       if (result.textOrigin) {
         metadata = { ...metadata, textOrigin: result.textOrigin };
@@ -293,6 +320,7 @@ export function createAgentPanel(
 
     showNotice(message, nextMetadata = null) {
       busy = false;
+      hasConversation = false;
 
       if (nextMetadata) {
         metadata = { ...metadata, ...nextMetadata };
