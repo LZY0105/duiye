@@ -199,7 +199,7 @@
    goes near-opaque and the blur — the expensive part — comes off with it. The
    app previously had no such fallback anywhere. */
 @media (prefers-reduced-transparency: reduce) {
-  .bottom-nav,
+  .app-nav,
 .ink-toolbar,
 .ink-token,
 .ink-card,
@@ -301,7 +301,7 @@
 .calc-btn,
 .mode-tab,
 .settings-tab,
-.bottom-nav button {
+.app-nav button {
   min-height: var(--tap-min);
 }
 
@@ -316,7 +316,7 @@
 .calc-btn:focus-visible,
 .mode-tab:focus-visible,
 .settings-tab:focus-visible,
-.bottom-nav button:focus-visible,
+.app-nav button:focus-visible,
 .pdf-library-row:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

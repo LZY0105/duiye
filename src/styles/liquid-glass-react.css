@@ -1,0 +1,262 @@
+/* liquid-glass-react.css — 液态玻璃那几层的样子，照 rdev/liquid-glass-react 来（MIT，Copyright 2025
+ * Max Rovensky）。层是 src/ui/liquid-glass-react.js 挂上去的，这里只管它们长什么样。
+ *
+ * 一块玻璃从下往上：
+ *
+ *   .lgr-lens   裁切：和玻璃一样的圆角，把里面那层弯出去的东西裁在圆角里（库里是 .glass 的
+ *               overflow: hidden）。
+ *   .lgr-warp   玻璃的身子：backdrop-filter 把背后磨一磨、提一提饱和度，filter 用那段 SVG 滤镜
+ *               按库里的贴图把背后弯过去（库里还分出一圈色散，平板上太重，没用——见
+ *               liquid-glass-react.js 的 glassFilterMarkup）。
+ *   .lgr-shadow 影子（库里在玻璃自己身上，这里单独一层、排在身子后面画，理由见下面那一条）。
+ *   .lgr-glow   只有按钮有：悬停、按下时从顶上正中打下来的亮光。
+ *   （原来的内容：字、图标）
+ *   .lgr-rim    两道 1.5px 的边，一道白色渐变的高光，跟着指针转。
+ *
+ * 和库里不一样的几处，都是因为这个应用的底色是浅的、字是深色的：
+ *
+ *   · 边和亮光不用 mix-blend-mode。库里那两道边一道 screen、一道 overlay，亮光也是 overlay——
+ *     白色用 screen 混，和按透明度直接盖一层白是同一个结果；overlay 在亮的底上也一样（只有在暗
+ *     过一半的底上才不同，而这里玻璃后面没有那么暗的东西）。可一旦里面有一层用了混合模式，整块
+ *     玻璃就得单独成组来混，Chromium 会把它画在自己的一层上，底下那层 backdrop-filter 就只看得到
+ *     这块玻璃自己，看不到它背后的桌面了——玻璃变成一块空的。所以直接盖白，样子一样。
+ *   · 亮光放在字的下面、玻璃身子的上面（库里在最上面）：overlay 会把深色的字提亮一点点，直接盖白
+ *     就是把字洗灰——按下去的那一下，字不该变淡。
+ *   · 库里给浅色背景的办法（overLight）是压一层黑、好让白字读得清——这里的字本来就是深色的，
+ *     那层黑不要。
+ *
+ * 身子是完全透明的，和库里展示的一样：不铺白、不铺淡蓝、没有暗边（人说「完全透明的液态，像库里
+ * 展示的一样」）。看得出它在那儿，靠的是背后被磨过、边上被弯过，和底下那一圈影子。主要动作只剩
+ * 字是蓝的。
+ *   · 字的颜色、字重、按钮的大小都是原来的——玻璃只换材质，不挪东西（换皮肤不许有位移，见
+ *     liquid.css 开头）。
+ *
+ * 只在「液态玻璃」（html 上 data-glass="liquid"）里。「毛玻璃」和它同一个 data-skin，是改写之前的那一套：
+ * 不挂这几层、不弯工具栏，JS 换到它或纸时把这些层整个拆掉，这里的规则也一条都不作数。 */
+
+html[data-glass="liquid"] {
+  /* 库里的影子：0 12px 40px、四分之一的黑。 */
+  --lgr-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+
+/* 放滤镜的那张 SVG：不占地方、不挡手。不能 display: none——那样 Chromium 找不到里面的滤镜。 */
+.lgr-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* ── 玻璃本身 ────────────────────────────────────────────────────────────── */
+
+/* 自己的底、自己的磨砂都不要了：身子由 .lgr-warp 来画。它自己留着磨砂的话，里面那层 warp 看到的
+   「背后」就只剩它自己（backdrop-filter 只往上看到最近的那一层为止），弯的是一块白。
+   isolation 也放开：.app-nav 本来有一条 isolation: isolate，它照样是层叠上下文（z-index: 1000），
+   放开不改谁压谁，只是不让它单独成组。 */
+html[data-glass="liquid"] .lgr.lgr,
+html[data-glass="liquid"] #settingsSave.lgr {
+  background: transparent !important;
+  backdrop-filter: none !important;
+  isolation: auto !important;
+  box-shadow: none !important;
+  /* 影子那一层画在盒子外面。.action-btn 原来有一条 overflow: hidden，是给按下去那圈水波纹兜边的——
+     挂着这几层的按钮不再有水波纹（liquid-glass.js 让开了），身子由 .lgr-lens 自己裁圆角。 */
+  overflow: visible !important;
+}
+
+/* 空桌面那张卡片：material.css 把它当成「内容」（Tier 2），给了实在的白底和一圈细线。白底由上面那条
+   撤掉；那圈线也不要——玻璃的边由那两道边光来画。 */
+html[data-glass="liquid"] .pdf-empty-card.lgr { border-color: transparent; }
+
+/* 原来没定位的：定个位，里面那几层才贴得住它。 */
+.lgr--anchor { position: relative; }
+/* 自己成一个层叠上下文，warp 的 z-index: -1 才落在它的底上面、字下面，而不是掉到整页底下去。
+   z-index: 0 和 auto 在兄弟之间的先后是一样的。 */
+.lgr--anchor,
+.lgr--stack { z-index: 0; }
+
+.lgr-lens,
+.lgr-warp,
+.lgr-shadow,
+.lgr-glow,
+.lgr-rim {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.lgr-lens {
+  z-index: -1;
+  overflow: hidden;
+}
+
+/* filter 和 backdrop-filter 的值由 JS 按这块玻璃的参数写成变量（滤镜的 id、磨砂的半径）。
+   身子不能有底色，一点都不行：这一层自己有了底，Chromium 给它套 SVG 滤镜时就不再把磨过的背后一起
+   算进去，身子成了一块平平的灰，边上一圈彩边（实测：铺两成的白，整块灰掉）。
+
+   两版弯法：静止的时候是库里原样的色散版（--lgr-filter-rich，边上那一圈彩边）；手在屏幕上的时候
+   （html 挂着 lgr-busy，liquid-glass-react.js 的 markBusy）换成只弯一次的那一版——色散版在平板上
+   一重画就是每隔一帧 50–67ms，而静止的时候不重画，它一帧都不花。 */
+.lgr-warp {
+  background: none;
+  filter: var(--lgr-filter-rich, var(--lgr-filter, none));
+  backdrop-filter: var(--lgr-backdrop, none);
+}
+html.lgr-busy .lgr-warp { filter: var(--lgr-filter, none); }
+
+/* 影子画在身子后面、自己没有底：box-shadow 只画在盒子外面，不盖住玻璃。它要是留在玻璃自己身上
+   （库里那样），身子磨背后、弯背后时会把这圈影子也吸进来，浅底上宽按钮两头各一块灰。 */
+.lgr-shadow {
+  z-index: -1;
+  box-shadow: var(--lgr-shadow);
+}
+
+/* 「练习 / 设置」里标出选中那一格的透镜：同一种玻璃，影子按它的个头收——它嵌在胶囊里、离胶囊
+   的边只有 4px，按钮那一圈（往下 12px、糊开 40px）会漫出胶囊底边，看着像胶囊底下又压着一块。
+   它原来那层白、那道高光（liquid.css 的 --lg-bubble）由上面 .lgr.lgr 那条撤掉。 */
+html[data-glass="liquid"] .lgr--lens > .lgr-shadow {
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+/* 文档库每本书右上角那颗「⋯」：30px 的一颗小玻璃，压在封面上。按钮那一圈（往下 12px、糊开 40px）会在白封面
+   上晕开一大片灰，按它的个头收——和它原来那颗（liquid.css）的影子一样大。 */
+html[data-glass="liquid"] .pdf-book-more.lgr > .lgr-shadow {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+}
+/* 它有十几颗，跟着书架一起滚。平板上量过：和别的玻璃一样上色散、手动时只弯一次的话，滚的时候每帧 33–50ms，
+   开始滚和停下半秒那两下（十几颗一起换滤镜）各有一帧 140–160ms——书架原来滚起来最长一帧才 41ms。所以：
+   · 不上色散：30px 上本来就看不出那圈彩边；
+   · 手在屏幕上（lgr-busy）的时候只磨不弯，停下来再弯回来——压在白封面上，这两样分不出来。
+   这样滚起来和改之前一样（最长一帧 41ms）。 */
+html[data-glass="liquid"] .pdf-book-more .lgr-warp { filter: var(--lgr-filter, none); }
+html[data-glass="liquid"].lgr-busy .pdf-book-more .lgr-warp { filter: none; }
+
+/* ── 边 ─────────────────────────────────────────────────────────────────── */
+
+/* 1.5px 的一圈：内容框和边框框异或，只留中间那一圈（库里原样）。背景是 JS 按指针算的渐变。 */
+.lgr-rim {
+  z-index: 3;
+  box-sizing: border-box;
+  padding: 1.5px;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  box-shadow:
+    0 0 0 0.5px rgba(255, 255, 255, 0.5) inset,
+    0 1px 3px rgba(255, 255, 255, 0.25) inset,
+    0 1px 4px rgba(0, 0, 0, 0.35);
+}
+.lgr-rim--screen { opacity: 0.2; }
+
+/* ── 按钮：亮光和弹性 ───────────────────────────────────────────────────── */
+
+.lgr-glow {
+  z-index: -1;
+  opacity: 0;
+  transition: opacity 0.2s ease-out;
+}
+.lgr-glow--1 { background-image: radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0) 50%); }
+.lgr-glow--2 { background-image: radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0) 80%); }
+.lgr-glow--3 { background-image: radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 1) 0%, rgba(255, 255, 255, 0) 100%); }
+/* 库里：悬停或按着 → 第一层 0.5；按着 → 第二层 0.5；第三层悬停 0.4、只按着（手指，没有悬停）0.8。 */
+[data-lgr-hover] > .lgr-glow--1,
+[data-lgr-active] > .lgr-glow--1 { opacity: 0.5; }
+[data-lgr-active] > .lgr-glow--2 { opacity: 0.5; }
+[data-lgr-hover] > .lgr-glow--3 { opacity: 0.4; }
+[data-lgr-active]:not([data-lgr-hover]) > .lgr-glow--3 { opacity: 0.8; }
+
+/* 弹性：指针靠近时朝它挪、朝它拉长（JS 写的四个变量），按下去 0.96，0.2 秒 ease-out 跟过去。
+   原来按下去的 transform: scale(0.94) 和各处的 scale 让给这里——同一颗按钮上不能有两套缩放。 */
+html[data-glass="liquid"] .lgr--button {
+  transform: none !important;
+  translate: var(--lgr-tx, 0px) var(--lgr-ty, 0px) !important;
+  scale: var(--lgr-sx, 1) var(--lgr-sy, 1) !important;
+  transition:
+    translate 0.2s ease-out,
+    scale 0.2s ease-out,
+    color 0.16s ease,
+    opacity 0.2s ease !important;
+}
+html[data-glass="liquid"] .lgr--button[data-lgr-active]:not(:disabled) { scale: 0.96 !important; }
+
+/* ── 工具栏：边上也弯 ───────────────────────────────────────────────────── */
+
+/* 人说「工具栏边缘的折射是不是也有点偷懒了」：原来浮在书页上的那条只磨不弯，停进顶栏的那条也只磨
+   不弯，只有收起来的球、拖着走的时候才弯一下。它挂不了那几层（理由见 liquid-glass-react.js 里 TARGETS
+   那条注释），折射就接在它自己的 backdrop-filter 后面——先磨、提饱和度，再按库里的贴图弯（和那几层
+   的顺序一样）。静止的时候是色散版，手在屏幕上换成只弯一次的（html.lgr-busy，同上）。滤镜是
+   liquid-glass-react.js 按固定 id 造的那几段（NAMED_FILTERS）。 */
+
+/* 浮在书页上、贴边的那一条：原来的磨砂（--glass-blur）照旧，后面接上 lgr-bar-*——贴图按它细长的
+   比例拉满，长边也弯。 */
+html[data-glass="liquid"] .ink-toolbar:not(.is-perched):not(.is-docked):not(.is-dragging) {
+  backdrop-filter: var(--glass-blur) url(#lgr-bar-rich);
+}
+html[data-glass="liquid"].lgr-busy .ink-toolbar:not(.is-perched):not(.is-docked):not(.is-dragging) {
+  backdrop-filter: var(--glass-blur) url(#lgr-bar-lean);
+}
+
+/* 收起来的那颗球（停在角上、拿在手里）：和胶囊同一组数。原来是 material.css 那条 url(#lg-refract)
+   先弯后磨，这里按库里的顺序先磨后弯。 */
+html[data-glass="liquid"] .ink-toolbar:not(.is-perched) .ink-token {
+  backdrop-filter: blur(3px) saturate(180%) url(#lgr-cap-rich);
+}
+html[data-glass="liquid"].lgr-busy .ink-toolbar:not(.is-perched) .ink-token {
+  backdrop-filter: blur(3px) saturate(180%) url(#lgr-cap-lean);
+}
+
+/* 停进顶栏的：它是那一排里的第四枚，得和另外三枚看着是同一种玻璃。同样的磨砂（capsule 那一组：
+   4 + 0.0625 × 32 = 6px、饱和度 140%）、同样透明、同样的影子、同样的弯（lgr-cap-*）。少的只是边上
+   那道跟着指针的光。 */
+html[data-glass="liquid"] .ink-toolbar.is-perched:not(.is-docked),
+html[data-glass="liquid"] .ink-toolbar.is-perched .ink-token {
+  background: transparent;
+  backdrop-filter: blur(6px) saturate(140%) url(#lgr-cap-rich);
+  box-shadow: var(--lgr-shadow);
+}
+html[data-glass="liquid"].lgr-busy .ink-toolbar.is-perched:not(.is-docked),
+html[data-glass="liquid"].lgr-busy .ink-toolbar.is-perched .ink-token {
+  backdrop-filter: blur(6px) saturate(140%) url(#lgr-cap-lean);
+}
+
+/* 在工具、颜色上划着挑时手指底下那块玻璃（ink-toolbar.js 的 _installScrub，浮在横杠上面）：人说「工具
+   栏滑动时记得做玻璃折射」。库里那段弯法（lgr-drop-*），弯的是横杠连同底下那个图标——一块玻璃拖过
+   内容的样子。不磨：磨了底下那个图标就认不出来了。静止 / 手在屏幕上两版，和别的玻璃一样（划的时候手
+   一直在屏幕上，用的几乎总是只弯一次的那一版）。圈边、影子在 ink-toolbar.css 里，两套玻璃共用。 */
+html[data-glass="liquid"] .ink-scrub-drop {
+  backdrop-filter: saturate(140%) url(#lgr-drop-rich);
+}
+html[data-glass="liquid"].lgr-busy .ink-scrub-drop {
+  backdrop-filter: saturate(140%) url(#lgr-drop-lean);
+}
+
+/* ── 系统设置 ───────────────────────────────────────────────────────────── */
+
+/* 减少透明：不磨、不弯，一块实在的白。工具栏那几样由 material.css 铺成不透明的，这里把弯也撤掉。 */
+@media (prefers-reduced-transparency: reduce) {
+  .lgr-warp {
+    backdrop-filter: none !important;
+    filter: none !important;
+    background: #fff !important;
+  }
+  html[data-glass="liquid"] .ink-toolbar,
+  html[data-glass="liquid"] .ink-token,
+  html[data-glass="liquid"] .ink-scrub-drop {
+    backdrop-filter: none !important;
+  }
+}
+
+/* 减少动态：不挪、不拉、不缩，亮光直接到位。拿在手里的那颗球不弯：它一路走、底下的字一路被弯，
+   读起来就是动（material.css 原来的规矩）。停着的弯照旧——那不是动。 */
+@media (prefers-reduced-motion: reduce) {
+  html[data-glass="liquid"] .lgr--button {
+    translate: none !important;
+    scale: none !important;
+    transition: none !important;
+  }
+  .lgr-glow { transition: none; }
+  html[data-glass="liquid"] .ink-toolbar.is-dragging .ink-token {
+    backdrop-filter: blur(3px) saturate(180%) !important;
+  }
+}

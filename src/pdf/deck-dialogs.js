@@ -522,17 +522,20 @@ export function promptText({
  * 危险的那一条自己标出来（is-danger），而且永远排在最后：手指是从上往下够的。
  *
  * @param {{title: string, note?: string,
- *          actions: Array<{id: string, label: string, danger?: boolean}>}} spec
+ *          actions: Array<{id: string, label: string, danger?: boolean}>,
+ *          cancelLabel?: string}} spec
+ *   `cancelLabel` 是不做选择那一颗按钮的字，默认「取消」。开机时问权限那一张写
+ *   「以后再说」——那不是取消一件事，是把一件事往后放。
  * @returns {Promise<string|null>} 选中的 id
  */
-export function chooseAction({ title, note = '', actions = [] }) {
+export function chooseAction({ title, note = '', actions = [], cancelLabel = '' }) {
   return modal((dialog, finish) => {
     dialog.innerHTML = `
       <div class="deck-dialog-title">${escapeHtml(title)}</div>
       ${note ? `<p class="deck-dialog-note">${escapeHtml(note)}</p>` : ''}
       <div class="deck-actions"></div>
       <div class="deck-dialog-actions">
-        <button type="button" class="deck-dialog-btn" data-role="cancel">${escapeHtml(t('common.cancel'))}</button>
+        <button type="button" class="deck-dialog-btn" data-role="cancel">${escapeHtml(cancelLabel || t('common.cancel'))}</button>
       </div>`;
 
     const list = dialog.querySelector('.deck-actions');
@@ -592,5 +595,250 @@ export function explainRefusal({ title, body, actionLabel }) {
       action.textContent = actionLabel;
       action.addEventListener('click', () => finish(true));
     }
+  });
+}
+
+/**
+ * 「移动到文件夹」那张单子。
+ *
+ * 顶上一句话说这一份**现在**在哪——「不在任何文件夹里」或者「在「高代」里」。它是
+ * 一句话，不是一个选项：原来把「不在文件夹里」做成了列表的第一行、能点能选，人在
+ * 机上看到的是一个长得和文件夹一样、却不是文件夹的格子，点了还没反应。
+ * 把东西拿出文件夹走的是它自己那条路：文件夹里那一份的 ⋯ 里有「移出文件夹」。
+ *
+ * 底下那颗按钮当场就把文件夹建出来，并且直接进入改名。先弹一个「请输入名称」的框，
+ * 等于在他想放东西的路上竖一道墙；人点它的那一刻要的是一个格子，名字是顺手的事，
+ * 回头还能改。建完就选中它——他建这个格子就是为了装手上这一份。
+ *
+ * 「移动」只在选中了一个**别的**文件夹时才能按：什么都没选、或者选的就是它现在
+ * 在的那个，按下去什么都不会发生，而一颗按下去没反应的按钮会让人以为是坏了。
+ *
+ * 不嵌套，所以这张单子永远是平的一层，没有「进入下一级」这回事（理由写在
+ * folder-state.js 开头）。
+ *
+ * @param {Object} options
+ * @param {string}  [options.title]    单子的标题
+ * @param {string}  [options.itemName] 正在移动的是哪一样东西
+ * @param {Array}   options.folders    [{id, name, count}]
+ * @param {?string} [options.current]  它现在在哪个文件夹里
+ * @param {function} [options.onCreate] 建一个新文件夹，返回 {id, name}；落盘是调用方的事
+ * @param {function} [options.onRename] 改名，(id, name)；同上
+ * @returns {Promise<{folderId: string}|null>} 取消是 null
+ */
+export function chooseFolder({
+  title, itemName = '', folders = [], current = null, onCreate, onRename,
+}) {
+  return modal((dialog, finish) => {
+    dialog.classList.add('deck-folder-dialog');
+    let list = folders.map(f => ({ id: f.id, name: f.name, count: f.count }));
+    // 它现在在的那个文件夹先亮着：人一眼看得见它在哪，挑别的就是「挪过去」。
+    let chosen = current && list.some(f => f.id === current) ? current : null;
+
+    dialog.innerHTML = `
+      <div class="deck-folder-head">
+        <button type="button" class="deck-dialog-btn" data-role="cancel">${escapeHtml(t('deck.cancel'))}</button>
+        <div class="deck-dialog-title">${escapeHtml(title || t('folder.moveTitle'))}</div>
+        <button type="button" class="deck-dialog-btn is-primary" data-role="confirm">${escapeHtml(t('folder.move'))}</button>
+      </div>
+      <p class="deck-dialog-note deck-folder-where" data-role="where"></p>
+      <div class="deck-folder-list" data-role="list"></div>
+      <div class="deck-folder-foot">
+        <button type="button" class="deck-folder-new" data-role="new">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+            <path d="M12 11.5v5M9.5 14h5"/>
+          </svg>
+          <span></span>
+        </button>
+      </div>`;
+    dialog.querySelector('[data-role="new"] span').textContent = t('folder.new');
+
+    const whereEl = dialog.querySelector('[data-role="where"]');
+    const listEl = dialog.querySelector('[data-role="list"]');
+    const confirmEl = dialog.querySelector('[data-role="confirm"]');
+
+    /** 顶上那句话：它现在在哪。名字是别处写的（文件名、人自己起的名），走 textContent。 */
+    function renderWhere() {
+      const home = current ? list.find(f => f.id === current) : null;
+      whereEl.textContent = home
+        ? t('folder.whereIn', { name: itemName, folder: home.name })
+        : t('folder.whereNone', { name: itemName });
+    }
+
+    function rowFor(folder) {
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.className = `deck-folder-row${chosen === folder.id ? ' is-selected' : ''}`;
+      el.dataset.folderId = folder.id;
+      el.setAttribute('aria-pressed', chosen === folder.id ? 'true' : 'false');
+      el.innerHTML = `
+        <span class="deck-folder-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+               stroke-width="1.8" stroke-linejoin="round">
+            <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+          </svg>
+        </span>
+        <span class="deck-folder-name"></span>
+        <span class="deck-folder-count">${folder.count == null ? '' : escapeHtml(t('folder.count', { count: folder.count }))}</span>
+        <span class="deck-folder-tick" aria-hidden="true">✓</span>`;
+      el.querySelector('.deck-folder-name').textContent = folder.name;
+      el.addEventListener('click', () => {
+        chosen = folder.id;
+        render();
+      });
+      return el;
+    }
+
+    function render() {
+      listEl.replaceChildren();
+      if (!list.length) {
+        // 一个文件夹都还没有：说一句去哪儿建，而不是摊一张空单子。
+        const none = document.createElement('p');
+        none.className = 'deck-folder-empty';
+        none.textContent = t('folder.noneYet');
+        listEl.appendChild(none);
+      }
+      for (const folder of list) listEl.appendChild(rowFor(folder));
+      confirmEl.disabled = !chosen || chosen === current;
+    }
+
+    /**
+     * 新建的那一行直接变成输入框。
+     *
+     * 建完就在改名，人不用再去找「重命名」在哪。改不改都行——它已经有名字了，
+     * 所以走神走掉也不会留下一个没名字的格子。
+     */
+    function beginRename(folder) {
+      const row = listEl.querySelector(`[data-folder-id="${folder.id}"]`);
+      const nameEl = row?.querySelector('.deck-folder-name');
+      if (!nameEl) return;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'deck-folder-input';
+      input.value = folder.name;
+      input.maxLength = 40;
+      nameEl.replaceWith(input);
+      input.focus();
+      input.select();
+
+      let done = false;
+      const commit = (keep) => {
+        if (done) return;
+        done = true;
+        const next = keep ? input.value.replace(/\s+/g, ' ').trim() : '';
+        // 空名字不是名字：留着它建出来时那个默认名，而不是留一个认不出来的格子。
+        if (next && next !== folder.name) {
+          folder.name = next;
+          try { onRename?.(folder.id, next); } catch (_) { /* 存不住就先这么显示 */ }
+        }
+        render();
+      };
+      input.addEventListener('keydown', (e) => {
+        // 这里的 Escape 只收回这次改名，不该把整张单子关掉——人正在打字。
+        if (e.key === 'Enter') { e.preventDefault(); commit(true); }
+        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); commit(false); }
+      });
+      input.addEventListener('blur', () => commit(true));
+    }
+
+    dialog.querySelector('[data-role="new"]').addEventListener('click', async () => {
+      const made = await onCreate?.();
+      if (!made?.id) return;
+      // 改名改的必须是**单子上那一行**。存一个 onCreate 回来的对象在旁边，改完
+      // 名字重画一次就又变回去了——而人看到的正是重画之后那一行。
+      const row = { id: made.id, name: made.name, count: 0 };
+      list = [...list, row];
+      chosen = row.id;
+      render();
+      beginRename(row);
+    });
+
+    dialog.querySelector('[data-role="cancel"]').addEventListener('click', () => finish(null));
+    confirmEl.addEventListener('click', () => {
+      if (!chosen || chosen === current) return;
+      finish({ folderId: chosen });
+    });
+    renderWhere();
+    render();
+  });
+}
+
+/**
+ * 从一堆东西里挑几份。
+ *
+ * 往文件夹里放已有的文件用它。一行一份，点一下选中再点一下取消——没有复选框那个
+ * 小方块：手指点的是整行，而那个方块只会让人以为只有点中它才算数。
+ *
+ * 选了几份印在按钮上。挑东西的人心里有个数，界面该把那个数说出来，而不是让他自己
+ * 回头数一遍。
+ *
+ * @param {{title:string, note?:string, items:Array<{id,name,sub?}>,
+ *          confirm?:string, empty?:string}} spec
+ * @returns {Promise<string[]|null>} 选中的 id；取消是 null
+ */
+export function pickResources({ title, note = '', items = [], confirm, empty }) {
+  return modal((dialog, finish) => {
+    dialog.classList.add('deck-pick-dialog');
+    const picked = new Set();
+
+    dialog.innerHTML = `
+      <div class="deck-dialog-title" data-role="title"></div>
+      ${note ? '<p class="deck-dialog-note" data-role="note"></p>' : ''}
+      <div class="deck-pick-list" data-role="list"></div>
+      <div class="deck-dialog-actions">
+        <button type="button" class="deck-dialog-btn" data-role="cancel">${escapeHtml(t('deck.cancel'))}</button>
+        <button type="button" class="deck-dialog-btn is-primary" data-role="confirm"></button>
+      </div>`;
+    dialog.querySelector('[data-role="title"]').textContent = title;
+    if (note) dialog.querySelector('[data-role="note"]').textContent = note;
+
+    const listEl = dialog.querySelector('[data-role="list"]');
+    const confirmEl = dialog.querySelector('[data-role="confirm"]');
+    const label = confirm || t('common.ok');
+
+    const syncConfirm = () => {
+      confirmEl.textContent = picked.size ? `${label}（${picked.size}）` : label;
+      // 一份都没选时确认没有意义：按下去什么都不会发生，而一颗按下去没反应的按钮
+      // 会让人以为是坏了。
+      confirmEl.disabled = picked.size === 0;
+    };
+
+    if (!items.length) {
+      const none = document.createElement('div');
+      none.className = 'organizer-empty';
+      none.textContent = empty || t('folder.pickEmpty');
+      listEl.appendChild(none);
+    }
+
+    for (const item of items) {
+      if (!item?.id) continue;
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'deck-pick-row';
+      row.dataset.id = item.id;
+      row.setAttribute('aria-pressed', 'false');
+      row.innerHTML = `
+        <span class="deck-pick-name"></span>
+        <span class="deck-row-kind" data-role="sub"></span>
+        <span class="deck-folder-tick" aria-hidden="true">✓</span>`;
+      row.querySelector('.deck-pick-name').textContent = item.name || t('deck.untitled');
+      row.querySelector('[data-role="sub"]').textContent = item.sub || '';
+      row.addEventListener('click', () => {
+        if (picked.has(item.id)) picked.delete(item.id);
+        else picked.add(item.id);
+        row.classList.toggle('is-selected', picked.has(item.id));
+        row.setAttribute('aria-pressed', picked.has(item.id) ? 'true' : 'false');
+        syncConfirm();
+      });
+      listEl.appendChild(row);
+    }
+
+    syncConfirm();
+    dialog.querySelector('[data-role="cancel"]').addEventListener('click', () => finish(null));
+    confirmEl.addEventListener('click', () => {
+      if (!picked.size) return;
+      finish([...picked]);
+    });
   });
 }

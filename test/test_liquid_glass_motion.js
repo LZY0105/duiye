@@ -16,6 +16,7 @@
 // section — and with it the module's `pointermove` listener.
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 
 let passed = 0;
@@ -223,6 +224,115 @@ await test('init is idempotent and teardown is safe to repeat', async () => {
   destroyLiquidGlass();
   assert.doesNotThrow(() => destroyLiquidGlass());
   assert.deepEqual(stillRegistered(), [], `a second init registered listeners nobody owns (${afterDoubleInit})`);
+});
+
+// ── 正中那两个标签：点一下，透镜滑过去 ─────────────────────────────────────
+
+console.log('\nliquid glass — 标签底下那块透镜');
+
+/** 顶上正中那两个标签（练习 / 设置），第一个选中。jsdom 不排版，位置写死。 */
+function mountNav({ reduced = false } = {}) {
+  destroyLiquidGlass();
+  motion.matches = reduced;
+  motion.listeners.clear();
+  document.documentElement.setAttribute('data-skin', 'liquid-math');
+  document.body.innerHTML = '';
+  const nav = document.createElement('nav');
+  nav.className = 'app-nav';
+  nav.getBoundingClientRect = () => ({ left: 500, top: 10, right: 672, bottom: 54, width: 172, height: 44, x: 500, y: 10 });
+  const tabs = [['pdf', 504], ['settings', 588]].map(([page, left], i) => {
+    const b = document.createElement('button');
+    b.dataset.page = page;
+    if (i === 0) b.className = 'active';
+    b.getBoundingClientRect = () => ({ left, top: 14, right: left + 80, bottom: 50, width: 80, height: 36, x: left, y: 14 });
+    nav.appendChild(b);
+    return b;
+  });
+  document.body.appendChild(nav);
+  initLiquidGlass();
+  return { nav, tabs, lens: nav.querySelector('.nav-glass-lens') };
+}
+
+/** 点了另一格——和 bootstrap.js 的 showPage 一样，只换 active；透镜自己跟过去。 */
+async function choose(tabs, index) {
+  tabs.forEach((t, i) => t.classList.toggle('active', i === index));
+  await new Promise((r) => setTimeout(r, 0)); // 让 MutationObserver 的回调跑完
+}
+
+await test('点另一格：透镜带着过渡滑过去', async () => {
+  const { tabs, lens } = mountNav();
+  await nextFrame();
+  assert.equal(lens.style.left, '4px', '开机那一次当场摆在选中那一格上');
+  assert.equal(lens.style.transition, 'none');
+  await choose(tabs, 1);
+  assert.equal(lens.style.left, '88px');
+  assert.notEqual(lens.style.transition, 'none', '点一下应该是滑过去的');
+});
+
+await test('滑着的时候来一声当场重摆（顶上那一排露出来、resize）：不跳，接着滑', async () => {
+  const { nav, tabs, lens } = mountNav();
+  await nextFrame();
+  await choose(tabs, 1);
+  // 从设置点回练习时，顶上那一排跟着露出来，top-bar-fit 量完就叫这一声。
+  nav._relayoutLens();
+  assert.notEqual(lens.style.transition, 'none', '重摆把这一段滑动掐掉了，透镜会一帧跳到终点');
+  assert.equal(lens.style.left, '88px');
+  dom.window.dispatchEvent(new dom.window.Event('resize'));
+  assert.notEqual(lens.style.transition, 'none');
+});
+
+await test('没在滑的时候尺寸变了：照旧当场到位', async () => {
+  const { nav, tabs, lens } = mountNav();
+  await nextFrame();
+  await choose(tabs, 1);
+  await new Promise((r) => setTimeout(r, 450)); // 这一段滑完
+  nav._relayoutLens();
+  assert.equal(lens.style.transition, 'none');
+  assert.equal(lens.style.left, '88px');
+});
+
+await test('按住透镜划：离开哪一格，那一格的蓝就退掉；盖到哪一格，哪一格就蓝', async () => {
+  const { tabs, lens } = mountNav();
+  // jsdom 不排版：透镜画在哪按它的 left / width 算（胶囊从 500 起）。
+  lens.getBoundingClientRect = () => {
+    const l = 500 + (parseFloat(lens.style.left) || 0);
+    const w = parseFloat(lens.style.width) || 0;
+    return { left: l, right: l + w, top: 14, bottom: 50, width: w, height: 36, x: l, y: 14 };
+  };
+  await nextFrame();
+  const cover = (i) => Number(tabs[i].style.getPropertyValue('--lens-cover'));
+  assert.equal(cover(0), 1, '开机：选中那一格整个被盖着');
+  assert.equal(cover(1), 0);
+  const fire = (type, x) => tabs[0].dispatchEvent(new dom.window.PointerEvent(type, {
+    bubbles: true, cancelable: true, pointerId: 1, clientX: x, clientY: 30, button: 0, buttons: type === 'pointerup' ? 0 : 1,
+  }));
+  fire('pointerdown', 544);
+  fire('pointermove', 560); // 透镜 520–600：第一格还盖着八成
+  assert.ok(Math.abs(cover(0) - 0.8) < 0.01, `第一格 ${cover(0)}`);
+  assert.ok(cover(1) > 0 && cover(1) < 0.2, `第二格 ${cover(1)}`);
+  fire('pointermove', 640); // 透镜 592–672：完全离开第一格
+  assert.equal(cover(0), 0, '完全离开第一格：它的蓝结束');
+  assert.ok(cover(1) > 0.9, `盖到第二格：它变蓝（${cover(1)}）`);
+  fire('pointerup', 640);
+});
+
+await test('字的颜色由样式表按 --lens-cover 在蓝和灰之间调；选中那一格默认 1；颜色不过渡', () => {
+  const css = readFileSync(new URL('../src/styles/liquid.css', import.meta.url), 'utf8');
+  const at = css.indexOf('html[data-skin] .app-nav button {');
+  assert.ok(at > 0);
+  const base = css.slice(at, css.indexOf('}', at));
+  assert.match(base, /color: color-mix\(in oklab, var\(--lg-tint\) calc\(var\(--lens-cover\) \* 100%\), var\(--lg-label-2\)\)/);
+  assert.match(base, /transition: scale var\(--transition-fast\);/);
+  const act = css.indexOf('html[data-skin] .app-nav button.active {');
+  assert.match(css.slice(act, css.indexOf('}', act)), /--lens-cover: 1;/);
+});
+
+await test('减少动态：点另一格当场到位', async () => {
+  const { tabs, lens } = mountNav({ reduced: true });
+  await nextFrame();
+  await choose(tabs, 1);
+  assert.equal(lens.style.left, '88px');
+  assert.equal(lens.style.transition, 'none');
 });
 
 console.log(`\nliquid glass runtime motion: ${failed ? 'FAIL' : 'PASS'} (${passed} checks${failed ? `, ${failed} failed` : ''})`);

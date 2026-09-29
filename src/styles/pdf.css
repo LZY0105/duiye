@@ -1,18 +1,11 @@
 /* PDF workspace — Apple Liquid Glass dual-document layout, animated resizing, divider, outline, library. */
 
-/* The workspace fills what is left between the top of the screen and the dock.
-   It used to subtract 50px for a title bar and 70px for the spacer under it;
-   both are gone, so it was reserving 120px that nothing occupied and running
-   its own bottom edge underneath the floating dock at the same time.
-
-   What is actually down there is the dock: 66px tall, sitting 12px off the
-   bottom. Twelve again above it leaves the panes clear of it by the same margin
-   they sit in everywhere else. */
+/* The workspace fills the screen. It used to subtract 50px for a title bar and
+   70px for the spacer under it, and later lay under a floating dock along the
+   bottom edge. The title bar and the spacer are gone, and the dock moved up
+   into the import row (练习 / 设置, top centre) — so the only thing left to
+   give up at the bottom is the system's own gesture inset. */
 #page-pdf {
-  /* The dock is position:fixed — it floats. It does not need the page to give
-     up 90px for it as well, so it no longer does: the dock lies OVER the page's
-     bottom margin, and the toggle in the corner takes it away entirely. The
-     page is what the screen is for. */
   --dock-reserve: var(--safe-b, 0px);
   display: none;
   flex-direction: column;
@@ -20,14 +13,15 @@
   height: calc(100vh - var(--dock-reserve));
   height: calc(100dvh - var(--dock-reserve));
   min-height: 420px;
-  padding: 8px 0 0;
+  /* 顶上那一段空由横杠自己的上边距给（--app-bar-top），收起时跟着它一起收。 */
+  padding: 0;
   position: relative;
   overflow: hidden;
 }
 
 #page-pdf.active {
   display: flex !important;
-  padding: 8px 0 0 !important;
+  padding: 0 !important;
 }
 
 #app:has(#page-pdf.active) {
@@ -35,165 +29,366 @@
 }
 
 /* ── putting the chrome away ───────────────────────────────────────────────
-   The import row and the dock are useful and rarely needed at the same moment
-   as the page. Hidden, the workspace takes the whole height, which on this
-   tablet is the difference between seeing a page and seeing most of one.
+   The import row is useful and rarely needed at the same moment as the page.
+   Hidden, the workspace takes the whole height, which on this tablet is the
+   difference between seeing a page and seeing most of one.
 
-   Both are moved by the gesture alone. A chevron in the top-right corner used
-   to do the same job; it was removed. It was the only control on this screen
-   that was not about reading, it floated over the very page it was making room
-   for, and a 30px circle in a corner is a worse target than the whole width of
-   an edge. */
-/* Sliding them away, each independently of the other.
+   It is moved by the gesture alone. A chevron in the top-right corner used to
+   do the same job; it was removed. It was the only control on this screen that
+   was not about reading, it floated over the very page it was making room for,
+   and a 30px circle in a corner is a worse target than the whole width of an
+   edge.
 
-   Both bars are placed by a progress number rather than by a class: 0 is out,
-   1 is away, and anything between is where a finger has dragged it to. The
-   class only sets the number to 1, so a gesture and a button end up driving the
-   same one thing — which is what lets the bar follow a hand on the way out and
-   still settle by itself when the hand lets go.
+   底下原来还有一条同样能收起来的菜单栏（练习 / 设置）。它挪到了这一排的正中，
+   于是只剩这一排要收，两个标签跟着它一起走——见下面 .app-nav。 */
+/* Sliding it away.
 
-   The import row is in the page's flow, so its margin is driven by the same
-   number: the page closes the gap as the bar leaves rather than jumping when
-   it has gone. */
-:root { --pdf-bar-h: 44px; }
+   The bar is placed by a progress number rather than by a class: 0 is out, 1 is
+   away, and anything between is where a finger has dragged it to. The class
+   only sets the number to 1, so a gesture and a button end up driving the same
+   one thing — which is what lets the bar follow a hand on the way out and still
+   settle by itself when the hand lets go.
+
+   那一排不在文档流里，只靠 transform 进出：跟手、松手后自己走完，都不碰排版。
+   它走的距离是自己的高度加上离屏幕上沿那一截，走完下沿刚好出屏。
+
+   它占的那一截由工作区自己的上边距让出来（#page-pdf > .pdf-workspace-host），而那
+   个边距只认 is-top-hidden 这个类，不认进度：定了的那一刻变一次，看上去的滑动是
+   initChromeHiding 补的（slideWorkspace）。原来是边距跟着进度走——每一帧都在改工作
+   区的高度，两栏、PDF 页面、栏头适配、工具栏全跟着重来一遍，平板上一卡一卡的。 */
+:root {
+  --pdf-bar-h: 44px;
+  /* 那一排离屏幕上沿多远。两个标签用同一个数，才落在同一行上。 */
+  --app-bar-top: 8px;
+  /* 正中那两个标签占多宽。top-bar-fit.js 按它真实的宽度改写；这里是第一帧之前
+     的估计。 */
+  --app-nav-w: 200px;
+  /* 两个标签那枚胶囊有多高。和两边的胶囊一样高，三枚才排得成一行。 */
+  --app-nav-h: 44px;
+  /* 那一排和底下两栏之间那道缝。那一排收起来以后，它就是两栏离屏幕上沿的距离。 */
+  --app-bar-gap: 0px;
+  /* 退场用的曲线：两头慢、中间快。
+     进场用那条弹簧（快进慢停）很好——东西落到位的那一下最该被看见；退场用它就不行：
+     前 50ms 走掉六成，平板上录下来一帧一帧看，胶囊在第二帧就只剩一层虚影了，人看到的
+     还是「一下子没了」。这一条让它在中段才走得最快，收拢的那一段看得见。 */
+  --exit-ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
 
 .pdf-page-bar {
   --drag: var(--top-drag, 0);
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 15;
   touch-action: none;
-  transform: translateY(calc(-100% * var(--drag)));
-  margin-top: calc(-1 * var(--pdf-bar-h) * var(--drag));
+  margin-top: var(--app-bar-top);
+  transform: translateY(calc(-1 * (var(--pdf-bar-h) + var(--app-bar-top)) * var(--drag)));
   opacity: calc(1 - var(--drag));
   transition:
     transform 0.32s cubic-bezier(0.32, 0.72, 0, 1),
-    margin-top 0.32s cubic-bezier(0.32, 0.72, 0, 1),
     opacity 0.26s ease;
 }
+
+/* 那一排让出来的那一截。只认类、不认进度，也不过渡：变一次就到位。 */
+#page-pdf > .pdf-workspace-host {
+  margin-top: calc(var(--app-bar-top) + var(--pdf-bar-h) + var(--app-bar-gap));
+}
+body.is-top-hidden #page-pdf > .pdf-workspace-host {
+  margin-top: var(--app-bar-gap);
+}
+/* 补那一段滑动的 0.32 秒里，两栏会探出工作区的上沿（拉出来的时候，它们从原来贴着
+   屏幕上沿的地方往下走），这时候不裁边。 */
+.pdf-workspace.is-row-sliding { overflow: visible; }
 
 body.is-top-hidden { --top-drag: 1; }
 body.is-top-hidden .pdf-page-bar { pointer-events: none; }
 
-/* Both the dock and the buttons on it: the press that starts a swipe lands on a
-   button, and a button carries touch-action:manipulation from the base sheet,
-   which is enough for the WebView to claim the drag and cancel the gesture. */
-[data-skin="liquid-math"] .bottom-nav,
-.bottom-nav,
-.bottom-nav button,
-.dock-peek { touch-action: none; }
+/* 三格：左边往桌上摆东西，正中换页，右边收拾桌子。
 
-.bottom-nav {
-  --drag: var(--bottom-drag, 0);
-  transform: translateY(calc((100% + 40px) * var(--drag)));
+   两边各分一半剩下的宽度（minmax(0, 1fr)，不按内容撑），正中那一格才是真的正中
+   ——和 fixed 在屏幕正中的两个标签对得上。左边那枚胶囊比它那一格宽的时候不能伸
+   进来压住标签：top-bar-fit.js 量着，放不下就先收字（is-bar-compact），再收标签
+   的字（is-bar-tight）。 */
+.pdf-page-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--app-nav-w) minmax(0, 1fr);
+  align-items: center;
+}
+
+.pdf-page-bar > .pdf-bar-group:first-child {
+  grid-column: 1;
+  justify-self: start;
+}
+
+.pdf-bar-nav-slot {
+  grid-column: 2;
+  height: 1px;
+}
+
+/* 右边：状态字靠着「全部关闭」。字长了先省略，胶囊不让。 */
+.pdf-bar-trail {
+  grid-column: 3;
+  justify-self: end;
+  max-width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+.pdf-bar-trail > .pdf-bar-group { flex: none; }
+.pdf-bar-trail > .pdf-status {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pdf-bar-trail > .pdf-status:empty { display: none; }
+
+/* 放不下的时候：左右两枚胶囊只留图标。字还在按钮里（读屏照读），只是缩成 0。 */
+body.is-bar-compact .pdf-page-bar .pdf-bar-btn {
+  font-size: 0;
+  gap: 0;
+}
+
+/* ── 练习 / 设置：顶上正中的两个标签 ──────────────────────────────────────────
+
+   原来是底下一枚浮着的胶囊，自己能收起来、有一根叫回它的把手、会把工具栏顶上
+   去……那一整套都随着它挪上来而没了：底边整条还给了纸。
+
+   fixed，不在练习页那一排里：设置页也要它，而那一排只在练习页上。那一排在正中
+   留了一格同样宽的空位。纵向和那一排的胶囊居中对齐。 */
+.app-nav {
+  --drag: 0;
+  position: fixed;
+  top: calc(var(--app-bar-top) + (var(--pdf-bar-h) - var(--app-nav-h)) / 2);
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  width: fit-content;
+  height: var(--app-nav-h);
+  display: flex;
+  align-items: stretch;
+  z-index: 1000;
+  isolation: isolate;
+  user-select: none;
+  /* 按在这一排上竖着往上拉（标签上也算），拉的是整排（见 initChromeHiding）；
+     WebView 不能把这一下拿去滚动。 */
+  touch-action: none;
+  /* 跟着那一排走，走一样远：那一排的高度，加上它离屏幕上沿那一截。 */
+  transform: translateY(calc(-1 * (var(--pdf-bar-h) + var(--app-bar-top)) * var(--drag)));
   opacity: calc(1 - var(--drag));
   transition:
     transform 0.32s cubic-bezier(0.32, 0.72, 0, 1),
     opacity 0.26s ease;
 }
 
-body.is-bottom-hidden { --bottom-drag: 1; }
-body.is-bottom-hidden .bottom-nav { pointer-events: none; }
+.app-nav button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: color var(--transition-fast), scale var(--transition-fast);
+}
+.app-nav button:active { scale: 0.96; }
+.app-nav button.active { color: var(--accent); font-weight: 600; }
+.app-nav button svg { width: 19px; height: 19px; flex: none; }
+
+/* 更窄的时候：两个标签也只留图标。 */
+body.is-bar-tight .app-nav button {
+  font-size: 0;
+  gap: 0;
+}
+
+/* 只在练习页上跟着那一排收起来。设置页上没有那一排，它们得一直在——不然切到设
+   置页就回不来了。 */
+body[data-page="pdf"] .app-nav { --drag: var(--top-drag, 0); }
+body[data-page="pdf"].is-top-hidden .app-nav { pointer-events: none; }
 
 /* While a finger is on it, the bar goes exactly where the finger goes — no
    easing between the two, or it lags behind the hand carrying it. */
 body.is-chrome-dragging .pdf-page-bar,
-body.is-chrome-dragging .bottom-nav { transition: none; }
+body.is-chrome-dragging .app-nav { transition: none; }
 
 /* A bar on its way in or out cannot be pressed.
 
    Only the controls go dead, not the bar: the glass around them still has to
-   answer the finger that is carrying it. And only the bar that is moving — the
-   other one is standing still and is perfectly usable.
+   answer the finger that is carrying it.
 
    This is the second half of keeping the two gestures apart. The first is that
    a press starting on a capsule never becomes a drag; this is that a capsule
    arriving under a thumb, or leaving from under one, never becomes a press. */
-body.is-bottom-moving .bottom-nav > button,
+body.is-top-moving .app-nav > button,
 body.is-top-moving .pdf-page-bar button,
 body.is-top-moving .pdf-page-bar select { pointer-events: none; }
 
-/* Where the import row is taken hold of once it has gone.
+/* 那一排收起来以后，从哪儿叫它回来。
 
-   A band watched on the document was not enough: with nothing to declare
-   touch-action on, the WebView claimed the vertical drag before it had
-   travelled far enough to count, and the row could be put away and not brought
-   back. This is a real element, so it can refuse to give the gesture up — the
-   same thing that made the dock's strip work.
+   原来是一条盖在屏幕顶上的透明条（.bar-peek，整宽、64px 高、z-index 999）。它存在只为一件事：
+   自己写 touch-action: none——光在文档上挂监听不够，WebView 会在手指走够之前就把竖着的拖动当成
+   滚动接走，那一排收起来就拉不回。可那一排收起后工作区的上边距变成 0，两栏顶上去，栏头正好落在
+   那 64px 里：整排栏头被它盖住，点不动（人说「收起后不该成为禁用区，唤出手势和点击选择手势并不
+   冲突」）。
 
-   It sits in the space above the pane's own toolbar, which is empty once the
-   import row has gone, so it covers no control. And it exists only while the
-   row is away. */
-.bar-peek {
-  position: fixed;
-  top: 0;
-  left: 0;
-  /* The whole width. It used to stop 52px short of the right edge, to keep
-     clear of the collapse button that sat in this same band; that button is
-     gone, and the corner it held is the corner a right hand reaches first. */
-  right: 0;
-  height: 64px;
-  z-index: 999;
-  pointer-events: none;
-  touch-action: none;
-}
+   现在不盖任何东西。往下拉和点按钮在同一个地方，靠手势分开（pdf-workspace-ui.js 的
+   initChromeHiding 里 reachesForRow 那一段）：按下后竖着走过 10px 才是拉，随后那一下点击被吞掉；
+   没走够就是点，照常落到按钮上；横着走的归浏览器（栏头放不下时能横着滚）。
 
-body.is-top-hidden .bar-peek { pointer-events: auto; }
-
-/* Where the dock can be taken hold of once it has gone.
-   It sits exactly where the dock itself lives, so it takes nothing away that
-   was reachable before, and it exists only while the dock is away. */
-/* The way back to a hidden dock: a handle in the middle, not the whole width.
- *
- * This strip is z-index 999 and takes pointer events while the dock is away, so
- * everything it covers is not page any more — a press there lands on the strip
- * and never reaches the ink canvas underneath. At 520px that was most of the
- * bottom of the workspace, which is why a line of working written along the
- * foot of a page could not be written at all, and why trying kept pulling the
- * dock back out from under the hand.
- *
- * 200px, centred. In a split workspace the centre of the screen is the divider
- * and its gutter, so the handle costs almost no writing area on either page,
- * and it is still a target a thumb coming off the bezel finds without aiming.
- * PdfWorkspace's chrome gestures narrow the STYLUS to the same band in JS —
- * this decides what swallows the press, that decides what the press means.
- */
-.dock-peek {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: calc(6px + var(--safe-b, 0px));
-  margin-inline: auto;
-  width: 200px;
-  max-width: calc(100% - 32px);
-  height: 84px;
-  z-index: 999;
-  pointer-events: none;
-}
-
-body.is-bottom-hidden .dock-peek { pointer-events: auto; }
+   「竖着的拖动不交给浏览器」只写在栏头上，而且要写到它里面的每一个元素上：栏头自己是个滚动
+   容器（overflow: auto），滚动容器的子元素会被重新放开上下拖动，只写在栏头身上，按在按钮上往下
+   拉还是会被 WebView 接走。不往更外面写（整页、整栏）：两栏里有会上下滚的列表（目录、缩略图、
+   那一摞的清单），书架也在这一页里，外面收窄一层，从它们的空隙上起手就滚不动了。栏头两边的空白
+   上往下拉，WebView 走几像素就收走手势，那时候看方向放那一排下来（CANCEL_PULL）。 */
+body.is-top-hidden .pdf-slot-toolbar,
+body.is-top-hidden .pdf-slot-toolbar * { touch-action: pan-x; }
 
 @media (prefers-reduced-motion: reduce) {
-  .pdf-page-bar, .bottom-nav { transition: none; }
+  .pdf-page-bar, .app-nav { transition: none; }
+}
+
+/* ── 切页时，顶上那一排 ──────────────────────────────────────────────────────
+
+   「练习 / 设置」两个标签两页都在，一动不动；只属于练习页的那几枚——左边那枚
+   胶囊、右边「全部关闭」、停在这一排里的工具栏——往正中那两个标签收拢、淡出，
+   回来时再从那儿长出来。
+
+   原来整页一起淡出：这几枚胶囊跟着底下的两栏一起变淡，0.2 秒里看不出它们自己有
+   什么动作，像是当场没了。现在它们各有各的一段，方向朝着留下来的那两个标签——
+   看上去是整排收成了中间那一枚。
+
+   只用 opacity 和单独的 translate / scale，不用 transform：工作区里停在这一排的
+   工具栏是 fixed 的，祖先一带 transform，它就会改按那个祖先定位，当场跳 64px。
+   同样的理由，练习页整页进场也不再上浮——两个标签不跟着浮，一浮就和两边的胶囊
+   错开 6px。 */
+#page-pdf.active { animation: none; }
+#page-pdf.active > .pdf-workspace-host { animation: pageFadeInFlat 0.22s var(--spring-ease); }
+#page-pdf.active .pdf-page-bar > .pdf-bar-group:first-child {
+  transform-origin: right center;
+  animation: capsuleInFromRight 0.36s var(--spring-ease) 0.03s backwards;
+}
+#page-pdf.active .pdf-bar-trail {
+  transform-origin: left center;
+  animation: capsuleInFromLeft 0.36s var(--spring-ease) 0.03s backwards;
+}
+
+/* 走的时候整页本身不淡（pageHold 只是一段什么都不改的计时，让 bootstrap.js 收得
+   到 animationend），淡的是它里面的东西：两栏和盖在上面的书架、对话框直接淡出，
+   顶上那两枚往中间收。 */
+#page-pdf.is-leaving { animation: pageHold 0.32s linear forwards; }
+#page-pdf.is-leaving > :not(.pdf-page-bar) { animation: pageFadeOutFlat 0.26s var(--exit-ease) forwards; }
+#page-pdf.is-leaving .pdf-page-bar > .pdf-bar-group:first-child {
+  transform-origin: right center;
+  animation: capsuleOutToRight 0.3s var(--exit-ease) forwards;
+}
+#page-pdf.is-leaving .pdf-bar-trail {
+  transform-origin: left center;
+  animation: capsuleOutToLeft 0.3s var(--exit-ease) forwards;
+}
+
+/* 停在这一排里的工具栏也一样，朝着两个标签收：停在右边那处的往左，左边那处的往右。 */
+#page-pdf.is-leaving .ink-toolbar.is-perched[data-perch="right"] {
+  transform-origin: left center;
+  animation: capsuleOutToLeft 0.3s var(--exit-ease) forwards;
+}
+#page-pdf.is-leaving .ink-toolbar.is-perched[data-perch="left"] {
+  transform-origin: right center;
+  animation: capsuleOutToRight 0.3s var(--exit-ease) forwards;
+}
+
+@keyframes pageHold { from { opacity: 1; } to { opacity: 1; } }
+@keyframes pageFadeInFlat { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pageFadeOutFlat { from { opacity: 1; } to { opacity: 0; } }
+/* 左边那枚往右收（朝着正中），右边那枚往左收。 */
+@keyframes capsuleOutToRight {
+  from { opacity: 1; translate: 0 0; scale: 1; }
+  to   { opacity: 0; translate: 22px 0; scale: 0.9; }
+}
+@keyframes capsuleOutToLeft {
+  from { opacity: 1; translate: 0 0; scale: 1; }
+  to   { opacity: 0; translate: -22px 0; scale: 0.9; }
+}
+@keyframes capsuleInFromRight {
+  from { opacity: 0; translate: 22px 0; scale: 0.9; }
+  to   { opacity: 1; translate: 0 0; scale: 1; }
+}
+@keyframes capsuleInFromLeft {
+  from { opacity: 0; translate: -22px 0; scale: 0.9; }
+  to   { opacity: 1; translate: 0 0; scale: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #page-pdf.active > .pdf-workspace-host,
+  #page-pdf.active .pdf-page-bar > .pdf-bar-group:first-child,
+  #page-pdf.active .pdf-bar-trail { animation: none; }
 }
 
 
+/* ── 工具栏停进这一排时 ───────────────────────────────────────────────────────
+
+   拖着工具栏经过这一排：要落进去的那处空当亮一圈虚影（top-row-dock.js 的
+   preview），松手就停在那儿。 */
+.top-row-perch-hint {
+  position: fixed;
+  z-index: 30;
+  border-radius: 50%;
+  pointer-events: none;
+  background: var(--accent-light, rgba(0, 122, 255, 0.12));
+  box-shadow: inset 0 0 0 1.5px var(--accent, #007aff);
+  opacity: 0;
+  scale: 0.6;
+  transition:
+    opacity 0.16s ease,
+    scale 0.24s var(--spring-ease),
+    left 0.2s var(--spring-ease);
+}
+.top-row-perch-hint.is-on { opacity: 1; scale: 1; }
+.top-row-perch-hint[hidden] { display: none; }
+
+/* 工具栏在这一排里点开时，标签被推开：推多少由 top-row-dock.js 逐帧写在行内的
+   translate 上，这时不许过渡（is-pushed-live）——过渡会让它慢半拍地追着横杠的边，
+   两样东西就叠在一起了。平时留着过渡：切到设置页、打开书架时，标签自己滑回正中。 */
+.app-nav {
+  transition:
+    transform 0.32s cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 0.26s ease,
+    translate 0.32s var(--spring-ease);
+}
+.app-nav.is-pushed-live {
+  transition:
+    transform 0.32s cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 0.26s ease;
+}
+/* 设置页上、书架开着的时候，工具栏看不见，被它推开的标签回到正中。 */
+body:not([data-page="pdf"]) .app-nav,
+body.is-library-open .app-nav { translate: none !important; }
 
 /* ── page toolbar: Floating Liquid Glass Bar ───────────────────────────────── */
 
 /* Compressed: three buttons do not need 72px of a 736px screen. */
-/* 和底栏一样：半透，但不磨砂。理由见 base.css 里 .bottom-nav 那条规则上的注释
-   ——这两条横跨整个屏幕，磨砂糊掉的是正在读的内容，不是页边空白。
-   真正生效的是文件末尾 [data-skin="liquid-math"] .pdf-page-bar 那条，
-   只改这里不起作用。 */
+/* 半透，但不磨砂：它横跨整个屏幕，磨砂糊掉的是正在读的内容，不是页边空白（理由
+   见 base.css 里「顶上两个标签」那条注释）。真正生效的是文件末尾
+   [data-skin="liquid-math"] .pdf-page-bar 那条，只改这里不起作用。
+   怎么排（三格 grid）在文件开头「putting the chrome away」那一段。 */
 .pdf-page-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  column-gap: 0.75rem;
   padding: 0.25rem 0.75rem;
   background: var(--hdr-bg);
   border-bottom: var(--nav-border);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.4), 0 4px 20px -2px rgba(0, 0, 0, 0.03);
-  flex-wrap: wrap;
-  z-index: 15;
-  transition: background 0.3s, border-color 0.3s;
+  /* 这里原来还写了一条 transition（只有底色和边色），和文件开头那一条一样具体、又更
+     晚，于是把 transform 和 opacity 的过渡整个盖掉了：横杠收起时是一下子跳走的，只有
+     两个标签在滑。过渡只在开头那一条里说。 */
 }
 
 .pdf-bar-group {
@@ -219,7 +414,13 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
   font-size: 0.84rem;
   font-weight: 500;
   font-family: inherit;
-  transition: all var(--transition-fast);
+  /* 不是 all：窄屏时这些按钮会收成只剩图标（font-size: 0），top-bar-fit.js 收完
+     当场就量，量到的得是收完的宽度，不能是过渡到一半的。 */
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    transform var(--transition-fast);
 }
 
 .pdf-bar-btn:hover,
@@ -281,7 +482,8 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
 .pdf-agent-fab {
   position: absolute;
   top: 50%;
-  right: 14px;
+  /* 工具栏贴在右边时，工作区把它推到横杠左边——见 _syncAgentFab。 */
+  right: var(--agent-fab-right, 14px);
   width: 48px;
   height: 48px;
   padding: 0;
@@ -572,8 +774,11 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
 
 /* ── Liquid Divider & Real-Time Ratio Badge ───────────────────────────────── */
 
+/* 两栏之间那道缝。原来 14px，加上两边各一道工作区的 gap，比栏外的边距宽出三倍，
+   两张卡片像两个窗口。现在 10px；手指按的是握柄那一圈（下面 .pdf-ws-divider-grip::before），
+   不是这道缝。 */
 .pdf-ws-divider {
-  flex: 0 0 14px;
+  flex: 0 0 10px;
   background: transparent;
   position: relative;
   cursor: col-resize;
@@ -597,7 +802,7 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
 }
 
 .pdf-workspace.is-column .pdf-ws-divider {
-  flex-basis: 14px;
+  flex-basis: 10px;
   cursor: row-resize;
 }
 
@@ -624,6 +829,20 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
   width: 48px;
   height: 6px;
 }
+
+/* 握柄能按到的范围比那道缝宽。
+
+   两栏之间的缝收窄了（液态玻璃里是 10px，和屏幕四边一样宽），只靠缝本身，手指
+   按不准。所以握柄自己往四周多伸出一圈看不见的按区：往两边各 12px（压在两张卡
+   片的边上）、上下各 22px——和 pdf-workspace.js 里 GRIP_REACH 判的是同一圈。只在
+   握柄那一小段，缝的其余几百像素照旧是缝，卡片边上照样写字。 */
+.pdf-ws-divider-grip { position: relative; }
+.pdf-ws-divider-grip::before {
+  content: '';
+  position: absolute;
+  inset: -22px -12px;
+}
+.pdf-workspace.is-column .pdf-ws-divider-grip::before { inset: -12px -22px; }
 
 .pdf-ws-divider:hover .pdf-ws-divider-grip,
 .pdf-ws-divider.is-dragging .pdf-ws-divider-grip {
@@ -672,23 +891,26 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
 
 /* 缩放时浮出来的比例牌。
  *
- * 和分栏比例那块牌子同一套说法（同样的玻璃、同样的圆角），但它浮在这一栏的正
- * 中间而不是整个工作区的顶上：比例是这一栏自己的事，两栏各有各的。
+ * 一枚白色的小胶囊，挂在这一栏栏头底下、页面的上沿，横着居中：比例是这一栏自己的事，两栏
+ * 各有各的。原来是页面正中一大块深色玻璃（1.05rem 的字、上下 8px 的边），正压在人捏着的
+ * 那一片字上——人说「调去文件菜单栏下面，变成白色，再缩小一点」。top 由 _flashZoom 在露面
+ * 那一刻量（栏头多高每一栏不一样），这里的只是量不到时的退路。
  *
+ * 白底不磨砂：它压在正文上，磨砂糊掉的是字（见 liquid.css 开头那几条规矩）。
  * pointer-events: none——它只是报个数，不该挡住底下那一页。 */
 .pdf-zoom-badge {
   position: absolute;
-  top: 50%;
+  top: 86px;
   left: 50%;
-  transform: translate(-50%, -50%) scale(0.9);
-  background: rgba(20, 20, 24, 0.82);
-  color: #fff;
-  backdrop-filter: blur(24px) saturate(180%);
-  border: 0.5px solid rgba(255, 255, 255, 0.22);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  transform: translate(-50%, -4px) scale(0.96);
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--lg-label, #1d1d1f);
+  border: 0.5px solid rgba(15, 23, 42, 0.1);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 6px 16px -8px rgba(15, 23, 42, 0.24);
   border-radius: var(--pill-radius);
-  padding: 8px 18px;
-  font-size: 1.05rem;
+  padding: 3px 10px;
+  font-size: 12px;
+  line-height: 16px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
@@ -701,7 +923,7 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
 
 .pdf-zoom-badge.is-visible {
   opacity: 1;
-  transform: translate(-50%, -50%) scale(1);
+  transform: translate(-50%, 0) scale(1);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -894,10 +1116,8 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
   position: absolute;
   z-index: 8;
   pointer-events: none;
-  /* No 3D here any more. The fold is drawn, not transformed, so the sheet needs
-     no perspective, no preserve-3d and no backface rule — and the shadow it
-     used to cast is drawn into the canvas along the crease, where a real one
-     falls, rather than under the whole box. */
+  /* No 3D here. The fold is a flat reflection, so the sheet needs no
+     perspective, no preserve-3d and no backface rule. */
   border-radius: 2px;
   overflow: hidden;
   will-change: transform, opacity;
@@ -905,11 +1125,48 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
 
 .pdf-page-leaf canvas { display: block; }
 
-/* The turning sheet is drawn into one canvas: the flat part, the part folded
-   back on itself, the crease and its shadow. It has to be a canvas rather than
-   transformed boxes, because the fold is a reflection about a line that is
-   rarely vertical and a box cannot be reflected about a diagonal. */
-.pdf-page-leaf canvas.turn { display: block; }
+/* 翻页那张纸的几块（pdf-pane.js 的 _makeLeaf / _paintTurn）：
+   half   折痕这一侧的裁切框（右边就是折痕，转到折痕的角度），装着——
+   photo  这一页的照片（摆回原位，只露出平躺的那一截），
+   back   翻过去的那一截：一张空白纸，按折痕镜像过去，
+   crease 折痕那一道细线；
+   shade  翻开那一侧紧贴折痕的一窄条影子，落在底下那一页上。
+   原来是一张 canvas 每帧把整页重画一遍，平板上三分之一的帧掉到 60fps；现在照片只拍一次，
+   手在动的时候只改这几块的 transform 和 opacity。 */
+.pdf-fold-half {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: hidden;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+.pdf-fold-photo,
+.pdf-fold-back {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: block;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+.pdf-fold-crease {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  background: rgba(15, 23, 42, 0.13);
+}
+.pdf-fold-shade {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 32px;
+  transform-origin: 0 0;
+  opacity: 0;
+  pointer-events: none;
+  background: linear-gradient(to right, rgba(15, 23, 42, 0.16), rgba(15, 23, 42, 0));
+  will-change: transform, opacity;
+}
 
 .pdf-page-leaf-shade {
   position: absolute;
@@ -1039,7 +1296,27 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
   animation: outlineIn 0.16s var(--spring-ease);
 }
 
-.pdf-bar-menu[hidden] { display: none; }
+/* 收起时淡出，不是当场消失——和设置页那两个下拉一样（base.css 的
+   .set-select-dropdown）。JS 照旧当场设 hidden；display: none 那一下由
+   allow-discrete 推迟到淡出结束，这一小段里它点不到。 */
+.pdf-bar-menu,
+.pdf-slot-menu {
+  transition-property: opacity, translate, display;
+  transition-duration: 0.14s, 0.16s, 0.16s;
+  transition-timing-function: ease, var(--spring-ease), linear;
+  transition-behavior: allow-discrete;
+}
+.pdf-bar-menu[hidden],
+.pdf-slot-menu[hidden] {
+  display: none;
+  opacity: 0;
+  translate: 0 -4px;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pdf-bar-menu,
+  .pdf-slot-menu { transition: none; }
+}
 
 .pdf-bar-menu-item {
   display: flex;
@@ -1311,7 +1588,7 @@ body.is-bottom-hidden .dock-peek { pointer-events: auto; }
 
 .pdf-thumb-cell.is-current .pdf-thumb-shot {
   border-color: var(--accent, #2563eb);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.22);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #2563eb) 22%, transparent);
 }
 
 .pdf-thumb-cell.is-current .pdf-thumb-num { color: var(--accent, #2563eb); }
@@ -1764,15 +2041,29 @@ body.is-library-open .ink-card-layer { display: none; }
   right: -2px;
   width: 30px;
   height: 30px;
+  /* 三个点是一枚图标（book-shelf.js），在按钮里按几何居中——不看字体的基线和中线。 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   border: 0;
   border-radius: 50%;
   background: transparent;
   color: var(--muted);
-  font-size: 1.05rem;
-  line-height: 1;
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.18s ease, background 0.18s ease;
+}
+/* 和栏头那颗「⋯」同一种画法（三个 0.01 长的线段，圆头），点的大小按这颗 30px 的按钮定。 */
+.pdf-book-more-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  pointer-events: none;
 }
 
 /* 触摸屏上没有悬停，⋯ 一直露着——不然它就是个找不到的功能。 */
@@ -2202,13 +2493,17 @@ body.is-library-open .ink-card-layer { display: none; }
 }
 
 /* 不磨砂。这一条才是真正生效的那个（特异性高过上面那条光秃秃的
-   .pdf-page-bar），理由见 base.css 里 .bottom-nav 那条规则上的注释。 */
+   .pdf-page-bar），理由见 base.css 里「顶上两个标签」那条注释。 */
 [data-skin="liquid-math"] .pdf-page-bar {
   background: var(--glass-bg);
   border: var(--nav-border);
   box-shadow: var(--glass-shadow);
   border-radius: var(--pill-radius);
-  margin: 6px 12px;
+  /* 上边距不在这里写：它由文件开头那条按收起的进度算的算式管（收起时要一路收到
+     负的，工作区才顶得上去）。这里原来写的是 margin: 6px 12px，把那条算式整个盖
+     掉了——收起顶栏时横杠滑走了，它占的地方却还空着。 */
+  margin-inline: 12px;
+  margin-bottom: 6px;
 }
 
 [data-skin="liquid-math"] .pdf-pane-viewport {
@@ -2241,7 +2536,7 @@ body.is-library-open .ink-card-layer { display: none; }
 }
 
 [data-skin="liquid-math"] .pdf-ws-divider {
-  flex-basis: 14px;
+  flex-basis: 10px;
   position: relative;
 }
 
@@ -2264,16 +2559,38 @@ body.is-library-open .ink-card-layer { display: none; }
   box-shadow: none;
 }
 
+/* 握柄、交换按钮、拖动时的比例牌：原来是近乎纯白、再加一圈白边和一道白高光，落在玻璃
+   那片浅色渐变上像是打了过曝的光（人说「打光太过曝了」）。现在白收到七成左右，边换成
+   一条极淡的墨线，影子只留贴身的一层；拖着、要交换的时候是一颗玻璃泡，不再变成一块蓝。 */
+/* 握柄的大小两套皮肤一样（原来只写在玻璃上：纸里它是 6×48，换皮肤时胖瘦一下）；上下分栏
+   （is-column）时横过来——原来这条玻璃规则比 is-column 那条晚，上下分栏时握柄还是竖着的。 */
+[data-skin] .pdf-ws-divider-grip { width: 9px; height: 54px; }
+[data-skin] .pdf-workspace.is-column .pdf-ws-divider-grip { width: 54px; height: 9px; }
 [data-skin="liquid-math"] .pdf-ws-divider-grip {
-  width: 9px;
-  height: 54px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(15, 23, 42, 0.10);
-  box-shadow:
-    0 2px 10px rgba(15, 23, 42, 0.08),
-    inset 0 1px 0.5px #fff;
+  background: rgba(255, 255, 255, 0.66);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
   position: relative;
+}
+[data-skin="liquid-math"] .pdf-ws-divider:hover .pdf-ws-divider-grip,
+[data-skin="liquid-math"] .pdf-ws-divider.is-dragging .pdf-ws-divider-grip,
+[data-skin="liquid-math"] .pdf-workspace.is-swap-armed .pdf-ws-divider-grip {
+  background: var(--lg-bubble);
+  border-color: rgba(15, 23, 42, 0.1);
+  box-shadow: var(--lg-bubble-shadow);
+}
+[data-skin="liquid-math"] .pdf-ws-swap {
+  background: rgba(255, 255, 255, 0.55);
+  border-color: rgba(15, 23, 42, 0.08);
+  color: var(--lg-label-2);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+[data-skin="liquid-math"] .pdf-workspace.is-swap-armed .pdf-ws-swap {
+  background: var(--lg-bubble);
+  border-color: rgba(15, 23, 42, 0.1);
+  color: var(--lg-tint);
+  box-shadow: var(--lg-bubble-shadow), 0 0 0 4px rgba(120, 120, 128, 0.14);
 }
 
 /* φ has a descender, and translate(-50%) centres the LINE BOX, which put the
@@ -2297,204 +2614,30 @@ body.is-library-open .ink-card-layer { display: none; }
    ══════════════════════════════════════════════════════════════ */
 [data-skin="liquid-math"] .pdf-ws-ratio-badge {
   font-family: "KaTeX_Math", "SF Pro Text", -apple-system, sans-serif;
-  background: rgba(255, 255, 255, 0.40);
+  background: rgba(255, 255, 255, 0.78);
   color: var(--fg);
-  border: 1px solid rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(20px) saturate(210%) brightness(108%);
-  box-shadow:
-    0 4px 16px rgba(15, 23, 42, 0.08),
-    inset 0 1.5px 0.5px #fff;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  backdrop-filter: blur(20px) saturate(160%);
+  box-shadow: 0 4px 14px -6px rgba(15, 23, 42, 0.22);
   text-shadow: none;
   letter-spacing: 0.02em;
   font-weight: 600;
 }
 
 /* ══════════════════════════════════════════════════════════════
-   皮肤：对页 · 纸 —— 阅读页
-   ══════════════════════════════════════════════════════════════ */
+   皮肤：纸 —— 分隔条
+   ══════════════════════════════════════════════════════════════
 
-/* 有六处把模糊写死在规则里而不是写在变量里，覆盖令牌够不着，逐个关掉。
-   留着它们会变成在一层毛玻璃上画发丝线——两种材质叠在一起，哪一种都不成立。 */
-[data-skin="minimal"] .pdf-page-bar,
-[data-skin="minimal"] .bottom-nav,
+   纸的颜色、线、荧光笔都在 paper.css。这里只留「形」：握柄和交换按钮和玻璃一样带一圈
+   1px 的边（纸上它是切边，颜色在 paper.css）——宽度不一样，换皮肤时它们就胖瘦一下；
+   纸上不刻 φ（两像素宽的一个字读不出来，只是一粒脏点）；比例牌是一小块墨，不带边。 */
 [data-skin="minimal"] .pdf-ws-divider-grip,
-[data-skin="minimal"] .pdf-ws-ratio-badge,
-[data-skin="minimal"] .pdf-library-panel,
-[data-skin="minimal"] .pdf-slot-toolbar {
-  backdrop-filter: none;
-}
-
-/* 桌面。分栏之间是一条缝，宽到看得见是两张纸，窄到不像两个窗口。 */
-[data-skin="minimal"] .pdf-workspace {
-  background: var(--bg);
-  gap: 6px;
-}
-
-/* 纸：纯白、一条切边、不投影。它是平放着的。 */
-[data-skin="minimal"] .pdf-ws-slot {
-  background: #ffffff;
-  border: 1px solid var(--border-color);
-  border-radius: var(--card-radius);
-  box-shadow: none;
-}
-/* 当前分栏：同一条边，换成墨色。两档明度差，不需要光晕来喊。 */
-[data-skin="minimal"] .pdf-ws-slot.is-active {
-  border-color: var(--fg);
-  box-shadow: none;
-}
-
-/* 纸上的横条只用一条下边线和自己分开，不另起底色——同一张纸不该有两种白。 */
-[data-skin="minimal"] .pdf-page-bar,
-[data-skin="minimal"] .pdf-slot-toolbar {
-  background: #ffffff;
-  border-bottom: 1px solid var(--glass-border-subtle, rgba(15, 23, 42, 0.07));
-  box-shadow: none;
-}
-
-[data-skin="minimal"] .pdf-pane-viewport { background: #ffffff; }
-
-/* 页面本身要和承载它的纸分开，否则白落在白上就没有边界。一条描边，不是投影：
-   投影会说"页面浮在分栏上面"，而它是嵌在里面的。 */
-[data-skin="minimal"] .pdf-pane-canvas {
-  box-shadow: 0 0 0 1px var(--border-color);
-  border-radius: 0;
-}
-
-/* 分隔条：一条缝里的一个握柄。 */
-[data-skin="minimal"] .pdf-ws-divider::before {
-  background: var(--border-color);
-  width: 1px;
-  box-shadow: none;
-}
-[data-skin="minimal"] .pdf-ws-divider-grip {
-  background: #ffffff;
-  border: 1px solid var(--border-color);
-  border-radius: 2px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);   /* 它是可以捏起来的，所以有一点厚度 */
-}
-[data-skin="minimal"] .pdf-ws-divider:hover .pdf-ws-divider-grip,
-[data-skin="minimal"] .pdf-ws-divider.is-dragging .pdf-ws-divider-grip {
-  background: var(--fg);
-  border-color: var(--fg);
-  box-shadow: none;
-}
-/* 玻璃皮肤在握柄上刻了一个 φ。极简不留字面——一个只有两像素宽的字读不出来，
-   只会变成一粒脏点。 */
+[data-skin="minimal"] .pdf-ws-swap { border: 1px solid var(--border-color); }
 [data-skin="minimal"] .pdf-ws-divider-grip::after { content: ''; }
-
-/* 互换按钮是悬空的，所以它有影子。 */
-[data-skin="minimal"] .pdf-ws-swap {
-  background: #ffffff;
-  border: 1px solid var(--border-color);
-  color: var(--fg);
-  box-shadow: var(--glass-cast);
-}
-
-/* 比例提示只在拖动时出现，是一块墨。 */
 [data-skin="minimal"] .pdf-ws-ratio-badge {
-  background: var(--fg);
-  color: #ffffff;
   border: 0;
-  border-radius: 5px;
-  box-shadow: none;
   text-shadow: none;
   font-weight: 500;
-}
-
-/* 底部胶囊栏浮在文档之上，所以它有边、有影，也有圆角——0 圆角的满幅横条读起来
-   像出了故障，不像一个决定。 */
-[data-skin="minimal"] .bottom-nav {
-  background: #ffffff;
-  border: 1px solid var(--border-color);
-  border-radius: var(--nav-radius);
-  box-shadow: var(--glass-cast);
-}
-[data-skin="minimal"] .bottom-nav::after,
-[data-skin="minimal"] .bottom-nav::before { display: none; }
-/* 当前页签由那枚会滑动的透镜来标示，标签自己不再另铺一层底色——两层叠在一起
-   会看到一个方块套在一个胶囊里。
-   （这里原本写的是 .is-active，而真正的类名是 .active，所以那条规则一次也没生效
-   过；CSS 不会为拼错的选择器报错，只会安静地什么都不做。） */
-[data-skin="minimal"] .bottom-nav [data-page].active {
-  color: var(--fg);
-}
-
-/* 极简里没有胶囊。
- *
- * .nav-glass-lens 是液态玻璃那枚会滑动的透镜——一片跟着当前页签移动的玻璃。纸上
- * 不会有一块玻璃滑来滑去，所以它在这套皮肤里没有对应物。
- *
- * 上一版试着把它改造成一块浅色圆角，失败了：material.css 用 !important 钉住了
- * 它的底色、模糊和投影（连那层带蓝的透光池一起），只有圆角听了话。屏幕上于是
- * 出现一个 8px 圆角的玻璃胶囊——两种材质各出一半，比不改还糟。
- *
- * 所以不改造，直接不要。当前页签靠墨色与字重说明自己是当前页；在纸上这就够了，
- * 也不必再画一个形状去圈住它。 */
-[data-skin="minimal"] .bottom-nav .nav-glass-lens { display: none; }
-
-/* 顶部导入行仍是 999px 的胶囊——那是玻璃的形状语言：胶囊读作"一颗悬浮的药片"，
-   靠的是光而不是边。纸这一套里，同一排按钮该是切出来的方角块，跟着 5/8/12 那个
-   梯度走，否则一屏之内会同时出现两种造型语言。 */
-[data-skin="minimal"] .pdf-bar-group {
-  background: transparent;
-  border-radius: var(--btn-radius-lg);
-  gap: 2px;
-}
-[data-skin="minimal"] .pdf-bar-btn {
-  border-radius: var(--btn-radius);
-  background: transparent;
-  border: 1px solid transparent;
-}
-[data-skin="minimal"] .pdf-bar-btn:hover,
-[data-skin="minimal"] .pdf-bar-btn:active {
-  background: var(--glass-bg-subtle);
-  border-color: var(--border-color);
-}
-
-/* 文档库从侧面推进来，压在页面上，所以它投影。 */
-[data-skin="minimal"] .pdf-library-panel {
-  background: #ffffff;
-  border-right: 1px solid var(--border-color);
-  box-shadow: 0 0 40px -12px rgba(15, 23, 42, 0.18);
-}
-
-[data-skin="minimal"] .bar-peek,
-[data-skin="minimal"] .dock-peek { background: transparent; }
-
-
-/* 当前页签的图标上有一层蓝色辉光——base.css 给它加了
-   drop-shadow(0 2px 6px rgba(0,122,255,.4))，那是液态玻璃的强调色。纸上不会有
-   东西发光，何况这抹蓝在这套皮肤里再无第二处，看上去像是漏进来的。 */
-[data-skin="minimal"] .bottom-nav button.active svg,
-[data-skin="minimal"] .bottom-nav button svg { filter: none; }
-
-/* 胶囊栏那圈菲涅耳环也一并收掉：它是一整圈随光转的渐变，纸只有一条切边，
-   而那条边由 .bottom-nav 自己的 border 提供。 */
-[data-skin="minimal"] .bottom-nav::after,
-[data-skin="minimal"] .bottom-nav::before { display: none !important; }
-
-
-/* 极简里没有一块纯黑。
- *
- * 握柄被按住、以及互换按钮进入"松手即换"的状态时，material.css 把它们填成
- * var(--accent)——在这套皮肤里 --accent 是墨色，于是屏幕上出现一根纯黑的竖条和
- * 一颗纯黑的圆。它们是这一屏最重的两个东西，而它们说的只是"你正按着我"。
- *
- * 换成深一点的白：底色比纸暗几档，边线加重一档。状态照样看得出来，份量退回到
- * 它该有的位置。 */
-[data-skin="minimal"] .pdf-ws-divider:hover .pdf-ws-divider-grip,
-[data-skin="minimal"] .pdf-ws-divider.is-dragging .pdf-ws-divider-grip,
-[data-skin="minimal"] .pdf-workspace.is-swap-armed .pdf-ws-divider-grip {
-  background: #dfe3e8;
-  border-color: rgba(15, 23, 42, 0.28);
-  box-shadow: none;
-}
-
-[data-skin="minimal"] .pdf-workspace.is-swap-armed .pdf-ws-swap {
-  background: #dfe3e8;
-  border-color: rgba(15, 23, 42, 0.28);
-  color: var(--fg);
-  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.06);
 }
 
 
@@ -2575,6 +2718,69 @@ body.is-library-open .ink-card-layer { display: none; }
   font-size: 0.95rem;
 }
 
+/* 章节标签：顶上一排，点一下滑到那一章。十五节从头滑到尾太长，人多半是回来查
+   某一件事的。换行而不是横着滚：五枚标签在平板上一行放得下，窄屏上折成两行也
+   都看得见，横着滚的话后几枚就藏起来了。 */
+.guide-toc {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 1.1rem;
+}
+
+.guide-toc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.5rem;
+  padding: 0 1rem 0 0.4rem;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--card-bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.guide-toc-no,
+.guide-chapter-no {
+  display: inline-grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  background: var(--accent-light);
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.guide-chapter {
+  max-width: 60rem;
+  margin: 2rem auto 0;
+  scroll-margin-top: 1rem;
+}
+
+.guide-chapter-title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 0.9rem;
+  font-size: 1.3rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+.guide-chapter-no {
+  width: 2rem;
+  height: 2rem;
+  font-size: 0.9rem;
+}
+
 /* 一行一件事。窄屏时图在上、字在下——图是说明，不是装饰，不该被挤成一条缝。 */
 .guide-cards {
   max-width: 60rem;
@@ -2620,9 +2826,12 @@ body.is-library-open .ink-card-layer { display: none; }
   --guide-red: #dc2626;
   --guide-green: #16a34a;
   --guide-dot1: #111827;
+  --guide-gold: #d97706;
+  --guide-gold-hi: #e09033;
 }
 
-.guide-card-text h3 {
+.guide-card-text h3,
+.guide-card-text h4 {
   margin: 0 0 0.5rem;
   font-size: 1.08rem;
   font-weight: 700;
@@ -2902,4 +3111,130 @@ body.is-library-open .ink-card-layer { display: none; }
   background: color-mix(in srgb, var(--accent, #2563eb) 14%, #ffffff);
   color: var(--accent, #2563eb);
   border: 1px solid color-mix(in srgb, var(--accent, #2563eb) 30%, transparent);
+}
+
+/* ── 文件夹 ──────────────────────────────────────────────────────────────────
+   书架上的格子是一本书的形状（1:1.414），而文件夹不是书。所以它不装成书：没有
+   纸、没有书脊、没有投影，只有一个居中的文件夹图形，和人在电脑上见了二十年的那
+   个一样。格子本身还是同一个格子——一排东西对不齐比长得不一样更难看。 */
+
+.pdf-book-block.is-folder {
+  background: transparent;
+  box-shadow: none;
+  border: none;
+}
+
+.pdf-book-block.is-folder::before { display: none; }   /* 书脊那一道暗，文件夹没有 */
+
+.pdf-book-cover.is-folder-face {
+  background: none;
+  opacity: 1;
+  display: grid;
+  place-items: center;
+  padding: 0 8%;
+}
+
+.pdf-book-cover.is-folder-face svg {
+  width: 100%;
+  height: auto;
+  filter: drop-shadow(0 6px 14px rgba(15, 23, 42, 0.18));
+}
+
+/* 两片：后面那片带着翻起来的标签，前面那片是身子。亮一档的是标签，好让那道折
+   边读得出来——一整块同色的话，它就只是个圆角方块。 */
+.pdf-folder-back { fill: var(--math-gold, #d97706); }
+.pdf-folder-front { fill: color-mix(in srgb, var(--math-gold, #d97706) 82%, #ffffff); }
+
+[data-skin="liquid-math"] .pdf-book-cover.is-folder-face svg {
+  filter: drop-shadow(0 8px 18px rgba(15, 23, 42, 0.22));
+}
+
+
+/* ── 打开一个文件夹之后，架子上面那一条 ──────────────────────────────────────
+ *
+ * 进了文件夹，书架显示的不再是「全部」，而人必须一眼看出这件事——否则他会以为别
+ * 的书都丢了。所以这一条永远在：左边一个「‹ 文档库」把他带回去，中间是这个文件夹
+ * 的名字和份数，右边是往里放东西。
+ *
+ * 不用面包屑：只有一层，面包屑上永远只有两格，那是把一个结构画出来给人看，而这里
+ * 的结构就是「里」和「外」。 */
+
+.pdf-folder-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border: var(--glass-border-subtle);
+  border-radius: 14px;
+  background: var(--glass-bg-subtle);
+}
+
+.pdf-folder-bar-back {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 40px;
+  padding: 0 0.65rem;
+  border: var(--glass-border-subtle);
+  border-radius: 10px;
+  background: var(--card-bg);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pdf-folder-bar-face {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  color: var(--math-gold, #d97706);
+}
+
+.pdf-folder-bar-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pdf-folder-bar-count {
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.pdf-folder-bar-add {
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 0 0.8rem;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--accent, #2563eb);
+  color: #fff;
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* 空文件夹要自己说一句话。什么都不显示的话，它和「还没加载完」长得一模一样。 */
+.pdf-folder-empty {
+  padding: 2.5rem 1rem;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .pdf-folder-bar-back:hover { border-color: var(--accent); }
+  .pdf-folder-bar-add:hover { filter: brightness(1.06); }
 }

@@ -18,7 +18,7 @@
  * 书脊上印的是页数；草稿纸只有一张纸，印的是它自己是什么。
  */
 export const SHELF_KINDS = Object.freeze({
-  DOC: 'doc', PAD: 'pad', NOTE: 'note', COMBO: 'combo',
+  DOC: 'doc', PAD: 'pad', NOTE: 'note', COMBO: 'combo', FOLDER: 'folder',
 });
 
 const str = (v, fallback = '') => (typeof v === 'string' && v.trim() ? v : fallback);
@@ -34,7 +34,14 @@ const num = (v, fallback = 0) => (Number.isFinite(v) ? v : fallback);
  * @param {Array} combos  listCombos() 的结果
  * @returns {ReadonlyArray} 冻结的书架条目
  */
-export function shelfItems(docs = [], pads = [], recent = [], notes = [], combos = []) {
+export function shelfItems(docs = [], pads = [], recent = [], notes = [], combos = [], view = {}) {
+  // 文件夹把这排书分成两批：在某个文件夹里的，和还摆在外面的。
+  //
+  // 摊开书架看到的是外面那一批加上几个文件夹；点进一个文件夹，看到的只有它里面
+  // 那一批。同一套排序两边都用——进了文件夹，书的先后不该换一套规矩。
+  const members = view.members || {};
+  const openFolderId = view.openFolderId || null;
+  const inThisView = (id) => (members[id] || null) === openFolderId;
   // 名次表：查一次 O(1)，而不是每次比较都去数组里找。
   const rank = new Map();
   if (Array.isArray(recent)) {
@@ -43,7 +50,7 @@ export function shelfItems(docs = [], pads = [], recent = [], notes = [], combos
 
   const items = [];
   for (const doc of Array.isArray(docs) ? docs : []) {
-    if (!doc?.id) continue;
+    if (!doc?.id || !inThisView(doc.id)) continue;
     items.push(Object.freeze({
       id: doc.id,
       kind: SHELF_KINDS.DOC,
@@ -59,7 +66,7 @@ export function shelfItems(docs = [], pads = [], recent = [], notes = [], combos
     }));
   }
   for (const pad of Array.isArray(pads) ? pads : []) {
-    if (!pad?.id) continue;
+    if (!pad?.id || !inThisView(pad.id)) continue;
     items.push(Object.freeze({
       id: pad.id,
       kind: SHELF_KINDS.PAD,
@@ -75,7 +82,7 @@ export function shelfItems(docs = [], pads = [], recent = [], notes = [], combos
   }
 
   for (const note of Array.isArray(notes) ? notes : []) {
-    if (!note?.id) continue;
+    if (!note?.id || !inThisView(note.id)) continue;
     items.push(Object.freeze({
       id: note.id,
       kind: SHELF_KINDS.NOTE,
@@ -98,7 +105,7 @@ export function shelfItems(docs = [], pads = [], recent = [], notes = [], combos
   // 事。让它和书混在一起按时间浮沉，人每次都得先找一遍。
   const combined = [];
   for (const combo of Array.isArray(combos) ? combos : []) {
-    if (!combo?.id) continue;
+    if (!combo?.id || !inThisView(combo.id)) continue;
     combined.push(Object.freeze({
       id: combo.id,
       kind: SHELF_KINDS.COMBO,
@@ -121,7 +128,36 @@ export function shelfItems(docs = [], pads = [], recent = [], notes = [], combos
   // 稳定比顺序「对」更要紧，人是靠位置记住书的。
   items.sort((a, b) => (a.rank - b.rank) || (b.addedAt - a.addedAt)
     || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  return Object.freeze([...combined, ...items]);
+
+  // 文件夹只摆在最外面那一层。一层就够，不嵌套——理由写在 folder-state.js 开头。
+  //
+  // 它们排在组合之后、书之前：组合说的是「回到那个状态」，文件夹说的是「往里
+  // 找」，书才是「就是它」。三种事，从粗到细。
+  const folders = [];
+  if (!openFolderId) {
+    for (const folder of Array.isArray(view.folders) ? view.folders : []) {
+      if (!folder?.id) continue;
+      let count = 0;
+      for (const value of Object.values(members)) if (value === folder.id) count += 1;
+      folders.push(Object.freeze({
+        id: folder.id,
+        kind: SHELF_KINDS.FOLDER,
+        name: str(folder.name, '文件夹'),
+        role: '',
+        pageCount: 0,
+        sizeBytes: 0,
+        hasOutline: false,
+        style: null,
+        addedAt: num(folder.createdAt),
+        rank: Infinity,
+        /** 里面有几份东西。书脊那一行印它。 */
+        folderSize: count,
+      }));
+    }
+    folders.sort((a, b) => (a.addedAt - b.addedAt) || (a.id < b.id ? -1 : 1));
+  }
+
+  return Object.freeze([...combined, ...folders, ...items]);
 }
 
 /**
@@ -156,6 +192,9 @@ export function shelfSubtitle(item) {
   if (!item) return '';
   // 组合印的是它摆了几本。页数对它没有意义——它不是一份文件。
   if (item.kind === SHELF_KINDS.COMBO) return `${item.comboSize || 0} 本`;
+  // 文件夹印的是里面有几份。空文件夹也要说出来——「0 项」和什么都不印，后者
+  // 看着像还没数完。
+  if (item.kind === SHELF_KINDS.FOLDER) return `${item.folderSize || 0} 项`;
   if (item.kind === SHELF_KINDS.PAD) return '草稿纸';
   // 笔记本落到下面那行：它有页数，而页数正是「这本厚不厚」这个问题的答案。
   return item.pageCount > 0 ? `${item.pageCount} 页` : '';

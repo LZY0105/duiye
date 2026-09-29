@@ -20,6 +20,7 @@ import { initSettings } from '../settings/settings.js';
 import { initCustomSelects, syncCustomSelects } from '../ui/custom-select.js';
 import { initPdfWorkspace } from '../pdf/pdf-workspace-ui.js';
 import { initLiquidGlass } from '../ui/liquid-glass.js';
+import { initLiquidGlassReact } from '../ui/liquid-glass-react.js';
 
 export async function createApp() {
   // Nothing to assemble ahead of time any more: the workspace owns its own DOM
@@ -50,6 +51,8 @@ export async function start() {
   // surface is showing; starting it here too would run it on 课本, where it is
   // painted entirely behind an opaque workspace.
   initLiquidGlass();
+  // 胶囊和按钮上真的那几层玻璃（liquid-glass-react 的做法）；原来那两段折射滤镜也换成它的。
+  initLiquidGlassReact();
 
   probeNativeProxy(Logger);
 }

@@ -19,6 +19,14 @@ import './styles/mobile.css';
 // Last: the material tier system is the authority on which layer a surface
 // belongs to (chrome = glass, content = sharp, controls = fills).
 import './styles/material.css';
+// 在分层之后：玻璃皮肤的外观（颜色、字、形状、阴影、图标），液态玻璃和毛玻璃都穿它。它只在
+// material.css 分好的那一层里把东西做好看，不把任何东西搬到另一层去。
+import './styles/liquid.css';
+// 液态玻璃里那几块真的液态玻璃（照 liquid-glass-react 挂上去的层）：要压过 liquid.css 给这些
+// 胶囊、按钮的底色和磨砂，所以在它后面。只认 data-glass="liquid"，和毛玻璃、纸不相干。
+import './styles/liquid-glass-react.css';
+// 最后：「纸」的材质。尺寸和排法和玻璃是同一套（上面那一份），这里只换颜色、边和影子。
+import './styles/paper.css';
 
 import { bootstrap } from './core/bootstrap.js';
 import { createApp, start } from './core/app.js';

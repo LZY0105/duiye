@@ -233,7 +233,9 @@ test('a corner release parks the bar as a puck, and a tap unfolds it', () => {
 });
 
 test('unfolding measures the bar it becomes, not one still easing open', () => {
-  const { bar } = mountToolbar();
+  const { bar, host } = mountToolbar();
+  // 工作区要在屏幕上：不在屏幕上（切到设置页）时横杠本来就不摆位置，见 render。
+  measurable(bar, host);
   drag(bar, { from: [40, 400], to: [970, 770] });
   assert.equal(bar.state.phase, 'docked', 'precondition: parked in a corner');
 
@@ -1169,6 +1171,368 @@ test('信号来自落笔，不是来自「这一栏被点了一下」', () => {
   assert.equal(hooks.length, 2, '书和草稿纸两边都要接上，少一边就有一半的纸不灵');
 });
 
+
+
+// ── 拖粗细滑杆的时候，横杠上的图标在闪 ──────────────────────────────────────
+//
+// 真机上报的：拖笔那张卡片上的粗细滑杆，横杠上的图标一直在闪。
+//
+// 滑杆每动一个像素来一次 input → _set → render，而 render 每次都把整条横杠连同
+// 每一个图标拆了重搭。选中的那一格底下那片镜片带着一段 220ms 的入场动画，重搭一
+// 次重播一次——一秒几十次，就是闪。卡片那边早就改成就地刷了，横杠这边没有。
+
+const click = (el) => el.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+const openPenCard = (bar) => {
+  click(bar.root.querySelector('.ink-tool[data-tool="pen"]'));
+  const card = document.querySelector('.ink-card');
+  assert.ok(card, '笔的卡片没摊开');
+  return card;
+};
+
+test('拖粗细滑杆：横杠上的图标一个都不重搭', () => {
+  const { bar } = mountToolbar();
+  const tools = bar.root.querySelector('.ink-tools');
+  const pen = bar.root.querySelector('.ink-tool[data-tool="pen"]');
+  const card = openPenCard(bar);
+  const slider = card.querySelector('[data-role="width"]');
+  for (const v of ['2.5', '3.1', '4.8', '6.2', '7.0']) {
+    slider.value = v;
+    slider.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  }
+  assert.equal(bar.state.width, 7);
+  assert.equal(bar.root.querySelector('.ink-tools'), tools, '工具那一组还是原来那一组');
+  assert.equal(bar.root.querySelector('.ink-tool[data-tool="pen"]'), pen,
+    '选中的那一格还是原来那个节点——换了新的，它的镜片就要重播一次入场');
+  assert.ok(pen.classList.contains('is-selected'));
+  assert.equal(document.querySelector('.ink-card'), card, '卡片也还是那一张');
+});
+
+test('换工具也不重搭，只把高亮挪过去', () => {
+  const { bar } = mountToolbar();
+  const tools = bar.root.querySelector('.ink-tools');
+  const pen = bar.root.querySelector('.ink-tool[data-tool="pen"]');
+  const pencil = bar.root.querySelector('.ink-tool[data-tool="pencil"]');
+  click(pencil);
+  assert.equal(bar.state.tool, 'pencil');
+  assert.equal(bar.root.querySelector('.ink-tools'), tools);
+  assert.equal(pen.classList.contains('is-selected'), false, '旧的那一格放下');
+  assert.equal(pen.getAttribute('aria-pressed'), 'false');
+  assert.equal(pencil.classList.contains('is-selected'), true, '新的那一格拿起');
+  assert.equal(pencil.getAttribute('aria-pressed'), 'true');
+});
+
+test('换颜色：横杠上那一排色的高亮跟着走，也不重搭', () => {
+  const { bar } = mountToolbar();
+  const swatches = bar.root.querySelector('.ink-swatches');
+  click(bar.root.querySelector('.ink-swatches [data-swatch="#2563eb"]'));
+  assert.equal(bar.state.color, '#2563eb');
+  assert.equal(bar.root.querySelector('.ink-swatches'), swatches);
+  const on = [...bar.root.querySelectorAll('.ink-swatches [data-swatch].is-selected')]
+    .map(b => b.dataset.swatch);
+  assert.deepEqual(on, ['#2563eb']);
+});
+
+test('色板本身变了才重搭——那时候横杠上的格子数都不一样了', () => {
+  const { bar } = mountToolbar();
+  const swatches = bar.root.querySelector('.ink-swatches');
+  bar._set({ ...bar.state, swatches: Object.freeze(['#111827', '#dc2626']) }, { pushTools: false });
+  assert.notEqual(bar.root.querySelector('.ink-swatches'), swatches);
+  assert.equal(bar.root.querySelectorAll('.ink-swatches [data-swatch]').length, 2);
+});
+
+test('收成球再展开，横杠是新搭的一条——球把它的 DOM 换掉了', () => {
+  const { bar } = mountToolbar();
+  drag(bar, { from: [40, 40], to: [980, 780] });
+  assert.equal(bar.state.phase, 'docked');
+  assert.ok(bar.root.querySelector('.ink-token'));
+  bar._undock();
+  assert.equal(bar.state.phase, 'expanded');
+  assert.ok(bar.root.querySelector('.ink-tools'), '展开之后工具都在');
+  assert.equal(bar.root.querySelector('.ink-token'), null, '球不留在横杠里');
+});
+
+test('拖滑杆的时候不写盘，松手时写一次', () => {
+  // 看存下来的内容，不去替换 setItem：往 Storage 对象上赋一个叫 setItem 的属性，
+  // 存进去的是一条名叫 setItem 的记录，方法本身纹丝不动。
+  const { bar } = mountToolbar();
+  const card = openPenCard(bar);
+  const stored = () => JSON.parse(dom.window.localStorage.getItem('ls_ink_toolbar') || '{}').width;
+  const before = stored();
+  const slider = card.querySelector('[data-role="width"]');
+  for (const v of ['3', '4', '5', '6']) {
+    slider.value = v;
+    slider.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  }
+  assert.equal(bar.state.width, 6, '笔已经是新粗细了');
+  assert.equal(stored(), before, '拖到一半的值没人要，平板上每一次都是一次同步写盘');
+  slider.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.equal(stored(), 6, '松手时存一次');
+});
+
+test('拖着球走：每一帧只挪球，不写盘，也不去惊动工作区', () => {
+  dom.window.localStorage.clear();
+  if (mounted) { try { mounted.destroy(); } catch (_) { /* gone */ } }
+  document.body.innerHTML = '';
+  const host = document.createElement('div');
+  host.getBoundingClientRect = () => ({ ...HOST_RECT });
+  document.body.appendChild(host);
+  let changes = 0;
+  const bar = new InkToolbar(host, { getSurface: () => null, onChange: () => { changes += 1; } });
+  mounted = bar;
+  const handle = bar.root.querySelector('[data-role="handle"]');
+  pointer('pointerdown', { x: 40, y: 40, target: handle });
+  const afterPickUp = changes;
+  for (let i = 1; i <= 8; i++) pointer('pointermove', { x: 40 + i * 30, y: 40 + i * 20 });
+  assert.equal(bar.state.phase, 'dragging');
+  assert.equal(bar.state.dragPoint.x, 280, '球确实跟着走了');
+  assert.equal(changes, afterPickUp,
+    '原来每一帧都让工作区量一遍安全区和缩放——量的还是这颗球，还把缩放量回了 1');
+  pointer('pointerup', { x: 280, y: 200 });
+  assert.ok(changes > afterPickUp, '落下的那一下才告诉工作区');
+});
+
+test('从球变回横杠的那一下，尺寸过渡是关着的', () => {
+  // 拖完落到边上，原来没有这一步：量到的是一条内边距还在从 0 往 5px 长的横杠，
+  // 夹到边上时位置差 5px，下一次换工具重量一次，它就挪一下。
+  const { bar } = mountToolbar();
+  const handle = bar.root.querySelector('[data-role="handle"]');
+  pointer('pointerdown', { x: 40, y: 40, target: handle });
+  pointer('pointermove', { x: 400, y: 300 });
+  bar.root.classList.remove('is-instant');
+  pointer('pointerup', { x: 10, y: 300 });
+  assert.equal(bar.state.phase, 'expanded');
+  assert.ok(bar.root.classList.contains('is-instant'), '落边的那一帧不跑尺寸过渡');
+});
+
+test('菜单栏把横杠顶上去的时候，开着的卡片跟着重新贴过去', () => {
+  // 卡片是打开那一刻按横杠的位置摆的。菜单栏升起来、横杠被顶上去 86px，卡片原来
+  // 留在原地——两样东西就这么分开了。
+  const { bar } = mountToolbar();
+  const card = openPenCard(bar);
+  const anchored = [];
+  const real = bar._anchorCard.bind(bar);
+  bar._anchorCard = (c) => { anchored.push(c); return real(c); };
+  bar.setSafeArea(0, 86);
+  assert.deepEqual(anchored, [card], '同一张卡片，重新贴了一次');
+  assert.equal(document.querySelector('.ink-card'), card, '贴过去，不是重建');
+});
+
+test('收成球的时候不去贴卡片——球不带卡片', () => {
+  const { bar } = mountToolbar();
+  drag(bar, { from: [40, 40], to: [980, 780] });
+  assert.equal(bar.state.phase, 'docked');
+  let anchored = 0;
+  bar._anchorCard = () => { anchored += 1; };
+  bar.setSafeArea(0, 86);
+  assert.equal(anchored, 0);
+});
+
+await atest('语言换了，横杠的名字跟着换，不用等人去点它', async () => {
+  const i18n = await import('../src/core/i18n.js');
+  const { bar } = mountToolbar();
+  const before = bar.root.getAttribute('aria-label');
+  try {
+    await i18n.setLang('en');
+    const after = bar.root.getAttribute('aria-label');
+    assert.equal(after, i18n.t('ink.toolbarLabel'));
+    assert.notEqual(after, before, '换成英文之后整条横杠的名字得是英文的');
+    const pen = bar.root.querySelector('.ink-tool[data-tool="pen"]');
+    assert.equal(pen.getAttribute('aria-label'), i18n.t('ink.pen'), '按钮上的也是');
+  } finally {
+    await i18n.setLang('zh-CN');
+  }
+});
+
+await atest('撤掉横杠时，语言那条回调也摘掉', async () => {
+  const i18n = await import('../src/core/i18n.js');
+  const { bar } = mountToolbar();
+  let renders = 0;
+  const real = bar.render.bind(bar);
+  bar.render = () => { renders += 1; return real(); };
+  bar.destroy();
+  mounted = null;
+  try {
+    await i18n.setLang('en');
+    assert.equal(renders, 0, '一根撤掉的横杠还在响应语言切换，就是开一次漏一个');
+  } finally {
+    await i18n.setLang('zh-CN');
+  }
+});
+// ── 工作区不在屏幕上的时候 ────────────────────────────────────────────────────
+//
+// 设置页和练习页是两个 .page，不在前台的那个是 display:none。在设置页换语言，横
+// 杠会跟着重搭（名字要换成新语言的）——那一刻工作区量出来是 0。原来重搭时先写一
+// 个没夹过的百分比，夹它的那一步量不到尺寸直接返回：回到练习页，横杠停在那个百
+// 分比上（偏上一截），人点一下工具、重画一次，它才跳回去。
+
+/** 工作区量出来多大：0 就是它所在的那一页不在前台。 */
+function hostSize(host, w, h) {
+  Object.defineProperty(host, 'clientWidth', { value: w, configurable: true });
+  Object.defineProperty(host, 'clientHeight', { value: h, configurable: true });
+}
+
+await atest('在设置页换了语言：横杠重搭了，位置原样；回到练习页再夹一次', async () => {
+  const i18n = await import('../src/core/i18n.js');
+  const { bar, host } = mountToolbar();
+  measurable(bar, host);
+  bar.render();
+  const settled = bar.root.style.top;
+  assert.match(settled, /px$/, '前提：在屏幕上时夹成了像素');
+
+  hostSize(host, 0, 0);
+  try {
+    await i18n.setLang('en');
+    const pen = bar.root.querySelector('.ink-tool[data-tool="pen"]');
+    assert.equal(pen.getAttribute('aria-label'), i18n.t('ink.pen'), '换了语言，横杠照样重搭');
+    assert.equal(bar.root.style.top, settled, '位置原样，没被写回一个没夹过的百分比');
+
+    hostSize(host, 1000, 700);
+    bar.root.style.top = '';
+    bar.fitTo({ height: 700, column: 500 });
+    assert.equal(bar.root.style.top, settled,
+      '回到练习页，尺寸观察器叫 fitTo——缩放没变也要重新夹');
+  } finally {
+    await i18n.setLang('zh-CN');
+  }
+});
+
+test('从来没在屏幕上摆过的横杠：回到屏幕上时，贴哪条边也一起摆上', () => {
+  // 只夹不摆的话，夹的只是沿着边的那一个方向；贴边的那 10px 没人写，横杠会落在
+  // 它在文档流里的位置——工作区左上角，而不是它该贴的那条边。
+  const { bar, host } = mountToolbar();   // jsdom 里工作区量出来是 0：一出生就不在屏幕上
+  const { edge } = bar.state;
+  assert.equal(bar.root.style[edge], '', '前提：不在屏幕上时什么都没写');
+  measurable(bar, host);
+  bar.fitTo({ height: 700, column: 500 });
+  assert.equal(bar.root.style[edge], '10px', '贴着它那条边');
+  const along = edge === 'left' || edge === 'right' ? 'top' : 'left';
+  assert.match(bar.root.style[along], /px$/, '沿着边的位置也夹好了');
+});
+
+// ── 让开时欠下的那个位置 ─────────────────────────────────────────────────────
+
+test('让开时记下原来停在哪儿；还回去之后就没有这笔账了', () => {
+  const { bar } = mountToolbar();
+  bar.root.getBoundingClientRect = () => RECT(10, 200, 62, 620);
+  assert.equal(bar.homeRect(), null, '没让开就没有「原来」');
+  bar.yieldTo('bottom-left');
+  const home = bar.homeRect();
+  assert.deepEqual([home.left, home.top, home.width, home.height], [10, 200, 52, 420],
+    '工作区问「回去会不会又被压住」，问的就是这一块');
+  bar.restoreFromYield();
+  assert.equal(bar.homeRect(), null);
+});
+
+test('让着的球被人拿起来挪走：不再欠谁一个位置', () => {
+  const { bar } = mountToolbar();
+  bar.root.getBoundingClientRect = () => RECT(10, 200, 62, 620);
+  bar.yieldTo('bottom-left');
+  const puck = bar.root.querySelector('[data-role="handle"]');
+  pointer('pointerdown', { x: 30, y: 760, target: puck });
+  pointer('pointermove', { x: 500, y: 400 });
+  assert.equal(bar.isYielded(), false, '拿在手里了，落在哪儿由人定');
+  pointer('pointerup', { x: 500, y: 400 });
+  assert.equal(bar.homeRect(), null);
+  const placed = { edge: bar.state.edge, offset: bar.state.offset };
+  bar.restoreFromYield();
+  assert.deepEqual({ edge: bar.state.edge, offset: bar.state.offset }, placed,
+    '面板关上时没有什么要还：不会跳回拖动之前的地方');
+});
+
+test('点开正在让位的球：告诉工作区一声；人自己停进角里的球点开不算', () => {
+  const { bar } = mountToolbar();
+  let reclaimed = 0;
+  bar.handlers.onReclaim = () => { reclaimed += 1; };
+  bar.yieldTo('bottom-left');
+  tapOpen(bar, [30, 760]);
+  assert.equal(bar.state.phase, 'expanded', '点开了');
+  assert.equal(bar.isYielded(), false, '账结清了：它不再以为自己还让着');
+  assert.equal(reclaimed, 1, '工作区要知道：此刻开着的那几块面板不该再把它赶回去');
+
+  drag(bar, { from: [40, 400], to: [970, 770] });
+  assert.equal(bar.state.phase, 'docked', '人自己停进角里');
+  tapOpen(bar);
+  assert.equal(bar.state.phase, 'expanded');
+  assert.equal(reclaimed, 1, '这颗球不欠谁，点开它和面板无关');
+});
+
+// ── 卡片的退场 ───────────────────────────────────────────────────────────────
+//
+// 换一张卡片、关掉卡片，走掉的那一张原来是当场消失的：新的那张带着入场动画浮上
+// 来，旧的凭空没了，看着像闪了一下。现在它退场——淡出、往上收一点，演完再拿掉。
+
+/** 选中的那支工具再点一下：打开它的卡片。 */
+function openToolCard(bar) {
+  const selected = bar.root.querySelector('.ink-tool.is-selected')
+    || bar.root.querySelector('[data-tool]');
+  selected.dispatchEvent(new dom.window.Event('click', { bubbles: true }));
+  const card = bar.cardLayer.querySelector('.ink-card');
+  assert.ok(card, '工具卡片没打开');
+  return card;
+}
+
+test('换一张卡片：旧的那张退场，新的那张排在最前面接手', () => {
+  const { bar } = mountToolbar();
+  const toolCard = openToolCard(bar);
+  bar.root.querySelector('[data-role="color-card"]')
+    .dispatchEvent(new dom.window.Event('click', { bubbles: true }));
+  const cards = [...bar.cardLayer.querySelectorAll('.ink-card')];
+  assert.equal(cards.length, 2, '交接的这一小段里两张都在');
+  assert.ok(toolCard.classList.contains('is-leaving'), '旧的那张在退场，不是当场消失');
+  assert.equal(toolCard.inert, true, '退场的那张点不到');
+  assert.notEqual(cards[0], toolCard, '最前面的是新的那张：别处找 .ink-card 找到的是它');
+  assert.ok(!cards[0].classList.contains('is-leaving'));
+  assert.equal(cards[0].dataset.card, 'color');
+});
+
+test('退场演完就拿掉：只认它自己的动画', () => {
+  const { bar } = mountToolbar();
+  const toolCard = openToolCard(bar);
+  bar.root.querySelector('[data-role="color-card"]')
+    .dispatchEvent(new dom.window.Event('click', { bubbles: true }));
+  const inner = toolCard.querySelector('*');
+  inner?.dispatchEvent(new dom.window.Event('animationend', { bubbles: true }));
+  assert.ok(toolCard.isConnected, '冒泡上来的是卡片里别的东西的动画');
+  toolCard.dispatchEvent(new dom.window.Event('animationend'));
+  assert.equal(toolCard.isConnected, false);
+  assert.equal(bar.cardLayer.querySelectorAll('.ink-card').length, 1);
+});
+
+test('关掉卡片：它退场；关掉之后开着的卡片是「没有」', () => {
+  const { bar } = mountToolbar();
+  const toolCard = openToolCard(bar);
+  // 选另一支工具：卡片关掉。
+  const other = [...bar.root.querySelectorAll('.ink-tool[data-tool]')]
+    .find(b => !b.classList.contains('is-selected') && !['eraser', 'lasso', 'shape'].includes(b.dataset.tool));
+  other.dispatchEvent(new dom.window.Event('click', { bubbles: true }));
+  assert.equal(bar.state.openCard, null, '没有卡片开着（CARDS.NONE）');
+  assert.ok(toolCard.classList.contains('is-leaving'));
+  assert.equal(bar._liveCard(), null, '退场的那张不算开着');
+});
+
+test('钢笔的卡片换成荧光笔的，也算换了一张', () => {
+  const { bar } = mountToolbar();
+  const penCard = openToolCard(bar);
+  const key = penCard.dataset.card;
+  assert.ok(/^tool:/.test(key), `工具卡片按工具分：${key}`);
+});
+
+test('同一张卡片原地重建（换语言之类）：不退场，也不重播入场', () => {
+  const { bar } = mountToolbar();
+  const card = openToolCard(bar);
+  bar._renderCard();
+  const cards = [...bar.cardLayer.querySelectorAll('.ink-card')];
+  assert.equal(cards.length, 1, '没有东西在退场');
+  assert.notEqual(cards[0], card, '确实是重建的');
+  assert.ok(cards[0].classList.contains('is-instant'), '重播一次入场，就是闪一下');
+});
+
+test('样式：退场是一段反着入场的动画，演的时候点不到', () => {
+  const css = readFileSync(new URL('../src/styles/ink-toolbar.css', import.meta.url), 'utf-8');
+  assert.ok(/\.ink-card\.is-leaving \{[^}]*pointer-events: none;[^}]*animation: ink-card-out/.test(css));
+  assert.ok(/@keyframes ink-card-out/.test(css));
+  assert.ok(/\.ink-card\.is-instant \{ animation: none; \}/.test(css));
+});
 
 console.log(`\nink toolbar drag lifecycle: ${failed ? 'FAIL' : 'PASS'} (${passed} checks${failed ? `, ${failed} failed` : ''})`);
 if (failed) process.exit(1);

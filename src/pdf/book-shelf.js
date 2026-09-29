@@ -66,6 +66,12 @@ export class BookShelf {
     /** 挂上去的 blob 地址，撤掉书架时一起回收。 */
     this._urls = [];
     this._tiles = new Map();
+    /**
+     * 组合借用、但不摆在这一屏上的那几本：id → {name, url}。
+     *
+     * 没有格子，只有名字和封面——翻开组合时飞出去的就是它们。
+     */
+    this._companions = new Map();
   }
 
   /** 某一本在屏幕上的封面矩形——动画从这里起飞。 */
@@ -76,15 +82,20 @@ export class BookShelf {
 
   /** 某一本封面的图，飞的时候带着它。 */
   coverUrl(id) {
-    return this._tiles.get(id)?.dataset.cover || '';
+    return this._tiles.get(id)?.dataset.cover || this._companions.get(id)?.url || '';
   }
 
   /** 架子上这一格写的是什么名字。没有封面可飞的时候，素封面上印的就是它。 */
   nameOf(id) {
-    return this._tiles.get(id)?.querySelector('.pdf-book-name')?.textContent || '';
+    return this._tiles.get(id)?.querySelector('.pdf-book-name')?.textContent
+      || this._companions.get(id)?.name || '';
   }
 
-  setItems(items) {
+  /**
+   * @param {Array} items 摆在这一屏上的
+   * @param {{companions?: Array}} [extra] 组合借用、但不在这一屏上的那几本
+   */
+  setItems(items, { companions = [] } = {}) {
     this._release();
     const frag = document.createDocumentFragment();
 
@@ -103,9 +114,12 @@ export class BookShelf {
     // 画——而那一刻它要借的封面一张都还没有，于是人第一次看到的是两个空框。
     const later = [];
     for (const item of items) {
+      if (item.kind === SHELF_KINDS.FOLDER) continue;   // 它的脸是画出来的，没有封面
       if (item.kind === SHELF_KINDS.COMBO) later.push(item);
       else this._loadCover(item);
     }
+    // 排在组合前面：组合那张图就是拿它们的封面拼的，轮到组合时它们得已经在缓存里。
+    for (const item of companions) this._loadCompanion(item);
     for (const item of later) this._loadCover(item);
   }
 
@@ -119,22 +133,38 @@ export class BookShelf {
     open.type = 'button';
     open.className = 'pdf-book-hit';
     open.title = item.name;
-    open.setAttribute('aria-label', t('shelf.openBook', { name: item.name }));
+    open.setAttribute('aria-label', item.kind === SHELF_KINDS.FOLDER
+      ? t('folder.open', { name: item.name })
+      : t('shelf.openBook', { name: item.name }));
 
     const block = document.createElement('span');
     block.className = 'pdf-book-block';
     if (item.kind === SHELF_KINDS.PAD) block.classList.add('is-pad');
+    // 本子：封面常常是一张空白的纸，液态玻璃皮肤给它画一层淡淡的横线（liquid.css）。
+    if (item.kind === SHELF_KINDS.NOTE) block.classList.add('is-note');
     if (item.kind === SHELF_KINDS.COMBO) block.classList.add('is-combo');
+    if (item.kind === SHELF_KINDS.FOLDER) block.classList.add('is-folder');
 
     const cover = document.createElement('span');
     cover.className = 'pdf-book-cover';
+    // 文件夹没有封面可渲：它不是一份文件，里面装的才是。画的就是一个文件夹的样
+    // 子——一条翻起来的标签加一个身子，和人在电脑上见了二十年的那个一样。用图形
+    // 而不是图标字体，是因为它要跟着格子一起缩放。
+    if (item.kind === SHELF_KINDS.FOLDER) {
+      cover.classList.add('is-folder-face');
+      cover.innerHTML = `
+        <svg viewBox="0 0 96 72" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+          <path class="pdf-folder-back" d="M6 18a6 6 0 0 1 6-6h24l8 9h34a6 6 0 0 1 6 6v33a6 6 0 0 1-6 6H12a6 6 0 0 1-6-6z"/>
+          <path class="pdf-folder-front" d="M6 30h84v27a6 6 0 0 1-6 6H12a6 6 0 0 1-6-6z"/>
+        </svg>`;
+    }
     block.appendChild(cover);
 
     // 书脊那一叠纸。没有它，书就是一张卡片；有了它，厚薄是能看出来的。
     //
     // 组合没有这一叠：它不是一本书，没有厚薄可言。给它加一道书脊，等于说
     // 「点开它会翻开一本书」——而它其实会换掉两栏。
-    if (item.kind !== SHELF_KINDS.COMBO) {
+    if (item.kind !== SHELF_KINDS.COMBO && item.kind !== SHELF_KINDS.FOLDER) {
       const edge = document.createElement('span');
       edge.className = 'pdf-book-edge';
       block.appendChild(edge);
@@ -176,7 +206,10 @@ export class BookShelf {
       const more = document.createElement('button');
       more.type = 'button';
       more.className = 'pdf-book-more';
-      more.textContent = '⋯';
+      // 三个点是画出来的，不是一个「⋯」字：那个字按字体的中线放，平板上的中文字体中线比字框的正中
+      // 低，三个点落在圆按钮中心偏下三个像素（人说「有点偏下」）。和栏头那颗「⋯」同一种画法。
+      more.innerHTML = '<svg class="pdf-book-more-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
+        + '<path d="M5.5 12h.01M12 12h.01M18.5 12h.01"/></svg>';
       more.setAttribute('aria-label', `${item.name} 的更多操作`);
       more.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -266,12 +299,28 @@ export class BookShelf {
     }).catch(() => { /* 一本没有封面不该让整架书画不出来 */ });
   }
 
+  /** 不摆出来，只把名字记下、封面要来。 */
+  _loadCompanion(item) {
+    if (!item?.id || this._tiles.has(item.id) || this._companions.has(item.id)) return;
+    const entry = { name: item.name || '', url: '' };
+    this._companions.set(item.id, entry);
+    const job = requestCover(item);
+    this._pending.push(job);
+    job.promise.then((blob) => {
+      if (this._companions.get(item.id) !== entry || !blob) return;
+      const url = URL.createObjectURL(blob);
+      this._urls.push(url);
+      entry.url = url;
+    }).catch(() => { /* 没有封面就飞素封面，名字还在 */ });
+  }
+
   _release() {
     for (const job of this._pending) job.cancel?.();
     this._pending = [];
     for (const url of this._urls) URL.revokeObjectURL(url);
     this._urls = [];
     this._tiles.clear();
+    this._companions.clear();
   }
 
   destroy() {
