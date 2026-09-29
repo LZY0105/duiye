@@ -1273,8 +1273,12 @@ const rule = (sel) => {
 await test('走的时候：左边那枚往右收、右边那枚往左收（朝着留下来的那两个标签），淡出', () => {
   assert.ok(/animation: capsuleOutToRight/.test(rule('#page-pdf.is-leaving .pdf-page-bar > .pdf-bar-group:first-child')));
   assert.ok(/animation: capsuleOutToLeft/.test(rule('#page-pdf.is-leaving .pdf-bar-trail')));
-  const kf = pdfCss.slice(pdfCss.indexOf('@keyframes capsuleOutToRight'));
-  assert.ok(/to\s*\{ opacity: 0; translate: 22px 0; scale: 0\.9; \}/.test(kf.slice(0, kf.indexOf('}\r\n}') + 3) || kf));
+  // 换行先统一成 \n：本机检出是 CRLF，CI 那台 Linux 上是 LF。
+  const css = pdfCss.replace(/\r\n/g, '\n');
+  const kf = css.slice(css.indexOf('@keyframes capsuleOutToRight'));
+  const end = kf.indexOf('}\n}');
+  assert.ok(end > 0, '找不到 capsuleOutToRight 的结尾');
+  assert.ok(/to\s*\{ opacity: 0; translate: 22px 0; scale: 0\.9; \}/.test(kf.slice(0, end + 3)));
 });
 
 await test('退场用两头慢的曲线，不用弹簧：平板上录下来，弹簧那条前 50ms 就走掉六成，看着像当场没了', () => {
