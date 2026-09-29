@@ -60,8 +60,11 @@ const { chooseFolder, pickResources } = await import('../src/pdf/deck-dialogs.js
 const { openComboBuilder } = await import('../src/pdf/combo-builder.js');
 const { SLOTS } = await import('../src/pdf/workspace-state.js');
 const { ENTRY_KINDS } = await import('../src/pdf/deck-state.js');
-const { initI18n } = await import('../src/core/i18n.js');
+const { initI18n, setLang } = await import('../src/core/i18n.js');
 await initI18n();
+// 下面的断言写的是简体中文的文案。不钉住的话语言跟着 navigator.language 走，而 Node
+// 的 navigator 跟系统：中文系统上过，CI 那台英文 Linux 上就挂。
+await setLang('zh-CN');
 
 /** 点一下。jsdom 里 click() 就够——这些控件收的都是 click。 */
 const click = (el) => el.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
