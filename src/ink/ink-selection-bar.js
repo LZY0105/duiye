@@ -13,6 +13,9 @@
 // 两种面孔：手里有一片选中的东西时，它是复制/剪切/换色/删除；什么都没选、而
 // 剪贴板里有东西时，它只剩一个粘贴。后者是剪切的另一半——剪下来却放不下去的
 // 剪切，和删除没有区别。
+//
+// 换色那一排在圈里有闭合形状时分成两排：边框、填充，各挑各的。原来只有一排，
+// 改的只是边框——一个红边蓝底的三角形，底色就再也换不掉了。
 
 export const SELECTION_ACTIONS = Object.freeze({
   COPY: 'copy',
@@ -22,7 +25,11 @@ export const SELECTION_ACTIONS = Object.freeze({
   PASTE: 'paste',
   /** 换色那一排里点了某一个色点。带着颜色一起回来。 */
   COLOR_PICK: 'color-pick',
+  /** 填充那一排里点了某一个色点，或者「不填充」。带着颜色回来，「不填充」是空串。 */
+  FILL_PICK: 'fill-pick',
 });
+
+const sameColor = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
 
 /** 条和选区之间留的空，CSS 像素。 */
 const GAP = 12;
@@ -49,6 +56,10 @@ export class SelectionBar {
     this._mode = null;        // 'selection' | 'paste'
     this._palette = null;
     this._paletteOpen = false;
+    /** 这一副条是按什么搭的：面孔、有没有填充那一排、用的哪排色。变了才重搭。 */
+    this._key = null;
+    /** 换色那排是不是分成了边框、填充两排。 */
+    this._twoRows = false;
   }
 
   _press(el, action, value) {
@@ -59,7 +70,10 @@ export class SelectionBar {
       e.preventDefault();
       e.stopPropagation();
       if (action === SELECTION_ACTIONS.COLOR) { this._togglePalette(); return; }
-      this._closePalette();
+      // 两排的时候挑完不收：边框和填充常常是连着改的，收起来就得再点一次「颜色」。
+      const picking = action === SELECTION_ACTIONS.COLOR_PICK
+        || action === SELECTION_ACTIONS.FILL_PICK;
+      if (!(picking && this._twoRows)) this._closePalette();
       this.onAction?.(action, value);
     });
   }
@@ -82,22 +96,79 @@ export class SelectionBar {
    * 收在「颜色」后面，不是摊开在条上：条已经有四个动作了，再平铺六个色点，它
    * 就长得比人刚圈出来的那一片还大。点一下展开，选完就收。
    */
-  _buildPalette(colors) {
-    const row = document.createElement('div');
-    row.className = 'ink-selection-palette';
-    row.hidden = true;
-    for (const color of colors) {
-      const dot = document.createElement('button');
-      dot.type = 'button';
-      dot.className = 'ink-selection-dot';
-      dot.dataset.color = color;
-      dot.title = color;
-      dot.setAttribute('aria-label', `改成 ${color}`);
-      dot.style.background = color;
-      this._press(dot, SELECTION_ACTIONS.COLOR_PICK, color);
-      row.appendChild(dot);
+  _buildPalette(colors, canFill) {
+    const palette = document.createElement('div');
+    palette.className = `ink-selection-palette${canFill ? ' is-two-rows' : ''}`;
+    palette.hidden = true;
+    const edgeDots = colors.map(color => this._dot(color, SELECTION_ACTIONS.COLOR_PICK, 'color'));
+    if (!canFill) {
+      palette.append(...edgeDots);
+      return palette;
     }
+    // 圈里有闭合的形状：边框一排、填充一排。填充那排打头的是「不填充」——它不是一
+    // 种颜色，是「别填」，和形状卡片上填充那一排的头一格一个样。
+    palette.append(
+      this._paletteRow('边框', edgeDots),
+      this._paletteRow('填充', [
+        this._noFillDot(),
+        ...colors.map(color => this._dot(color, SELECTION_ACTIONS.FILL_PICK, 'fill')),
+      ]),
+    );
+    return palette;
+  }
+
+  _dot(color, action, key) {
+    const dot = document.createElement('button');
+    dot.type = 'button';
+    dot.className = 'ink-selection-dot';
+    dot.dataset[key] = color;
+    dot.title = color;
+    dot.setAttribute('aria-label', key === 'fill' ? `填充改成 ${color}` : `改成 ${color}`);
+    dot.style.background = color;
+    this._press(dot, action, color);
+    return dot;
+  }
+
+  _noFillDot() {
+    const dot = document.createElement('button');
+    dot.type = 'button';
+    dot.className = 'ink-selection-dot is-none';
+    dot.dataset.fill = '';
+    dot.title = '不填充';
+    dot.setAttribute('aria-label', '不填充');
+    this._press(dot, SELECTION_ACTIONS.FILL_PICK, '');
+    return dot;
+  }
+
+  /** 一排色，左边一个字说这一排改的是哪一样。 */
+  _paletteRow(label, dots) {
+    const row = document.createElement('div');
+    row.className = 'ink-selection-palette-row';
+    const name = document.createElement('span');
+    name.className = 'ink-selection-palette-label';
+    name.textContent = label;
+    row.append(name, ...dots);
     return row;
+  }
+
+  /**
+   * 把这一片眼下的颜色在色排上标出来。
+   *
+   * 一片里各是各的色（圈了好几种）就一个都不标——标哪一个都是在说假话。
+   *
+   * @param {{color?: ?string, fill?: ?string}} [current]
+   *   fill 为 undefined 是「说不上来」（有的填了有的没填、或者根本没有闭合形状），
+   *   null 是「都没填」
+   */
+  _markCurrent(current) {
+    if (!this._palette) return;
+    for (const dot of this._palette.querySelectorAll('[data-color]')) {
+      dot.classList.toggle('is-current', !!current?.color && sameColor(dot.dataset.color, current.color));
+    }
+    for (const dot of this._palette.querySelectorAll('[data-fill]')) {
+      const known = current && current.fill !== undefined;
+      dot.classList.toggle('is-current', !!known && sameColor(dot.dataset.fill, current.fill || ''));
+    }
   }
 
   _togglePalette() {
@@ -113,11 +184,16 @@ export class SelectionBar {
   }
 
   /** 按当下该是哪一副面孔重建。两种面孔的按钮完全不同，所以是重建而不是切换。 */
-  _build(mode, colors) {
-    if (this.el && this._mode === mode) return;
+  _build(mode, colors, canFill = false) {
+    // 面孔一样还不够：圈里有没有闭合形状、用的哪排色变了，色排也得跟着变。原来只
+    // 认面孔，工具栏的色换了，这里还是旧的那排。
+    const key = `${mode}|${canFill ? 1 : 0}|${(colors || []).join(',')}`;
+    if (this.el && this._key === key) return;
     this.el?.remove();
     this._palette = null;
     this._paletteOpen = false;
+    this._key = key;
+    this._twoRows = mode !== 'paste' && !!canFill;
 
     const bar = document.createElement('div');
     bar.className = 'ink-selection-bar';
@@ -135,7 +211,7 @@ export class SelectionBar {
     } else {
       for (const spec of BUTTONS) row.appendChild(this._button(spec));
       bar.appendChild(row);
-      this._palette = this._buildPalette(colors);
+      this._palette = this._buildPalette(colors, canFill);
       bar.appendChild(this._palette);
     }
 
@@ -151,12 +227,16 @@ export class SelectionBar {
    * @param {{minX:number, minY:number, maxX:number, maxY:number}} box
    *   选区在屏幕上的外接矩形，CSS 像素，相对 host
    * @param {{width:number, height:number}} viewport  host 自己多大
-   * @param {{mode?: string, colors?: Array<string>}} [opts]
+   * @param {{mode?: string, colors?: Array<string>, canFill?: boolean,
+   *          current?: {color?: ?string, fill?: ?string}}} [opts]
+   *   canFill：圈里有闭合的形状，换色那排分成边框、填充两排；current：这一片眼下
+   *   的颜色，标在色排上
    */
-  place(box, viewport, { mode = 'selection', colors = [] } = {}) {
+  place(box, viewport, { mode = 'selection', colors = [], canFill = false, current = null } = {}) {
     if (!box || !viewport || !this.host) { this.hide(); return; }
-    this._build(mode, colors);
+    this._build(mode, colors, canFill);
     if (!this.el) return;
+    this._markCurrent(current);
 
     if (!this._visible) {
       this.el.classList.add('is-visible');
@@ -193,5 +273,6 @@ export class SelectionBar {
     this._palette = null;
     this._visible = false;
     this._mode = null;
+    this._key = null;
   }
 }

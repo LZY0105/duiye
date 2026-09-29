@@ -740,6 +740,139 @@ await check('no toolbar yet is not a crash', async () => {
   assert.doesNotThrow(() => ws._yieldToolbarAround(null));
 });
 
+// ── 两块面板同时开着 ─────────────────────────────────────────────────────────
+//
+// 用户录的屏：右栏开着缩略图，左栏开单子、开缩略图。原来这里一次只接得住一块
+// ——「现在开着的第一块」——于是：
+//   · 左栏单子关了，横杠也不回来：「还有东西开着」（右栏那块）；
+//   · 点开那颗球之后再开左栏的单子、缩略图，横杠压在上面不让：它以为自己还让着。
+// 两边都一样。
+
+const RIGHT_THUMBS = () => listIn(COL_RIGHT, rect(620, 150, 1180, 460));
+const LEFT_THUMBS = () => listIn(COL_LEFT, rect(20, 150, 580, 460));
+
+await check('另一栏开着缩略图时，这一栏再开一块照样让', async () => {
+  const { ws, calls } = withToolbar(LEFT_BAR);
+  const right = RIGHT_THUMBS();
+  ws._yieldToolbarAround([right]);
+  assert.deepEqual(calls, [], '右栏那块压不着左边的横杠');
+  ws._yieldToolbarAround([right, LEFT_THUMBS()]);
+  assert.equal(calls.length, 1, '左栏这块压着它了，就让——不管排在前头的是谁');
+  assert.equal(calls[0][1], 'bottom-left');
+});
+
+await check('让开之后，另一栏还开着的面板不拦着它回来', async () => {
+  const { ws, calls } = withToolbar(LEFT_BAR);
+  ws.toolbar.homeRect = () => LEFT_BAR;
+  const right = RIGHT_THUMBS();
+  ws._yieldToolbarAround([right, LEFT_LIST()]);
+  assert.equal(calls[0][0], 'yieldTo');
+  ws._yieldToolbarAround([right]);   // 左栏的单子关了，右栏的缩略图还开着
+  assert.deepEqual(calls.map(c => c[0]), ['yieldTo', 'restore'],
+    '回去的那个位置上没压着东西就还——屏幕上还开着别的，和这件事无关');
+});
+
+await check('回去的位置上还压着别的一块：接着让着', async () => {
+  const { ws, calls } = withToolbar(LEFT_BAR);
+  ws.toolbar.homeRect = () => LEFT_BAR;
+  ws._yieldToolbarAround([LEFT_LIST()]);
+  ws._yieldToolbarAround([LEFT_THUMBS()]);   // 单子关了，这一栏又开着缩略图
+  assert.deepEqual(calls.map(c => c[0]), ['yieldTo'], '回去就又被压住，那就不回');
+});
+
+/** 一个根节点：开着哪几块面板、工作区量出来多大，都由测试说了算。 */
+function rootWith(getOpen, getSize = () => rect(0, 0, 1000, 800)) {
+  return {
+    getBoundingClientRect: () => getSize(),
+    querySelectorAll: (sel) => (sel.includes('outline-panel') ? getOpen() : []),
+    querySelector: () => null,
+  };
+}
+
+await check('人亲手把球点开：这时已经开着的面板不再赶它；关了再开是新的一次', async () => {
+  const { ws, calls } = withToolbar(LEFT_BAR);
+  const panel = LEFT_THUMBS();
+  let open = [panel];
+  ws.root = rootWith(() => open);
+
+  ws._reviewToolbarConflict();
+  assert.equal(calls.length, 1, '先让开');
+  // 人点开了那颗球：状态层把账结清（undock），横杠通知工作区（onReclaim）
+  ws.toolbar.yielded = false;
+  ws._waiveOpenOverlays();
+  ws._reviewToolbarConflict();
+  assert.equal(calls.length, 1, '不再赶回角上——人点开它就是要用');
+
+  // 关上：真的面板关上时带着 hidden，查询里也就没有它了
+  panel.hidden = true;
+  open = [];
+  ws._reviewToolbarConflict();
+  panel.hidden = false;
+  open = [panel];
+  ws._reviewToolbarConflict();
+  assert.equal(calls.length, 2, '面板关掉再打开，照常让');
+});
+
+await check('豁免不因为一时量不到而作废：那一栏被专注模式收走又回来，面板还是那一块', async () => {
+  const { ws, calls } = withToolbar(LEFT_BAR);
+  const panel = LEFT_THUMBS();
+  ws.root = rootWith(() => [panel]);
+  ws._waiveOpenOverlays();
+  // 点另一栏的「专注」：这一栏被移出排版，面板还开着，只是量出来是 0
+  panel.getBoundingClientRect = () => rect(0, 0, 0, 0);
+  ws._reviewToolbarConflict();
+  // 退出专注，这一栏回来
+  panel.getBoundingClientRect = () => rect(20, 150, 580, 460);
+  ws._reviewToolbarConflict();
+  assert.deepEqual(calls, [], '人点开球的时候这块就开着，一直没关过，就不该再赶它');
+});
+
+await check('整个工作区不在屏幕上（切到了设置页）：横杠一动不动', async () => {
+  // 设置页和练习页是两个 .page，不在前台的那个是 display:none：工作区和里面每一块
+  // 面板量出来都是 0，看上去就像「面板全关了」。原来横杠会在后台还位，等人从设置
+  // 页（比如刚换完语言）回来，面板还开着，它再当着人折一次。
+  const { ws, calls } = withToolbar(LEFT_BAR);
+  const panel = LEFT_THUMBS();
+  let size = rect(0, 0, 1000, 800);
+  ws.root = rootWith(() => [panel], () => size);
+  ws._reviewToolbarConflict();
+  assert.deepEqual(calls.map(c => c[0]), ['yieldTo'], '在屏幕上时照常让');
+
+  size = rect(0, 0, 0, 0);
+  panel.getBoundingClientRect = () => rect(0, 0, 0, 0);
+  ws._reviewToolbarConflict();
+  assert.deepEqual(calls.map(c => c[0]), ['yieldTo'], '不在屏幕上：不还位');
+
+  size = rect(0, 0, 1000, 800);
+  panel.getBoundingClientRect = () => rect(20, 150, 580, 460);
+  ws._reviewToolbarConflict();
+  assert.deepEqual(calls.map(c => c[0]), ['yieldTo'], '回来时它本来就让着，不用再折一次');
+});
+
+await check('栏的尺寸一变（包括从设置页切回来）：先安顿横杠，再判冲突', async () => {
+  // 在设置页换完语言回来，栏从 0 变回原来的大小、栏头换了字。原来这条路只重判
+  // 冲突，横杠要等人点下一个工具才回到该在的地方——录屏里那一下「往上偏、一点
+  // 工具又跳下来」。先判冲突再安顿也不对：判的是一根还没摆好的横杠。
+  const src = $read('src/pdf/pdf-workspace.js');
+  const body = src.slice(src.indexOf('  _watchSlotSizes() {'), src.indexOf('  // ── state → DOM'));
+  const sync = body.indexOf('_syncToolbarSize(');
+  const review = body.indexOf('_reviewToolbarConflict()');
+  assert.ok(sync > -1, '尺寸观察器里要重新安顿横杠');
+  assert.ok(sync < review, '先摆好，再判它压没压住东西');
+});
+
+await check('布局一变（拖分栏、对调、专注、收起一栏）：也是先安顿横杠，再判冲突', async () => {
+  // 栏变窄，横杠跟着缩短；栏头多出一行，它被往下推。这些都发生在给它定大小的
+  // 那一步里——在那之前去判，判的是上一种布局里的那根横杠。
+  const src = $read('src/pdf/pdf-workspace.js');
+  const start = src.indexOf('  _syncPaneWidthBands(fractions) {');
+  const body = src.slice(start, src.indexOf('\n  }', start));
+  const sync = body.indexOf('this._syncToolbarSize(fractions)');
+  const review = body.indexOf('this._reviewToolbarConflict()');
+  assert.ok(sync > -1 && review > -1);
+  assert.ok(sync < review, '先定好大小和位置，再判');
+});
+
 // ═══════════════════════════════════════════════════════════════
 group('6. Closing a scratchpad takes it off the column and nothing more');
 

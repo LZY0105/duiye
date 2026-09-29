@@ -131,7 +131,7 @@ import { verifyPair } from './pair-verifier.js';
 import { PAIR_STATUS } from './decision.js';
 import { renderAnswerMatches, renderAnswerNotice, renderAnswerLoading } from './answer-panel.js';
 import { InkToolbar, overlaps } from '../ink/ink-toolbar.js';
-import { CORNERS } from '../ink/toolbar-state.js';
+import { CORNERS, EDGES, TOOLBAR_PHASE } from '../ink/toolbar-state.js';
 import Logger from '../core/logger.js';
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -328,6 +328,8 @@ export class PdfWorkspace {
       // Moving or docking the bar can carry it over the other column, and the
       // column it lands on is what it now has to fit inside.
       onChange: () => this._syncToolbarSize(paneFractions(this.state)),
+      // 人把正在让位的球点开了：此刻开着的这几块面板不再赶它，见 _waiveOpenOverlays。
+      onReclaim: () => this._waiveOpenOverlays(),
       onClearInk: () => {
         // Scoped to the surface on screen — never the PDF underneath it (§6.2).
         this._loadedViewIn(this.activeSlot)?.ink.clear();
@@ -361,18 +363,24 @@ export class PdfWorkspace {
         ${slotChrome(SLOTS.SECONDARY)}
       </div>
       <div class="pdf-ws-empty" data-role="empty-state">
+        <!-- 空桌面：说清楚这里是干什么的、第一步点哪儿。原来写的是「双文档分栏学习工作区」「Apple
+             Pencil 原生级笔刷批注、题号一键智能对题」——一句广告，还说错了机器（这是安卓平板）。
+             人说「改一下里面内容」：现在只说真有的事，和使用手册里「对答案」那一节说的是同一件事。
+             图标是并排的两本：左边一本有题，右边一本打了勾。文字走词表，换语言跟着换。 -->
         <div class="pdf-empty-card">
-          <div class="pdf-empty-icon">
+          <div class="pdf-empty-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="40" height="40">
-              <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"/>
-              <path d="M6 6h10M6 10h10M6 14h6"/>
+              <rect x="2.5" y="4" width="8.5" height="16" rx="1.6"/>
+              <rect x="13" y="4" width="8.5" height="16" rx="1.6"/>
+              <path d="M5 8.5h3.5M5 12h3.5M5 15.5h2"/>
+              <path d="M15.1 12.2l1.7 1.7 3-3.4"/>
             </svg>
           </div>
-          <h3 class="pdf-empty-title">双文档分栏学习工作区</h3>
-          <p class="pdf-empty-desc">支持练习册与答案册同屏对照、Apple Pencil 原生级笔刷批注、题号一键智能对题</p>
+          <h3 class="pdf-empty-title" data-i18n="pdf.emptyTitle">${t('pdf.emptyTitle')}</h3>
+          <p class="pdf-empty-desc" data-i18n="pdf.emptyDesc">${t('pdf.emptyDesc')}</p>
           <div class="pdf-empty-actions">
-            <button type="button" class="pdf-empty-btn primary" data-action="import-exercise">导入练习册</button>
-            <button type="button" class="pdf-empty-btn secondary" data-action="import-answer">导入答案册</button>
+            <button type="button" class="pdf-empty-btn primary" data-action="import-exercise" data-i18n="pdf.importExercise">${t('pdf.importExercise')}</button>
+            <button type="button" class="pdf-empty-btn secondary" data-action="import-answer" data-i18n="pdf.importAnswer">${t('pdf.importAnswer')}</button>
           </div>
         </div>
       </div>
@@ -501,24 +509,50 @@ export class PdfWorkspace {
    * puck is 48px and sits above the panel; on the rare list that reaches the
    * floor, it resting on that corner costs one row and stays predictable.
    */
-  _yieldToolbarAround(listEl) {
+  _yieldToolbarAround(overlays) {
     const bar = this.toolbar;
     if (!bar) return;
-    if (!listEl) { bar.restoreFromYield(); return; }
-    // Already stepped aside — for this list or the other column's. Either way
-    // it is small and in a corner, and moving it again would be noise.
-    if (bar.isYielded()) return;
+    // 一组，不是一块。原来这里只接得住一块——「现在开着的第一块」——于是另一栏
+    // 开着缩略图时，那一块永远排在前头：这一栏再开什么都没人去判，横杠直接压在
+    // 上面；这一栏的单子关了，也因为「还有东西开着」而一直不还位。两边都一样。
+    const open = (Array.isArray(overlays) ? overlays : [overlays]).filter(Boolean);
+    // 人亲手把球点开时已经开着的那几块，不再赶它（见 _waiveOpenOverlays）。
+    const blocking = open.filter((el) => !this._yieldWaived?.has(el));
 
-    const list = listEl.getBoundingClientRect();
-    if (!overlaps(bar.rect(), list)) return;
+    if (bar.isYielded()) {
+      // 还位看的是「回去之后会不会又被压住」，不是「屏幕上还有没有面板」。另一栏
+      // 开着一块和这件事无关；回去的那个位置上还压着一块，才该接着让着。
+      const home = bar.homeRect?.() || null;
+      const covered = home
+        ? blocking.some((el) => overlaps(home, el.getBoundingClientRect()))
+        // 量不到回去的位置时退回老规矩：还有东西开着就接着让。
+        : blocking.length > 0;
+      if (!covered) bar.restoreFromYield();
+      return;
+    }
+
+    const barRect = bar.rect();
+    const hit = blocking.find((el) => overlaps(barRect, el.getBoundingClientRect()));
+    if (!hit) return;
 
     // Which column the panel belongs to, asked of the column itself. Guessing
     // from the panel's own midpoint breaks the moment the divider is nowhere
     // near the middle — and this reader keeps it at 0.37. Asking the slot also
     // survives the two panes being swapped, where the left column is slot b.
-    const column = listEl.closest?.('.pdf-ws-slot')?.getBoundingClientRect() || list;
+    const column = hit.closest?.('.pdf-ws-slot')?.getBoundingClientRect() || hit.getBoundingClientRect();
     const host = this.root.getBoundingClientRect();
-    bar.yieldTo(this._cornerFor(column, host, bar.rect()));
+    bar.yieldTo(this._cornerFor(column, host, barRect));
+  }
+
+  /**
+   * 人把正在让位的球点开了：此刻开着的这几块面板，都不再把它赶回角上。
+   *
+   * 他点开它，就是要在这块面板开着的时候用它。马上再折回去，等于不让他用；等
+   * 这几块关了，豁免跟着作废——之后再开的面板照常让。
+   */
+  _waiveOpenOverlays() {
+    if (!this._yieldWaived) this._yieldWaived = new Set();
+    for (const el of this._openOverlays()) this._yieldWaived.add(el);
   }
 
   // ── 跨栏拖拽笔迹 ──────────────────────────────────────────────────────────
@@ -573,7 +607,7 @@ export class PdfWorkspace {
    *
    * @returns {boolean} 那边接住了吗
    */
-  _dropInkIntoOtherSlot(fromSlot, { strokes, clientX, clientY, scale } = {}) {
+  _dropInkIntoOtherSlot(fromSlot, { strokes, clientX, clientY, scale, origin } = {}) {
     const hit = this._inkSurfaceAt(clientX, clientY);
     if (!hit || hit.slot === fromSlot) {
       this._markInkDropTarget(fromSlot, null);
@@ -581,7 +615,9 @@ export class PdfWorkspace {
     }
     // 回的不是「接住了没有」，是一组把手：源那边要把「撤销拖走」接到这一份上，
     // 否则在源撤销之后两边各留一份，一次撤销反而把内容变成了两份。
-    const landed = hit.view.ink.adoptStrokes(strokes, clientX, clientY, scale);
+    // origin 一并交过去：那边照它把每个点落回松手时的屏幕位置，而不是把整片的中
+    // 心摆到指尖下——后者会让按着一角拖过来的那一片，松手时跳半个身位。
+    const landed = hit.view.ink.adoptStrokes(strokes, clientX, clientY, scale, origin);
     // 先落地再撤预览。反过来的话中间会空一帧——那一帧上这一片哪儿都不在，看着就
     // 是闪了一下。
     this._markInkDropTarget(fromSlot, null);
@@ -1214,20 +1250,15 @@ export class PdfWorkspace {
   _watchSlotSizes() {
     if (typeof ResizeObserver !== 'function') return;
     this._sizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const slot = entry.target.dataset.slot;
-        if (!slot) continue;
-        this.panes[slot]?.resize?.();
-        this.scratchPanes[slot]?.resize?.();
+      // 顶上那一排收起 / 拉出的那 0.32 秒里（is-row-sliding），两栏是一次排好、再用位移补滑过
+      // 去的（pdf-workspace-ui.js 的 slideWorkspace）。这时候接着重排 PDF、重量栏头、重摆工具栏，
+      // 全挤在滑动的头一两帧里——平板上录下来松手那一下卡了 60 多毫秒，滑动是「顿一下再追上」。
+      // 等它滑完再做：栏宽没变，变的只是底下多出 / 少了一截，晚 0.3 秒看不出差别。
+      if (this.root?.classList?.contains('is-row-sliding')) {
+        this._afterRowSlide(entries);
+        return;
       }
-      // The bar is sized against its column too, and a column can change size
-      // without any state change at all — a rotation, the window resizing.
-      if (!this.root.classList.contains('is-animating') && !this._dividerDragging) {
-        this._settleHeaderFit();
-        // A column can change size with no state change at all — a rotation,
-        // the window resizing — and that moves what covers what.
-        this._reviewToolbarConflict();
-      }
+      this._onSlotsResized(entries);
     });
     for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
       const el = this.elSlots[slot];
@@ -1240,6 +1271,52 @@ export class PdfWorkspace {
       const answers = el.querySelector('[data-role="answer-panel"]');
       if (answers) this._sizeObserver.observe(answers);
     }
+  }
+
+  /**
+   * 顶上那一排滑完之后，补做两栏尺寸变了该做的那些事。滑的时候来的每一批都记下，滑完一起做一次。
+   * 滑多久不在这里猜：看 is-row-sliding 什么时候摘掉（slideWorkspace 在最后一段动画落地时摘）。
+   */
+  _afterRowSlide(entries) {
+    const pending = (this._slidePending ||= new Set());
+    for (const entry of entries) pending.add(entry.target);
+    if (this._slideTimer) return;
+    const check = () => {
+      this._slideTimer = 0;
+      if (this._destroyed) return;
+      if (this.root?.classList?.contains('is-row-sliding')) {
+        this._slideTimer = setTimeout(check, 60);
+        return;
+      }
+      const targets = [...pending];
+      pending.clear();
+      this._onSlotsResized(targets.map((target) => ({ target })));
+    };
+    this._slideTimer = setTimeout(check, 340);
+  }
+
+  /** 两栏（或答案面板）变了大小：重排两块窗格，再按新的尺寸重量栏头、重摆工具栏、重判谁挡着谁。 */
+  _onSlotsResized(entries) {
+      for (const entry of entries) {
+        const slot = entry.target.dataset?.slot;
+        if (!slot) continue;
+        this.panes[slot]?.resize?.();
+        this.scratchPanes[slot]?.resize?.();
+      }
+      // The bar is sized against its column too, and a column can change size
+      // without any state change at all — a rotation, the window resizing.
+      if (!this.root.classList.contains('is-animating') && !this._dividerDragging) {
+        this._settleHeaderFit();
+        // 横杠也跟着重新安顿：栏头的高度就是它的安全区，而练习页从设置页切回来
+        // 的那一刻（刚换过语言），栏从 0 变回原来的大小，栏头也换了字、可能换了
+        // 高度。原来这条路不管横杠，它要等人点下一个工具才回到该在的地方。
+        //
+        // 先安顿，再判冲突：判的是它停稳之后在哪儿，不是一根还没摆好的横杠。
+        this._syncToolbarSize(paneFractions(this.state));
+        // A column can change size with no state change at all — a rotation,
+        // the window resizing — and that moves what covers what.
+        this._reviewToolbarConflict();
+      }
   }
 
   // ── state → DOM ───────────────────────────────────────────────────────────
@@ -1395,9 +1472,16 @@ export class PdfWorkspace {
     //
     // During a divider drag they ARE true, frame by frame, and one rung per
     // frame is what keeps that drag cheap — so that path is left as it was.
-    if (!this.root.classList.contains('is-animating')) {
+    const settled = !this.root.classList.contains('is-animating');
+    if (settled) {
       if (this._dividerDragging) this._syncPaneHeaderFit();
       else this._settleHeaderFit();
+    }
+    // 横杠先按新的栏宽、新的栏头定好大小和位置，再去判它压没压住东西：判的
+    // 该是它停稳之后在哪儿。原来先判后定，判的是上一种布局里的那根横杠——栏变
+    // 窄它会缩短、栏头多一行它会被往下推，这些都在判完之后才发生。
+    this._syncToolbarSize(fractions);
+    if (settled) {
       // And ask again whether the bar is in anyone's way. Until now only
       // opening or closing a panel asked that — but the panel can hold still
       // while the LAYOUT moves out from under it: focusing the other pane
@@ -1406,7 +1490,6 @@ export class PdfWorkspace {
       // out of the way of, and nothing on screen to close.
       this._reviewToolbarConflict();
     }
-    this._syncToolbarSize(fractions);
   }
 
   /**
@@ -1455,7 +1538,7 @@ export class PdfWorkspace {
   }
 
   /**
-   * 工具栏不能进的那两条带子：顶上的分栏横杠，底下那条悬浮菜单栏。
+   * 工具栏不能进的带子：顶上的分栏横杠。
    *
    * 顶边问的是每一栏里看得见的横杠，不是「当前那一栏」——当前那一栏不一定是看得
    * 见的那一栏。在左栏是活动栏时点右栏的专注，走掉的正是左栏，而安全区原来是拿
@@ -1463,59 +1546,51 @@ export class PdfWorkspace {
    * 一帧之内往上弹了 76px。工具栏浮在整个工作区上，任何一条看得见的横杠都是它
    * 要躲开的东西，所以取最大的那个。
    *
-   * 底边是这次新加的。它一直是 0——也就是说底下那条悬浮菜单栏从来不算数，而它是
-   * fixed 的，就压在工作区上。菜单栏一升起来，工具栏就被它盖住半截。
-   *
-   * 量的是「此刻」菜单栏的上沿，不是它的最终位置：拖的过程中它的矩形每一帧都在
-   * 变，手停下它也停下。所以工具栏是被顶上去的，而不是等它到位之后才跳一下。
+   * 底边是 0。原来底下有一条 fixed 的悬浮菜单栏压在工作区上，菜单栏一升起来，贴底
+   * 边的工具栏就被顶上去；它挪到了顶上那一排的正中（在工作区外面），底边再没有东
+   * 西压着。
    */
   _toolbarSafeArea(rect) {
     const top = [SLOTS.PRIMARY, SLOTS.SECONDARY].reduce((most, s) => {
       const el = this.elSlots[s];
       if (!el || el.hidden || !el.offsetWidth) return most;
-      const header = el.querySelector('.pdf-slot-toolbar');
-      const strip = el.querySelector('.deck-strip');
-      return Math.max(most, (header && !header.hidden ? header.offsetHeight : 0)
-        + (strip && !strip.hidden ? strip.offsetHeight : 0));
+      return Math.max(most, slotChromeBottom(el));
     }, 0);
 
-    const dock = typeof document !== 'undefined'
-      ? document.querySelector('.bottom-nav') : null;
-    const box = dock?.getBoundingClientRect?.();
-    // 只有真挡在路上的菜单栏才算数。
-    //
-    // 那条菜单栏是居中的一颗胶囊——真机上量到它横跨 360–840，而工具栏靠在最左边
-    // 的 10–63。两者横向根本不相交，可安全区是按整条底边算的，于是菜单栏一升起来
-    // 工具栏就被顶上去、还缩短了一截，而它从头到尾都没被挡住过一个像素。
-    //
-    // 拿横向是否相交来判，而不是纵向：被顶上去之后纵向就不相交了，再拿纵向去判
-    // 会来回摆——顶上去、不冲突了、落回来、又冲突。横向不随这个动作改变，所以它
-    // 是稳的。
-    const bar = this.toolbar?.rect?.();
-    const inTheWay = !!box && box.height > 0 && !!bar
-      && box.right > bar.left && box.left < bar.right;
-    // 收起来的时候它被挪到屏幕外面，上沿落在工作区底边以下，相减是负的——那就是
-    // 0，没有盖住任何东西。
-    const bottom = inTheWay ? Math.max(0, rect.bottom - box.top) : 0;
-    return { top, bottom };
+    return { top, bottom: 0 };
   }
 
   /**
-   * 菜单栏动了一下，工具栏重新安顿一次。
+   * 顶上那一排动了一下，工具栏重新安顿一次。
    *
-   * 走的是整条 _syncToolbarSize，不是只更新那两条带子。
+   * 走的是整条 _syncToolbarSize，不是只更新安全区。
    *
-   * 一开始这里只调 setSafeArea，理由是「菜单栏上下滑的时候列宽没变」——列宽确实
-   * 没变，可**可用高度**变了，而那正是 fitTo 的输入之一。于是真机上量到：菜单栏
-   * 升起来之后，工具栏整条往上挪了，但它自己还是原来那么长，比让出来的带子还长
-   * 25px——夹取只好让它两头均匀溢出，看起来就是最下面那个工具压在菜单栏底下。
-   * 「紧贴在菜单栏外面」要成立，它得先能装得下。
+   * 那一排在文档流里：它收起、拉出的时候，列宽没变，**可用高度**变了，而那正是
+   * fitTo 的输入之一。只调 setSafeArea 的话，工具栏的位置跟上了、长短没跟上——真机
+   * 上量到过它比让出来的地方还长 25px，两头溢出去。
    *
    * fitTo 里那句「缩放没变到 0.01 就直接返回」让这条路在多数帧上是廉价的。
    */
   syncToolbarSafeArea() {
     if (!this.toolbar?.fitTo || !this.root) return;
     this._syncToolbarSize(paneFractions(this.state));
+  }
+
+  /**
+   * 收了一级、那几样的宽度还在过渡：等它落地再量一次。
+   *
+   * 栏头是一枚被 max-width 夹着的胶囊，内容比它宽的时候，收一级前后它自己的尺寸都是那个
+   * 上限——没有哪个尺寸观察器会再叫一声，于是阶梯停在第一级，剩下那一截一直溢在胶囊外面
+   * （真机上左栏 471 宽，内容 558，只收了一级，「专注」和「⋯」被挤出去看不见）。这里补上
+   * 那一声：过渡落地之后自己再量，直到放得下或者收到底。
+   */
+  _recheckHeaderSoon() {
+    if (this._headerRecheck || typeof setTimeout !== 'function') return;
+    this._headerRecheck = setTimeout(() => {
+      this._headerRecheck = 0;
+      if (this._destroyed) return;
+      try { this._settleHeaderFit(); } catch (_) { /* 栏已经拆了 */ }
+    }, 320);
   }
 
   /** Which rungs are applied, as one comparable string. */
@@ -1551,7 +1626,10 @@ export class PdfWorkspace {
       const bar = el?.querySelector('.pdf-slot-toolbar');
       if (!bar) continue;
 
-      const have = bar.clientWidth;
+      // 栏头是一枚按内容收着的胶囊（liquid.css），它自己的宽度就是内容的宽度——拿它当
+      // 「有多少地方」，永远是刚好放得下，收走的读数也就再回不来。地方是这一栏能给它
+      // 的那么宽。
+      const have = headerRoom(el, bar);
       // A hidden or not-yet-laid-out pane measures zero, and zero is not a
       // reason to strip its toolbar.
       if (!have) continue;
@@ -1567,7 +1645,10 @@ export class PdfWorkspace {
       //
       // So: one change, then wait for it to land. Only the transitions that
       // move width count; the background fades and the hover tints do not.
-      if (barIsSettling(bar)) continue;
+      if (barIsSettling(bar)) {
+        this._recheckHeaderSoon();
+        continue;
+      }
 
       // How many rungs are already applied. They go on in order, so the first
       // missing one is the next to add.
@@ -1582,6 +1663,7 @@ export class PdfWorkspace {
         if (level < HEADER_LADDER.length) {
           wanted[level] = bar.scrollWidth;
           el.classList.add(HEADER_LADDER[level]);
+          this._recheckHeaderSoon();
         }
         continue;
       }
@@ -1640,6 +1722,35 @@ export class PdfWorkspace {
     const width = column ? rect.width : this._toolbarColumnWidth(fractions, rect);
 
     this.toolbar.fitTo({ height: rect.height, column: width });
+    this._syncAgentFab(rect);
+  }
+
+  /**
+   * Agent 那颗圆按钮给贴在右边的工具栏让路。
+   *
+   * 那颗按钮钉在工作区右边、正中间，48px；工具栏贴右边时也在那儿，而且更长——
+   * 按钮正好压在它中间那两格上（多半是颜色），层级还比它高，那两格就点不到了。
+   * 两样东西都是浮在工作区上的，谁也不知道谁，所以由这里来量：横杠展开着、贴右
+   * 边、竖着方向上和按钮相交，按钮就挪到它左边，隔 8px。收成球、贴别的边、或者
+   * 根本不相交的时候，它回原处。
+   *
+   * 用的是横杠停稳之后的位置（toolbar.rect），不是这一帧画在哪儿，理由同
+   * _toolbarSafeArea：展开的头几百毫秒它还在从球的位置飞过来。
+   */
+  _syncAgentFab(rect = this.root?.getBoundingClientRect?.()) {
+    const layer = this.root?.querySelector?.('.pdf-agent-layer');
+    if (!layer || !rect?.height) return;
+    const state = this.toolbar?.state;
+    const bar = this.toolbar?.rect?.();
+    const FAB = 48;
+    let right = 14;
+    if (state?.phase === TOOLBAR_PHASE.EXPANDED && state.edge === EDGES.RIGHT && bar?.width) {
+      const middle = rect.top + rect.height / 2;
+      if (bar.top < middle + FAB / 2 && bar.bottom > middle - FAB / 2) {
+        right = Math.round(rect.right - bar.left) + 8;
+      }
+    }
+    layer.style.setProperty('--agent-fab-right', `${right}px`);
   }
 
   /**
@@ -1656,7 +1767,9 @@ export class PdfWorkspace {
     const share = fractions?.[this.activeSlot];
     const fallback = share > 0 ? rect.width * share : rect.width;
 
-    const bar = this.toolbar?.root?.getBoundingClientRect?.();
+    // 停稳之后的位置（见 InkToolbar.rect）：刚展开的横杠还在从球的位置飞过来，
+    // 拿那一帧判它在哪一栏，判的是那颗球。
+    const bar = this.toolbar?.rect?.();
     if (!bar || !bar.width) return fallback;
 
     const left = this.state.swapped ? SLOTS.SECONDARY : SLOTS.PRIMARY;
@@ -1759,6 +1872,7 @@ export class PdfWorkspace {
       if (entry) this.removeEntry(slot, entry.id);
     });
     on('organize', () => { this._closeSlotMenus(); this.organize(slot, null); });
+    on('export-pdf', () => { this._closeSlotMenus(); this.exportSlot(slot); });
     on('scratch-style', () => {
       this._closeSlotMenus();
       const kind = activeEntryIn(this.state, slot)?.kind;
@@ -1871,6 +1985,7 @@ export class PdfWorkspace {
     set('note-add-page', n => {
       n.hidden = !note || !loaded;
       n.title = t('note.addPage');
+      n.setAttribute('aria-label', n.title);
       // 到上限了就按不动，但按钮还在 —— 没了的话人会以为自己记错了。
       n.disabled = !!note && loaded && pane.state.pageCount >= NOTE_PAGE_MAX;
     });
@@ -1895,18 +2010,33 @@ export class PdfWorkspace {
         : Math.round((pane.displayZoom?.() ?? pane.state.zoom) * 100));
     set('zoom-label', n => { n.textContent = zoomPercent == null ? '' : `${zoomPercent}%`; });
     this._flashZoom(slot, zoomPercent, entry?.id || null);
-    set('scratch-origin', n => { n.textContent = t('scratch.origin'); });
-    set('scratch-fit', n => { n.textContent = t('scratch.fitAll'); });
+    const labelled = (n, label) => {
+      if (n.title === label) return;
+      n.title = label;
+      n.setAttribute('aria-label', label);
+    };
+    set('scratch-origin', n => labelled(n, t('scratch.origin')));
+    set('scratch-fit', n => labelled(n, t('scratch.fitAll')));
     set('scratch-save', n => {
-      const state = scratchPane?.saveState;
-      n.textContent = saveLabel(state);
-      n.className = `scratch-save is-${state || 'saved'}`;
+      const state = scratchPane?.saveState || SAVE_STATES.SAVED;
+      const label = saveLabel(state);
+      // 存好了是常态，只留一个小勾，字在 aria-label 和 title 里；存着、没存、存坏了才
+      // 用字说——那几种才值得在栏头上占地方（存坏了还得能按，按了就重存）。
+      const shown = state === SAVE_STATES.SAVED ? 'icon' : label;
+      if (n.dataset.shown !== shown) {
+        n.dataset.shown = shown;
+        if (state === SAVE_STATES.SAVED) n.innerHTML = SAVED_ICON;
+        else n.textContent = label;
+      }
+      labelled(n, label);
+      n.className = `scratch-save is-${state}`;
       // Only a failure is worth pressing. Everything else it says is a report.
       n.disabled = !scratch || state === SAVE_STATES.SAVING;
     });
     set('focus', n => {
       n.classList.toggle('is-active', this.state.focusedSlot === slot);
       n.title = this.state.focusedSlot === slot ? '退出专注' : '专注此文档';
+      n.setAttribute('aria-label', n.title);
     });
     // 和上面那两颗按钮问的是同一个对象，见 _bindSlotChrome 里的注释。
     set('ink-undo', n => { n.disabled = !loaded || !this.viewFor(slot)?.ink?.canUndo(); });
@@ -1915,6 +2045,7 @@ export class PdfWorkspace {
     // The menu: what it offers depends on what the pane is holding.
     set('close', n => { n.textContent = t('deck.removeFromPane'); });
     set('organize', n => { n.textContent = t('deck.organize'); });
+    set('export-pdf', n => { n.textContent = t('export.menu'); });
     set('scratch-style', n => {
       n.hidden = !scratch && !note;
       n.textContent = note ? t('note.style') : t('scratch.style');
@@ -2035,16 +2166,6 @@ export class PdfWorkspace {
   }
 
   /**
-   * 挡在笔迹栏前面的那一块，不管它是哪一块。
-   *
-   * 「本栏内容」那张单子和找页面板是同一类东西：都盖在某一栏上、都在笔迹栏
-   * 下面、都是打开来读的。所以它们对笔迹栏该有同一套规矩——真的压住了就收成
-   * 球飞到那一栏的下角，没压住就一动不动。判断压没压住、往哪个角落，全都在
-   * _yieldToolbarAround 里，这里只负责回答「现在开着的是哪一块」。
-   *
-   * 单子在前：两者同时开着时，它是后打开、也更靠上的那一块。
-   */
-  /**
    * Which bottom corner the bar should step into.
    *
    * The corners are named against the WORKSPACE, so a column only owns the
@@ -2088,11 +2209,37 @@ export class PdfWorkspace {
    * 判断本身仍然只有 _yieldToolbarAround 一处。
    */
   _reviewToolbarConflict() {
-    this._yieldToolbarAround(this._openOverlay());
+    // 整个工作区不在屏幕上（切到了设置页）：什么都不判。那时每一块面板量出来都
+    // 是 0，看上去就像全关了——原来横杠会在后台还位，等人回到练习页、面板还开着，
+    // 它再当着人折一次；人点开球时批下的豁免也会被当成「面板关了」划掉。
+    if (!this.root?.getBoundingClientRect?.()?.width) return;
+    const open = this._openOverlays();
+    // 豁免只管它批下来时开着的那几块：真关掉了（hidden，或者已经不在页面上）的
+    // 划掉，再打开是新的一次。一时量不到不算关——那一栏被专注模式收走又回来，
+    // 面板还是那一块，人点开球的那个决定也还算数。
+    if (this._yieldWaived) {
+      for (const el of [...this._yieldWaived]) {
+        if (el.hidden || el.isConnected === false) this._yieldWaived.delete(el);
+      }
+    }
+    this._yieldToolbarAround(open);
   }
 
+  /** 最上面那一块；没有就是 null。 */
   _openOverlay() {
-    if (!this.root) return null;
+    return this._openOverlays()[0] || null;
+  }
+
+  /**
+   * 挡在笔迹栏前面的那几块：开着、而且真在屏幕上的全部，叠在最上面的排前面。
+   *
+   * 「本栏内容」那张单子、找页面板、答案面板是同一类东西：都盖在某一栏上、都在
+   * 笔迹栏下面、都是打开来读的。所以它们对笔迹栏该有同一套规矩——真的压住了就
+   * 收成球飞到那一栏的下角，没压住就一动不动。压没压住、往哪个角落、什么时候还
+   * 回去，全都在 _yieldToolbarAround 里；这里只负责回答「现在开着的是哪几块」。
+   */
+  _openOverlays() {
+    if (!this.root) return [];
     // Open AND on screen. A panel keeps its own open/closed flag, and its
     // column can go out from under it — tap 专注 on the other pane and the
     // column holding an open table of contents is taken out of the flow with
@@ -2111,12 +2258,13 @@ export class PdfWorkspace {
     // 就杵在答案上面不动。它还有一点和另外两块不同：高度是内容撑出来的（最高
     // 48%），一条提示和一整页匹配结果差很多，所以它的尺寸变化也要重新判一次
     // ——见 _watchSlotSizes 里对它的观察。
+    const found = [];
     for (const role of ['deck-list', 'outline-panel', 'answer-panel']) {
       for (const el of this.root.querySelectorAll(`[data-role="${role}"]:not([hidden])`)) {
-        if (shown(el)) return el;
+        if (shown(el)) found.push(el);
       }
     }
-    return null;
+    return found;
   }
 
   _renderOutline(slot, outline) {
@@ -2744,6 +2892,101 @@ export class PdfWorkspace {
     this._resizePanes();
     this._persist();
     this._syncSlotChrome(slot);
+  }
+
+  /**
+   * 两栏里开着的全部，按屏幕上的先后、按摞里的顺序：[{slot, name}]。
+   *
+   * 「全部关闭」问话里列的就是它——要关掉的是哪几份，人得看得见才决定得了。
+   */
+  /**
+   * 把这一栏正显示着的那一份交给「导出 PDF」。
+   *
+   * 做导出的是界面层（onExport，见 pdf-workspace-ui.js 的 exportAsPdf）：问权限、弹提
+   * 示、存文件都是它的事。工作区只回答「这一栏显示的是哪一份、叫什么」。
+   */
+  exportSlot(slot) {
+    const entry = this._entryOnScreen(slot);
+    if (!entry?.resourceId) return;
+    const name = this.describeEntry(slot, entry)?.name || '';
+    this.onExport?.({ kind: entry.kind, id: entry.resourceId, name });
+  }
+
+  /**
+   * 某一份还没落盘的笔迹，现在就存下。
+   *
+   * 自动保存有几百毫秒的延迟（笔一停就写太吵），所以人写完最后一笔马上点「导出」，
+   * 那一笔可能还只在屏幕上。两栏开着同一份时两边都存：谁那边有新笔迹不一定。
+   */
+  async flushInkFor(resourceId) {
+    if (!resourceId) return;
+    const jobs = [];
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+      const entry = this._entryOnScreen(slot);
+      if (entry?.resourceId !== resourceId) continue;
+      if (entry.kind === ENTRY_KINDS.SCRATCH) jobs.push(this.scratchPanes[slot]?.flush?.());
+      else jobs.push(this.panes[slot]?._flushInkSave?.());
+    }
+    await Promise.allSettled(jobs);
+  }
+
+  openEntries() {
+    const order = this.state.swapped
+      ? [SLOTS.SECONDARY, SLOTS.PRIMARY]
+      : [SLOTS.PRIMARY, SLOTS.SECONDARY];
+    const out = [];
+    for (const slot of order) {
+      for (const entry of deckFor(this.state, slot).entries) {
+        out.push({ slot, name: this.describeEntry(slot, entry)?.name || '' });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 一下关掉两栏里的全部——每一栏的整摞，不只是露在外面的那一份。
+   *
+   * 每一栏正显示着的那一份先存好：草稿纸把没写完的笔迹落盘，书记下停在哪一页。和
+   * 逐个「移出本栏」时存的是同一样东西，只是一下做完。压在下面的那几份没有没存
+   * 的东西——它们被换下去的那一刻就已经存过了。
+   *
+   * **先全部存好，再一起关。** 存到一半失败，宁可一份都不关：关掉一半、剩下那一
+   * 半还挂着一份没存进去的笔迹，是最难收拾的那种半截状态。
+   *
+   * 文件一个都不删，它们都还在文档库里，下次打开还回到这一页。收起来的那一栏、
+   * 专注模式也一起放开：桌上什么都不剩的时候，没有哪一栏该还是收着的。
+   *
+   * @returns {Promise<boolean>} 有东西存不进去就是 false，什么都没关
+   */
+  async closeAll() {
+    const slots = [SLOTS.PRIMARY, SLOTS.SECONDARY];
+    if (slots.every((slot) => !deckLength(deckFor(this.state, slot)))) return false;
+
+    for (const slot of slots) {
+      if (!deckLength(deckFor(this.state, slot))) continue;
+      const view = this.viewFor(slot);
+      if (view?.flush) {
+        const saved = await view.flush();
+        if (!saved) { this._setStatus(slot, t('scratch.failed')); return false; }
+      } else if (view?.isLoaded?.()) {
+        this._rememberSlotView(slot);
+      }
+    }
+
+    for (const slot of slots) {
+      if (this.agentTarget?.slot === slot) this._closeAgentPanel();
+    }
+    let next = restoreCollapsed(clearFocus(this.state));
+    for (const slot of slots) next = closeSlot(next, slot);
+    // 状态先清，再卸窗格——和「移出本栏」同一个次序。桌上空了，_setState 会自己
+    // 把书架请回来（onEmpty），那是异步的，卸窗格赶在它前面做完。
+    this._setState(next);
+    for (const slot of slots) this._unloadSlot(slot);
+    this._layout();
+    this._resizePanes();
+    this._persist();
+    for (const slot of slots) this._syncSlotChrome(slot);
+    return true;
   }
 
   /** Empties a slot's panes without touching its deck. */
@@ -3888,7 +4131,12 @@ export class PdfWorkspace {
    *
    * 横杠上那个读数一直都在，但它是梯子最先收走的东西之一——两栏各 584px 时它
    * 正好不在，而那恰恰是人捏着两根手指、最想知道自己捏到哪儿的时候。所以另有
-   * 一块牌子，浮在这一栏的页面中间，只在比例真的变了的那一刻露面。
+   * 一块牌子，只在比例真的变了的那一刻露面。
+   *
+   * 它挂在栏头底下、页面的上沿（横着居中），不在页面正中：原来是正中一大块深色的牌子，
+   * 正压在人捏着的那一片字上。人说「调去文件菜单栏下面，变成白色，再缩小一点」。栏头
+   * 有多高每一栏不一样（有没有切换条、阶梯收到哪一级），所以露面的那一刻量一次内容那一块
+   * 的上沿。
    *
    * 只在「同一份东西的比例变了」时露面。翻页、落笔、撤销都会走到这里；换一本
    * 书更会——新书有自己的比例，而那不是一次缩放，是一次打开。所以要连同「现在
@@ -3901,9 +4149,14 @@ export class PdfWorkspace {
     if (percent == null || !before || before.entryId !== entryId) return;
     if (before.percent === percent) return;
 
-    const badge = this.elSlots?.[slot]?.querySelector('[data-role="zoom-badge"]');
+    const slotEl = this.elSlots?.[slot];
+    const badge = slotEl?.querySelector('[data-role="zoom-badge"]');
     if (!badge) return;
     badge.textContent = `${percent}%`;
+    // 内容那一块（书或草稿纸，露着的那一个）的上沿，往下空一点。栏是 position: relative，
+    // offsetTop 就是离栏顶多远。
+    const pane = [...slotEl.querySelectorAll('.pdf-slot-pane')].find((p) => !p.hidden);
+    if (pane && Number.isFinite(pane.offsetTop)) badge.style.top = `${pane.offsetTop + 8}px`;
     badge.classList.add('is-visible');
     this._zoomBadgeTimers ||= {};
     clearTimeout(this._zoomBadgeTimers[slot]);
@@ -4175,6 +4428,11 @@ export class PdfWorkspace {
     clearTimeout(this._docViewTimer);
     for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) this._rememberSlotView(slot);
     clearTimeout(this._animTimer);
+    clearTimeout(this._slideTimer);
+    this._slideTimer = 0;
+    clearTimeout(this._headerRecheck);
+    this._headerRecheck = 0;
+    this._destroyed = true;
     if (this._trackFrame) cancelAnimationFrame(this._trackFrame);
     this._trackFrame = 0;
     this._closeAgentPanel({ notify: false });
@@ -4208,6 +4466,44 @@ function escapeHtml(s) {
  * colour that fades — an indicator that lies is worse than no indicator,
  * because it is the thing someone checks before closing the app.
  */
+/**
+ * 一栏顶上那两条（栏头那枚胶囊、切换条那一行）一直占到哪儿，从栏的上沿量起——连它
+ * 们的外边距一起。它们现在带着外边距（胶囊离卡片上沿 8px、标题行上下各留一点），光把
+ * 两条的高度加起来会少算那几截，贴着顶边的工具栏就压到标题行上。量不到位置（测试里的
+ * 替身）就退回把高度加起来。
+ */
+function slotChromeBottom(el) {
+  const parts = ['.pdf-slot-toolbar', '.deck-strip']
+    .map((sel) => el.querySelector(sel))
+    .filter((n) => n && !n.hidden && n.offsetHeight);
+  if (!parts.length) return 0;
+  const top = el.getBoundingClientRect?.().top;
+  const last = parts[parts.length - 1];
+  const bottom = last.getBoundingClientRect?.().bottom;
+  if (!Number.isFinite(top) || !Number.isFinite(bottom) || bottom <= top) {
+    return parts.reduce((sum, n) => sum + n.offsetHeight, 0);
+  }
+  const margin = typeof getComputedStyle === 'function' && last.nodeType
+    ? parseFloat(getComputedStyle(last).marginBottom) || 0 : 0;
+  return Math.round(bottom + margin - top);
+}
+
+/**
+ * 这一栏能给栏头多宽：栏的内宽减去两边各一个 --slot-bar-gutter。栏头按内容收着（不再
+ * 横贯整栏），所以不能拿它自己的宽度来量。量不到（栏没排版、测试里的替身）就退回它自
+ * 己的宽度，和原来一样。
+ */
+function headerRoom(slotEl, bar) {
+  const room = slotEl?.clientWidth || 0;
+  if (!room || !bar?.nodeType || typeof getComputedStyle !== 'function') return bar?.clientWidth || 0;
+  const gutter = parseFloat(getComputedStyle(bar).getPropertyValue('--slot-bar-gutter')) || 0;
+  const have = room - 2 * gutter;
+  return have > 0 ? have : bar.clientWidth;
+}
+
+/** 存好了：一个小勾。 */
+const SAVED_ICON = '<svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6.8 12.6 3.4 3.4 7-7.6"/></svg>';
+
 function saveLabel(state) {
   switch (state) {
     case SAVE_STATES.SAVED: return t('scratch.saved');
@@ -4230,14 +4526,14 @@ function slotChrome(slot) {
       <button type="button" class="pdf-slot-btn is-accent" data-role="focus-exit" hidden></button>
       <span class="pdf-slot-title" data-role="title"></span>
       <span class="pdf-slot-group is-pdf-only" data-role="pdf-controls">
-        <button type="button" class="pdf-slot-btn" data-role="outline" title="目录">☰</button>
-        <button type="button" class="pdf-slot-btn" data-role="prev" title="上一页">‹</button>
+        <button type="button" class="pdf-slot-btn" data-role="outline" title="目录" aria-label="目录"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 7h10M9.5 12h10M9.5 17h10"/><path d="M5 7h.01M5 12h.01M5 17h.01" stroke-width="2.6"/></svg></button>
+        <button type="button" class="pdf-slot-btn" data-role="prev" title="上一页" aria-label="上一页"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg></button>
         <input type="number" class="pdf-slot-page" data-role="page-input" min="1" step="1" value="1" aria-label="页码">
         <span class="pdf-slot-total" data-role="page-total"></span>
-        <button type="button" class="pdf-slot-btn" data-role="next" title="下一页">›</button>
+        <button type="button" class="pdf-slot-btn" data-role="next" title="下一页" aria-label="下一页"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 5.5 16 12l-6.5 6.5"/></svg></button>
         <!-- 只有笔记本有。一本书的页数是它自己的事，加不了也不该能加；一本
              空本子写满了要续，而「续」的地方就该在翻到头的那个按钮旁边。 -->
-        <button type="button" class="pdf-slot-btn" data-role="note-add-page" hidden>+页</button>
+        <button type="button" class="pdf-slot-btn" data-role="note-add-page" hidden><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 3.5H7.5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V8.5z"/><path d="M13.5 3.5v5h5"/><path d="M12 11.5v6M9 14.5h6"/></svg></button>
         <!-- 书签：这一页记不记，和翻页是同一件事的两面，所以挨着放。 -->
         <button type="button" class="pdf-slot-btn pdf-slot-mark" data-role="bookmark"
                 aria-pressed="false" title="书签">
@@ -4248,25 +4544,27 @@ function slotChrome(slot) {
           </svg>
         </button>
       </span>
-      <button type="button" class="pdf-slot-btn" data-role="zoom-out" title="缩小">−</button>
+      <button type="button" class="pdf-slot-btn" data-role="zoom-out" title="缩小" aria-label="缩小"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg></button>
       <span class="pdf-slot-zoom" data-role="zoom-label"></span>
-      <button type="button" class="pdf-slot-btn" data-role="zoom-in" title="放大">+</button>
+      <button type="button" class="pdf-slot-btn" data-role="zoom-in" title="放大" aria-label="放大"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg></button>
       <span class="pdf-slot-group is-pdf-only">
-        <button type="button" class="pdf-slot-btn" data-role="fit-width" title="适合宽度">↔</button>
-        <button type="button" class="pdf-slot-btn" data-role="fit-page" title="整页">⤢</button>
+        <button type="button" class="pdf-slot-btn" data-role="fit-width" title="适合宽度" aria-label="适合宽度"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5v13M20 5.5v13"/><path d="M7.5 12h9"/><path d="m10 9.5-2.5 2.5 2.5 2.5M14 9.5l2.5 2.5-2.5 2.5"/></svg></button>
+        <button type="button" class="pdf-slot-btn" data-role="fit-page" title="整页" aria-label="整页"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4.5h5v5M9.5 19.5h-5v-5M19.5 4.5l-5.8 5.8M4.5 19.5l5.8-5.8"/></svg></button>
       </span>
       <!-- A scratchpad has no outline, no page controls, no question label and
            no answer lookup, because it has no pages and takes no part in
            matching. What it has instead is a way back to the origin, a way to
            see everything at once, and its save state. -->
       <span class="pdf-slot-group is-scratch-only" data-role="scratch-controls" hidden>
-        <button type="button" class="pdf-slot-btn" data-role="scratch-origin"></button>
-        <button type="button" class="pdf-slot-btn" data-role="scratch-fit"></button>
+        <!-- 两颗都是图标：原来是带字的灰胶囊，整条栏头因为它们宽出去一大截。字在
+             aria-label 和 title 里（换语言时由 _paintSlot 写）。 -->
+        <button type="button" class="pdf-slot-btn" data-role="scratch-origin"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6.5"/><path d="M12 3v3.5M12 17.5V21M3 12h3.5M17.5 12H21"/><path d="M12 12h.01" stroke-width="2.8"/></svg></button>
+        <button type="button" class="pdf-slot-btn" data-role="scratch-fit"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.5" stroke-dasharray="2.4 2.4"/><path d="M7.8 14.6c1.3-2.9 2.6-4.4 3.8-4.4 1.5 0 .7 3.9 2.2 3.9.9 0 1.6-.9 2.2-2.1"/></svg></button>
         <button type="button" class="scratch-save" data-role="scratch-save"></button>
       </span>
       <span class="pdf-slot-sep"></span>
-      <button type="button" class="pdf-slot-btn" data-role="ink-undo" title="撤销">↶</button>
-      <button type="button" class="pdf-slot-btn" data-role="ink-redo" title="重做">↷</button>
+      <button type="button" class="pdf-slot-btn" data-role="ink-undo" title="撤销" aria-label="撤销"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4.5 9.5 9 5"/><path d="M4.5 9.5H14a5.5 5.5 0 0 1 0 11h-2.5"/></svg></button>
+      <button type="button" class="pdf-slot-btn" data-role="ink-redo" title="重做" aria-label="重做"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 14l4.5-4.5L15 5"/><path d="M19.5 9.5H10a5.5 5.5 0 0 0 0 11h2.5"/></svg></button>
       <button type="button" class="pdf-slot-btn is-answer-action" data-role="answers" title="对照本页答案">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
              stroke-linecap="round" stroke-linejoin="round" width="17" height="17" aria-hidden="true">
@@ -4278,9 +4576,9 @@ function slotChrome(slot) {
         <span class="pdf-slot-btn-text">对答案</span>
       </button>
       <span class="pdf-slot-sep is-tail"></span>
-      <button type="button" class="pdf-slot-btn" data-role="focus" title="专注此文档">⛶</button>
+      <button type="button" class="pdf-slot-btn" data-role="focus" title="专注此文档" aria-label="专注此文档"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 9V6a1.5 1.5 0 0 1 1.5-1.5h3M15 4.5h3A1.5 1.5 0 0 1 19.5 6v3M19.5 15v3a1.5 1.5 0 0 1-1.5 1.5h-3M9 19.5H6A1.5 1.5 0 0 1 4.5 18v-3"/></svg></button>
       <button type="button" class="pdf-slot-btn" data-role="slot-more" title="更多"
-              aria-label="更多操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
+              aria-label="更多操作" aria-haspopup="menu" aria-expanded="false"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 12h.01M12 12h.01M18.5 12h.01" stroke-width="3"/></svg></button>
     </div>
     ${deckStripHtml()}
     <div class="pdf-slot-menu" data-role="slot-menu" role="menu" hidden>
@@ -4289,6 +4587,8 @@ function slotChrome(slot) {
       <button type="button" class="pdf-slot-menu-item" role="menuitem" data-role="focus-scratch" hidden></button>
       <button type="button" class="pdf-slot-menu-item" role="menuitem" data-role="scratch-style" hidden></button>
       <button type="button" class="pdf-slot-menu-item" role="menuitem" data-role="organize"></button>
+      <!-- 把这一栏正显示着的那一份导出成 PDF：书连同批注，本子和草稿纸连同纸样。 -->
+      <button type="button" class="pdf-slot-menu-item" role="menuitem" data-role="export-pdf"></button>
       <!-- Relabelled from 关闭文档. Removing an entry detaches it from this
            pane; the resource stays in its library, and the pane falls to
            whatever was underneath rather than emptying. -->

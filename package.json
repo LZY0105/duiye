@@ -18,12 +18,16 @@
     "test:worker-render": "node test/test_pdf_worker_render.js",
     "test:ink-drag": "node test/test_ink_toolbar_drag_dom.js",
     "test:glass-motion": "node test/test_liquid_glass_motion.js",
-    "test": "npm run test:answers && npm run test:pdf-open && npm run test:worker-render && npm run test:workspace && npm run test:decks && npm run test:panel && npm run test:shelf && npm run test:combo && npm run test:guide && npm run test:proxy && npm run test:agent-client && npm run test:agent-conversation && npm run test:agent-panel && npm run test:bookmarks && npm run test:page-panel && npm run test:deck-session && npm run test:scratch-style && npm run test:notebook && npm run test:scratch-canvas && npm run test:scratch-save && npm run test:deck-strip && npm run test:answer-pair && npm run test:organizer && npm run test:switching && npm run test:logger && npm run test:ink-drag && npm run test:ink-active && npm run test:ink-vector && npm run test:lasso && npm run test:shapes && npm run test:ink-race && npm run test:ink-shared && npm run test:ink-handoff && npm run test:permission && npm run test:toolbar && npm run test:ui && npm run test:platform && npm run test:glass-motion && npm run test:matcher && npm run test:index && npm run test:engine && npm run test:glyphs && npm run test:text-source && npm run test:structure && npm run test:no-bookmarks && npm run test:real-pdfs && npm run test:corpus",
+    "test:glass-react": "node test/test_liquid_glass_react.js",
+    "test": "npm run test:answers && npm run test:pdf-open && npm run test:worker-render && npm run test:workspace && npm run test:decks && npm run test:panel && npm run test:shelf && npm run test:combo && npm run test:folder && npm run test:close-all && npm run test:export && npm run test:guide && npm run test:proxy && npm run test:agent-client && npm run test:agent-conversation && npm run test:agent-panel && npm run test:bookmarks && npm run test:page-panel && npm run test:deck-session && npm run test:scratch-style && npm run test:notebook && npm run test:scratch-canvas && npm run test:scratch-save && npm run test:deck-strip && npm run test:answer-pair && npm run test:organizer && npm run test:switching && npm run test:logger && npm run test:ink-drag && npm run test:ink-active && npm run test:ink-vector && npm run test:lasso && npm run test:shapes && npm run test:ink-race && npm run test:ink-shared && npm run test:ink-handoff && npm run test:permission && npm run test:toolbar && npm run test:ui && npm run test:top-bar && npm run test:perch && npm run test:skin && npm run test:fold && npm run test:platform && npm run test:glass-motion && npm run test:glass-react && npm run test:matcher && npm run test:index && npm run test:engine && npm run test:glyphs && npm run test:text-source && npm run test:structure && npm run test:no-bookmarks && npm run test:real-pdfs && npm run test:corpus",
     "test:workspace": "node test/test_pdf_workspace.js",
     "test:decks": "node test/test_deck_state.js",
     "test:panel": "node test/test_panel_state.js",
     "test:shelf": "node test/test_shelf.js",
     "test:combo": "node test/test_combo.js",
+    "test:folder": "node test/test_folder.js",
+    "test:close-all": "node test/test_close_all.js",
+    "test:export": "node test/test_pdf_export.js",
     "test:guide": "node test/test_user_guide.js",
     "test:proxy": "node test/test_native_proxy.js",
     "test:agent-client": "node test/test_agent_client.js",
@@ -52,6 +56,9 @@
     "test:shapes": "node test/test_ink_shapes.js",
     "test:lasso": "node test/test_ink_lasso.js",
     "test:toolbar": "node test/test_ink_toolbar_theme.js",
+    "test:top-bar": "node test/test_top_bar.js",
+    "test:perch": "node test/test_toolbar_perch.js",
+    "test:skin": "node test/test_skin_parity.js",
     "test:ui": "node test/test_ui_interactions.js",
     "test:platform": "node test/test_platform_modules.mjs",
     "test:scratch-canvas": "node test/test_scratch_canvas.js",
@@ -60,7 +67,8 @@
     "test:answer-pair": "node test/test_answer_association.js",
     "test:organizer": "node test/test_deck_organizer_dom.js",
     "test:switching": "node test/test_deck_switching.js",
-    "test:logger": "node test/test_logger_api.js"
+    "test:logger": "node test/test_logger_api.js",
+    "test:fold": "node test/test_page_fold.js"
   },
   "dependencies": {
     "@capacitor/app": "^8.1.0",
@@ -70,6 +78,7 @@
     "idb": "^8.0.0",
     "katex": "^0.18.9",
     "markdown-it": "^15.0.2",
+    "pdf-lib": "^1.17.1",
     "pdfjs-dist": "4.2.67"
   },
   "devDependencies": {

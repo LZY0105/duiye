@@ -98,7 +98,9 @@ test('说明书不是库里的记录，是书架自己摆的一格', () => {
 });
 
 test('它排在第一个，前面没有别的书', () => {
-  const fn = shelfSrc.slice(shelfSrc.indexOf('setItems(items) {'));
+  // 认函数名，不认整行签名：setItems 后来多了一个参数（组合借用、但不在这一屏上的那几本），
+  // 这条要盯的只是函数体里说明书排在书前面。
+  const fn = shelfSrc.slice(shelfSrc.indexOf('  setItems(items'));
   const body = fn.slice(0, fn.indexOf('_tile(item) {'));
   const guideAt = body.indexOf('_guideTile()');
   const itemsAt = body.indexOf('for (const item of items)');
@@ -113,7 +115,10 @@ test('一本书都没有时，架子照样搭出来', () => {
   const body = fn.slice(0, fn.indexOf('function showGuide'));
   assert.ok(!/if \(!items\.length\) \{[\s\S]{0,200}?return;/.test(body),
     '空书架不能提前返回');
-  assert.ok(/onGuide: showGuide/.test(body), '书架要接上说明书');
+  // 说明书只摆在最外面那一层：文件夹里装的是人自己的东西，一本挪不走也删不掉
+  // 的说明书摆在那里只是碍事。而「第一次打开软件看到的那一屏」本来就是最外面那
+  // 一层，所以这条保证没有变——变的只是那一行的写法。
+  assert.ok(/onGuide: [^,]*showGuide/.test(body), '书架要接上说明书');
 });
 
 test('封面是画的，不是截的', () => {

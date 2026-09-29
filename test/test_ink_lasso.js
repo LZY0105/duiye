@@ -513,6 +513,131 @@ await test('换成橡皮也一样收', async () => {
   assert.ok(!surface._bar.el?.classList.contains('is-visible'));
 });
 
+
+// ═══════════════════════════════════════════════════════════════
+group('边框和填充，各挑各的');
+
+// 用户在机上报的：套索圈住一个形状再挑颜色，只改得了边框，填充换不掉。又补了一句：
+// 「两个都能改变包含两个能独立改变的意思」——所以不是一下把两样都染成同一个色，
+// 而是边框一排、填充一排，各改各的。
+
+const { createShape, shapePoints, SHAPE_KINDS } = await import('../src/ink/shape-geometry.js');
+
+/** 一个形状（默认矩形），带着边框色和填充色。点照真的那样采出来——没有点的笔画进不了层。 */
+function box(surface, { color = '#111111', fill = '#2563eb', kind = SHAPE_KINDS.RECT } = {}) {
+  const shape = createShape(kind, { x: 300, y: 300 }, { x: 360, y: 340 });
+  const stroke = createStroke({ tool: INK_TOOLS.PEN, color, width: 2, fill, shape });
+  stroke.points = shapePoints(shape, { width: 2 });
+  assert.ok(surface.layer.add(stroke) >= 0, '形状进了层');
+  return stroke;
+}
+
+const pressDown = (node) => node.dispatchEvent(
+  new dom.window.Event('pointerdown', { bubbles: true, cancelable: true }));
+
+await test('圈里有闭合形状：换色那排分成边框、填充两排', async () => {
+  const { surface } = mount();
+  surface.setSwatches(['#111111', '#ff0000', '#2563eb']);
+  const s = box(surface);
+  selectRect(surface, [s.id], 290, 290, 370, 350);
+  surface.render();
+  const palette = surface._bar.el.querySelector('.ink-selection-palette');
+  const rows = [...palette.querySelectorAll('.ink-selection-palette-row')];
+  assert.equal(rows.length, 2, '两排');
+  assert.deepEqual(rows.map(r => r.querySelector('.ink-selection-palette-label').textContent), ['边框', '填充']);
+  assert.equal(rows[0].querySelectorAll('[data-color]').length, 3, '边框那排是工具栏那排色');
+  assert.equal(rows[1].querySelectorAll('[data-fill]').length, 4, '填充那排多一格「不填充」');
+  assert.ok(rows[1].querySelector('.ink-selection-dot.is-none[data-fill=""]'), '打头那格是「不填充」');
+});
+
+await test('改边框只动边框，改填充只动填充', async () => {
+  const { surface } = mount();
+  surface.setSwatches(['#111111', '#ff0000', '#2563eb']);
+  const s = box(surface, { color: '#111111', fill: '#2563eb' });
+  selectRect(surface, [s.id], 290, 290, 370, 350);
+  surface.render();
+  const palette = surface._bar.el.querySelector('.ink-selection-palette');
+  pressDown(surface._bar.el.querySelector('[data-action="color"]'));
+
+  pressDown(palette.querySelector('[data-color="#ff0000"]'));
+  assert.equal(s.color, '#ff0000', '边框换了');
+  assert.equal(s.fill, '#2563eb', '填充没动');
+
+  pressDown(palette.querySelector('[data-fill="#111111"]'));
+  assert.equal(s.fill, '#111111', '填充换了');
+  assert.equal(s.color, '#ff0000', '边框没动');
+  assert.equal(palette.hidden, false, '两排的时候挑完不收——边框和填充常常是连着改的');
+
+  pressDown(palette.querySelector('[data-fill=""]'));
+  assert.equal(s.fill, null, '「不填充」就是把填充拿掉');
+});
+
+await test('撤销各还各的：先还填充，再还边框', async () => {
+  const { surface } = mount();
+  const s = box(surface, { color: '#111111', fill: '#2563eb' });
+  selectRect(surface, [s.id], 290, 290, 370, 350);
+  surface.recolorSelection('#ff0000');
+  surface.refillSelection('#16a34a');
+  assert.deepEqual([s.color, s.fill], ['#ff0000', '#16a34a']);
+
+  surface.history.undo();
+  assert.deepEqual([s.color, s.fill], ['#ff0000', '#2563eb'], '一下撤销只还填充');
+  surface.history.undo();
+  assert.deepEqual([s.color, s.fill], ['#111111', '#2563eb'], '再一下才还边框');
+  surface.history.redo();
+  surface.history.redo();
+  assert.deepEqual([s.color, s.fill], ['#ff0000', '#16a34a']);
+});
+
+await test('没填过色的闭合形状，挑了填充就填上；开口的形状和手写的不碰', async () => {
+  const { surface } = mount();
+  const empty = box(surface, { fill: null });
+  const arrow = box(surface, { fill: null, kind: SHAPE_KINDS.ARROW });
+  const ink = line(surface, 300, 320);
+  selectRect(surface, [empty.id, arrow.id, ink.id], 280, 280, 380, 360);
+  assert.equal(surface.refillSelection('#dc2626'), true);
+  assert.equal(empty.fill, '#dc2626', '闭合的填上了');
+  assert.equal(arrow.fill ?? null, null, '箭头没有「里面」');
+  assert.equal(ink.fill ?? null, null, '手写的笔画也没有');
+});
+
+await test('填成它本来就是的色不记一步', async () => {
+  const { surface } = mount();
+  const s = box(surface, { fill: '#2563eb' });
+  selectRect(surface, [s.id], 290, 290, 370, 350);
+  assert.equal(surface.refillSelection('#2563EB'), false);
+  assert.equal(surface.history.canUndo(), false);
+});
+
+await test('只圈了手写的、或者只有开口的形状：还是一排，没有填充那排', async () => {
+  const { surface } = mount();
+  surface.setSwatches(['#111111', '#ff0000']);
+  const ink = line(surface, 100, 100);
+  const arrow = box(surface, { fill: null, kind: SHAPE_KINDS.ARROW });
+  selectRect(surface, [ink.id, arrow.id], 90, 90, 370, 350);
+  surface.render();
+  const palette = surface._bar.el.querySelector('.ink-selection-palette');
+  assert.equal(palette.querySelectorAll('.ink-selection-palette-row').length, 0);
+  assert.equal(palette.querySelectorAll('[data-fill]').length, 0);
+  assert.equal(palette.querySelectorAll('[data-color]').length, 2);
+});
+
+await test('色排上标出这一片眼下的颜色；各是各的就不标', async () => {
+  const { surface } = mount();
+  surface.setSwatches(['#111111', '#ff0000', '#2563eb']);
+  const a = box(surface, { color: '#ff0000', fill: '#2563eb' });
+  selectRect(surface, [a.id], 290, 290, 370, 350);
+  surface.render();
+  const current = () => [...surface._bar.el.querySelectorAll('.ink-selection-dot.is-current')]
+    .map(d => (d.dataset.color !== undefined ? `边框${d.dataset.color}` : `填充${d.dataset.fill || '无'}`));
+  assert.deepEqual(current(), ['边框#ff0000', '填充#2563eb']);
+
+  const b = box(surface, { color: '#111111', fill: null });
+  selectRect(surface, [a.id, b.id], 290, 290, 370, 350);
+  surface.render();
+  assert.deepEqual(current(), [], '圈了两种色：标哪一个都是在说假话');
+});
+
 console.log('\n═══════════════════════════════════════════════════════════════');
 console.log(`  ${passed} passed, ${failed} failed`);
 console.log('═══════════════════════════════════════════════════════════════\n');

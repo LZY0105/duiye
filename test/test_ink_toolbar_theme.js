@@ -21,6 +21,7 @@ import {
   moveDrag, nearestEdge,
   openCard, orientationFor, orientationOf, selectTool, serializeToolbarState,
   setColor, setEraserMode, setEraserWidth, setOpacity, setWidth, startDrag, undock,
+  isYielded, yieldToCorner,
 } from '../src/ink/toolbar-state.js';
 import { INK_TOOLS, TOOL_DEFAULTS } from '../src/ink/stroke.js';
 import { ERASER_MODES } from '../src/ink/ink-eraser.js';
@@ -577,6 +578,19 @@ check('the toolbar renders the puck, and it is draggable and tappable', () => {
   ok(/undock/.test(code), 'a tap expands it');
   const css = $read('src/styles/ink-toolbar.css');
   ok(/\.ink-toolbar\.is-docked/.test(css), 'the docked shell is styled as a circle');
+});
+
+check('让开时欠下的位置：人把球拿起来、或者点开，账就结清', () => {
+  // 两条路都是人亲手要它：一条是拖到别处，一条是点开来用。账留着的话，挡着它
+  // 的面板一关，它会跳回原处——人刚放下的位置被当成了借来的；点开之后它以为自
+  // 己还让着，之后再开什么面板都不让。
+  const yielded = yieldToCorner(createToolbarState(), CORNERS.BOTTOM_LEFT);
+  assert.equal(isYielded(yielded), true, '前提：让开了');
+  assert.equal(isYielded(startDrag(yielded, { x: 12, y: 780 })), false, '拿起来');
+  const opened = undock(yielded);
+  assert.equal(isYielded(opened), false, '点开');
+  assert.equal(opened.phase, TOOLBAR_PHASE.EXPANDED);
+  assert.equal(opened.edge, yielded.yielded.edge, '点开就展开在它让开之前的那条边上');
 });
 
 console.log('\n═══════════════════════════════════════════════════════════════');

@@ -19,10 +19,17 @@ import { isPdfRuntimeAvailable } from './pdf-document.js';
 import { docViewOrder, forgetDocView } from './document-session.js';
 import { deleteDocumentInk } from '../ink/ink-store.js';
 import { ENTRY_KINDS } from './deck-state.js';
-import { chooseAction, confirmDestructive, promptText } from './deck-dialogs.js';
+import {
+  chooseAction,
+  chooseFolder,
+  confirmDestructive,
+  pickResources,
+  promptText,
+} from './deck-dialogs.js';
 import { SHELF_KINDS, shelfItems, shelfSubtitle } from './shelf-state.js';
 import {
   COMBO_ERRORS,
+  COMBO_MAX,
   deleteCombo,
   getCombo,
   listCombos,
@@ -31,12 +38,25 @@ import {
   saveCombo,
 } from './combo-store.js';
 import { comboFacing, comboSize, pruneCombo } from './combo-state.js';
+import { openComboBuilder } from './combo-builder.js';
+import {
+  FOLDER_ERRORS,
+  addFolder,
+  deleteFolder,
+  folderMembers,
+  listFolders,
+  moveToFolder,
+  pruneFolders,
+  renameFolder,
+} from './folder-store.js';
 // 组合的显示图上两栏各画在哪一块 —— 翻开它的时候那两本书就从那两块起飞。
 import { comboPaneBoxes } from './combo-cover.js';
-import { SLOTS } from './workspace-state.js';
+import { ORIENTATIONS, SLOTS } from './workspace-state.js';
 import { BookShelf } from './book-shelf.js';
 import { fitRect, playBookOpen } from './book-open.js';
 import { openGuide } from './user-guide.js';
+import { initTopBarFit } from './top-bar-fit.js';
+import { initTopRowDock } from './top-row-dock.js';
 import { forgetCover } from './cover-store.js';
 import {
   deleteScratchpad,
@@ -48,14 +68,27 @@ import {
   listNotebooks,
   renameNotebook,
 } from '../note/note-store.js';
-import { nativeFilesAvailable, readDevicePdf } from './pdf-files.js';
+import {
+  FILES_ERRORS,
+  nativeFilesAvailable,
+  readDevicePdf,
+  writeExportFile,
+} from './pdf-files.js';
 import { PERMISSION, ensureFilesPermission, openDevicePdfPicker } from './pdf-picker.js';
+import { EXPORT_KINDS, buildExport } from '../export/export-document.js';
+import { EXPORT_ERRORS, exportFileName } from '../export/pdf-export.js';
+import { ensureExportPermission, introduceFilesPermission } from '../export/export-permission.js';
+import { saveFile, showSaveToast } from '../export/save-file.js';
 import { t } from '../core/i18n.js';
 import Logger from '../core/logger.js';
 
 let workspace = null;
 /** Takes the chrome-hiding listeners back off, so a rebuild does not double them. */
 let chromeOff = null;
+/** 同理：顶上那一排「窄了先收字」的那个观察器。 */
+let topBarOff = null;
+/** 顶上那一排里给工具栏停的地方（top-row-dock.js）。重建工作区时换一个新的。 */
+let topRowDock = null;
 let elRoot = null;
 
 function formatBytes(n) {
@@ -95,9 +128,54 @@ let openingId = null;
 /** 屏幕上那一排书。每次刷新重建——封面都在缓存里，重建是便宜的。 */
 let shelf = null;
 
+/**
+ * 正开着的那个文件夹；null 就是最外面那一层。
+ *
+ * 放在模块上而不是放进 refreshLibrary 的参数里：关掉书架再打开，人回到的应该还是
+ * 他刚才在的那一格。一个人整理「高代」的时候会连着开好几本，每次都被扔回最外层，
+ * 等于每开一本都要再走一遍进来的路。
+ */
+let openFolderId = null;
+
 /** 书架自己那一层。翻书的最后四分之一要把它淡掉，所以动画需要认得它。 */
 function libraryEl() {
   return elRoot?.querySelector('[data-role="library"]') || null;
+}
+
+/**
+ * 进了文件夹之后，架子上面那一条。
+ *
+ * 它有三件事要说，缺一件人就会卡住：这是哪个文件夹、怎么回去、怎么往里放东西。
+ * 「怎么回去」排在最左边——摊开一个只显示三本书的文档库，人的第一个念头是「我别
+ * 的书呢」，而那一条必须在他找之前就答上。
+ */
+function folderBar(folder, count) {
+  const bar = document.createElement('div');
+  bar.className = 'pdf-folder-bar';
+  bar.innerHTML = `
+    <button type="button" class="pdf-folder-bar-back" data-role="folder-back">
+      <span aria-hidden="true">‹</span><span data-role="back-label"></span>
+    </button>
+    <span class="pdf-folder-bar-face" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
+           stroke-width="1.8" stroke-linejoin="round">
+        <path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+      </svg>
+    </span>
+    <span class="pdf-folder-bar-name" data-role="folder-name"></span>
+    <span class="pdf-folder-bar-count" data-role="folder-count"></span>
+    <button type="button" class="pdf-folder-bar-add" data-role="folder-add"></button>`;
+  // 名字是人自己起的，走 textContent。
+  bar.querySelector('[data-role="back-label"]').textContent = t('folder.back');
+  bar.querySelector('[data-role="folder-name"]').textContent = folder.name;
+  bar.querySelector('[data-role="folder-count"]').textContent = t('folder.count', { count });
+  bar.querySelector('[data-role="folder-add"]').textContent = t('folder.addHere');
+  bar.querySelector('[data-role="folder-back"]').addEventListener('click', () => {
+    openFolderId = null;
+    refreshLibrary();
+  });
+  bar.querySelector('[data-role="folder-add"]').addEventListener('click', () => addIntoFolder(folder.id));
+  return bar;
 }
 
 async function refreshLibrary() {
@@ -131,7 +209,35 @@ async function refreshLibrary() {
     if (comboSize(trimmed)) combos.push(trimmed);
   }
 
-  const items = shelfItems(docs, pads, docViewOrder(), notes, combos);
+  // 文件夹里记着的可能是已经被删掉的东西。和组合一样在摆上架子之前修剪：文件夹
+  // 上印的份数正是人判断「这里面还有没有东西」的依据，多出几本不存在的书，那个数
+  // 就在骗他。这里是唯一一处同时知道四种东西都还剩下谁的地方。
+  const { folders, members } = pruneFolders((id) => alive.has(id)
+    || combos.some((c) => c.id === id));
+  // 开着的那个文件夹被删掉了（比如在另一台设备上），就回到最外面那一层，而不是
+  // 摊开一个空架子。
+  if (openFolderId && !folders.some((f) => f.id === openFolderId)) openFolderId = null;
+
+  const items = shelfItems(docs, pads, docViewOrder(), notes, combos,
+    { folders, members, openFolderId });
+
+  // 组合的显示图是借它那两本书的封面拼的，翻开它时飞出去的也是那两本的封面和名
+  // 字。那两本要是收在文件夹里（或者组合收在文件夹里、书在外面），它们不在这一屏
+  // 上——书架得额外认得它们，不然组合的图上是两个空框，飞出去的是两张白纸。
+  const onView = new Set(items.map((i) => i.id));
+  const everything = new Map(shelfItems(docs, pads, [], notes, []).map((i) => [i.id, i]));
+  const comboById = new Map(combos.map((c) => [c.id, c]));
+  const companions = [];
+  for (const item of items) {
+    const combo = item.kind === SHELF_KINDS.COMBO ? comboById.get(item.id) : null;
+    if (!combo) continue;
+    for (const entry of Object.values(comboFacing(combo))) {
+      const id = entry?.resourceId;
+      if (!id || onView.has(id) || !everything.has(id)) continue;
+      onView.add(id);
+      companions.push(everything.get(id));
+    }
+  }
 
   // 一本书都没有时也要把架子搭出来。
   //
@@ -139,10 +245,12 @@ async function refreshLibrary() {
   // 那一屏：一句说现状的话，没有说明书，连「＋」都没有。现在空的时候那句话摆在
   // 架子上面，架子上是说明书和一个「＋」。
   const frag = document.createDocumentFragment();
+  const folder = openFolderId ? folders.find((f) => f.id === openFolderId) : null;
+  if (folder) frag.appendChild(folderBar(folder, items.length));
   if (!items.length) {
     const empty = document.createElement('div');
-    empty.className = 'pdf-library-empty';
-    empty.textContent = t('shelf.empty');
+    empty.className = folder ? 'pdf-folder-empty' : 'pdf-library-empty';
+    empty.textContent = folder ? t('folder.empty') : t('shelf.empty');
     frag.appendChild(empty);
   }
 
@@ -153,10 +261,10 @@ async function refreshLibrary() {
   shelf = new BookShelf(host, {
     onOpen: openItem,
     onMenu: openItemMenu,
-    onAdd: () => pickAndImport(DOC_ROLES.EXERCISE),
-    onGuide: showGuide,
+    onAdd: () => (openFolderId ? addIntoFolder() : pickAndImport(DOC_ROLES.EXERCISE)),
+    onGuide: openFolderId ? null : showGuide,
   });
-  shelf.setItems(items);
+  shelf.setItems(items, { companions });
 }
 
 /**
@@ -205,6 +313,13 @@ function beginFlight(item, slot) {
  * 会各自去要「下一个空栏」，而那时谁都还没填上。
  */
 async function openItem(item) {
+  // 进一个文件夹不载入任何东西，所以它不在「正在打开」那道闸后面——那道闸挡的是
+  // 两次载入抢同一栏，而这里换的只是架子上摆着谁。
+  if (item?.kind === SHELF_KINDS.FOLDER) {
+    openFolderId = item.id;
+    await refreshLibrary();
+    return;
+  }
   if (item?.kind === SHELF_KINDS.COMBO) return useCombo(item);
   if (openingId === item.id) return;
   openingId = item.id;
@@ -272,7 +387,17 @@ async function useCombo(item) {
     confirmLabel: t('combo.use'),
   });
   if (!ok) return;
+  await applyComboNow(item, combo);
+}
 
+/**
+ * 真的换过去：飞、换、说一句话。
+ *
+ * 从 useCombo 里拆出来的，因为自由组合存完之后走的是同一条路。差别只在要不要先问
+ * 一声——点架子上一个现成的组合是要换掉两栏里的东西，而刚按下「保存并打开」的人
+ * 已经答过这个问题了。
+ */
+async function applyComboNow(item, combo) {
   setStatus(t('combo.applying', { name: item.name }));
   const flights = beginComboFlight(item, combo);
   try {
@@ -431,6 +556,7 @@ function kindForShelf(item) {
 
 /** 一本书的 ⋯。 */
 async function openItemMenu(item) {
+  if (item.kind === SHELF_KINDS.FOLDER) return openFolderMenu(item);
   const isPad = item.kind === SHELF_KINDS.PAD;
   const isNote = item.kind === SHELF_KINDS.NOTE;
   const isCombo = item.kind === SHELF_KINDS.COMBO;
@@ -441,6 +567,15 @@ async function openItemMenu(item) {
     if (item.role !== DOC_ROLES.EXERCISE) actions.push({ id: 'role-exercise', label: '标为练习册' });
     if (item.role !== DOC_ROLES.ANSWER) actions.push({ id: 'role-answer', label: '标为答案册' });
   }
+  // 分类和「这是什么」是两回事，所以每一样东西都能进文件夹：书、草稿纸、笔记本，
+  // 还有组合——对人来说它们都是架子上的一格。
+  actions.push({ id: 'folder', label: t('folder.moveItem') });
+  // 在文件夹里的那一份，拿出来的路在这里。「移动到文件夹」那张单子顶上只用一句话
+  // 说它现在在哪，不再有一行「不在文件夹里」可点——那一行长得像个文件夹，却不是。
+  if (folderMembers()[item.id]) actions.push({ id: 'unfolder', label: t('folder.takeOut') });
+  // 书、笔记本、草稿纸都能导出成 PDF。组合不是一份文件，是「几本书怎么摆」，没有
+  // 东西可导——要导出里面的书，去导出那几本书。
+  if (!isCombo) actions.push({ id: 'export', label: t('export.menu') });
   actions.push({ id: 'delete', label: '永久删除', danger: true });
 
   const chosen = await chooseAction({
@@ -476,7 +611,282 @@ async function openItemMenu(item) {
     return;
   }
 
+  if (chosen === 'folder') {
+    await moveItemToFolder(item);
+    return;
+  }
+
+  if (chosen === 'export') {
+    await exportAsPdf({ kind: kindForShelf(item), id: item.id, name: item.name });
+    return;
+  }
+
+  if (chosen === 'unfolder') {
+    try {
+      moveToFolder(item.id, null);
+    } catch (error) {
+      Logger.error('PDF', `take out of folder failed: ${error?.message || error}`);
+      setStatus(t('folder.failed'), true);
+      return;
+    }
+    setStatus(t('folder.movedOut'));
+    await refreshLibrary();
+    return;
+  }
+
   if (chosen === 'delete') await deleteItem(item);
+}
+
+/**
+ * 「移动到文件夹」那张单子，从 ⋯ 里进来。
+ *
+ * 这是文件夹唯一的入口。书架上没有「新建文件夹」那一格——一个空文件夹对人没有用，
+ * 他建文件夹的时刻永远是「这一份该收起来了」的时刻，所以建和放是同一下。
+ */
+async function moveItemToFolder(item) {
+  const members = folderMembers();
+  const answer = await chooseFolder({
+    itemName: item.name,
+    current: members[item.id] || null,
+    folders: listFolders().map((f) => ({
+      id: f.id,
+      name: f.name,
+      count: Object.values(members).filter((v) => v === f.id).length,
+    })),
+    // 建出来的文件夹当场就落盘：这张单子上的「新建」按下去之后，人可能改名、可能
+    // 走神、可能直接点「移动」，而其中任何一条路都不该让这个格子消失。
+    onCreate: () => {
+      try {
+        return addFolder('');
+      } catch (error) {
+        setStatus(error.message === FOLDER_ERRORS.FULL ? t('folder.full') : t('folder.failed'), true);
+        return null;
+      }
+    },
+    onRename: (id, name) => renameFolder(id, name),
+  });
+  if (!answer) return;
+
+  try {
+    moveToFolder(item.id, answer.folderId);
+  } catch (error) {
+    Logger.error('PDF', `move to folder failed: ${error?.message || error}`);
+    setStatus(t('folder.failed'), true);
+    return;
+  }
+  const into = answer.folderId ? listFolders().find((f) => f.id === answer.folderId) : null;
+  setStatus(into ? t('folder.moved', { name: into.name }) : t('folder.movedOut'));
+  await refreshLibrary();
+}
+
+/** 文件夹自己的 ⋯：改名、往里放东西、删掉这个格子。 */
+async function openFolderMenu(item) {
+  const chosen = await chooseAction({
+    title: item.name,
+    note: shelfSubtitle(item),
+    actions: [
+      { id: 'rename', label: t('folder.rename') },
+      { id: 'add', label: t('folder.addHere') },
+      { id: 'delete', label: t('folder.delete'), danger: true },
+    ],
+  });
+  if (!chosen) return;
+
+  if (chosen === 'rename') {
+    const next = await promptText({
+      title: t('folder.rename'),
+      label: t('folder.renameLabel'),
+      value: item.name,
+      max: 40,
+      confirm: '保存',
+    });
+    if (!next) return;
+    renameFolder(item.id, next);
+    await refreshLibrary();
+    return;
+  }
+
+  if (chosen === 'add') {
+    await addIntoFolder(item.id);
+    return;
+  }
+
+  // 删一个文件夹只是把格子拿走。里面的东西回到外面那一排——这一点必须在问话里说
+  // 清楚，不然人会以为自己正要把里面几本书一起删掉，而那恰恰是他最怕的事。
+  const ok = await confirmDestructive({
+    title: t('folder.deleteTitle', { name: item.name }),
+    body: t('folder.deleteBody', { count: item.folderSize || 0 }),
+    confirmLabel: t('scratch.delete'),
+  });
+  if (!ok) return;
+  deleteFolder(item.id);
+  if (openFolderId === item.id) openFolderId = null;
+  setStatus(t('folder.deleted', { name: item.name }));
+  await refreshLibrary();
+}
+
+/**
+ * 往一个文件夹里放东西。
+ *
+ * 两条路：从本机导一份新的进来，或者把已经在文档库里的挪进来。它们是同一个念头的
+ * 两种情形——「这个格子里该有点东西」——所以摆在同一张单子上，而不是让人先猜这次
+ * 该走「导入」还是该走「移动」。
+ */
+async function addIntoFolder(folderId = openFolderId) {
+  if (!folderId) return;
+  const folder = listFolders().find((f) => f.id === folderId);
+  if (!folder) return;
+
+  const chosen = await chooseAction({
+    title: t('folder.addTitle', { name: folder.name }),
+    actions: [
+      { id: 'local', label: t('folder.addLocal') },
+      { id: 'existing', label: t('folder.addExisting') },
+    ],
+  });
+  if (!chosen) return;
+
+  if (chosen === 'local') {
+    // 导入自己会看 openFolderId，所以这里只要保证人是站在这个文件夹里的。
+    openFolderId = folderId;
+    await pickAndImport(DOC_ROLES.EXERCISE);
+    return;
+  }
+
+  const outside = (await shelfEverything({ withCombos: true }))
+    .filter((one) => (folderMembers()[one.id] || null) !== folderId);
+  const picked = await pickResources({
+    title: t('folder.pickTitle', { name: folder.name }),
+    note: t('folder.pickNote'),
+    items: outside,
+    confirm: t('folder.pickConfirm'),
+  });
+  if (!picked?.length) return;
+
+  let moved = 0;
+  for (const id of picked) {
+    try {
+      moveToFolder(id, folderId);
+      moved += 1;
+    } catch (error) {
+      Logger.warn('PDF', `move into folder failed: ${error?.message || error}`);
+    }
+  }
+  setStatus(t('folder.movedIn', { count: moved }));
+  await refreshLibrary();
+}
+
+/**
+ * 文档库里所有能被摆上去、放进去的东西，拍平成一张表。
+ *
+ * 挑东西那两张单子（往文件夹里放、自由组合）问的都是「都有些什么」，而那个答案不
+ * 分层——不管一份东西在哪个文件夹里，它都还在这个文档库里。
+ */
+async function shelfEverything({ withCombos = false } = {}) {
+  const [docs, pads, notes] = await Promise.all([
+    listDocuments(), listScratchpads(), listNotebooks(),
+  ]);
+  const rows = [];
+  if (withCombos) {
+    for (const combo of listCombos()) {
+      rows.push({
+        id: combo.id,
+        kind: null,
+        name: combo.name,
+        sub: `${comboSize(combo)}${t('combo.booksSuffix')}`,
+      });
+    }
+  }
+  for (const doc of docs) {
+    rows.push({ id: doc.id, kind: ENTRY_KINDS.PDF, name: doc.name, sub: t('deck.pdf') });
+  }
+  for (const pad of pads) {
+    rows.push({ id: pad.id, kind: ENTRY_KINDS.SCRATCH, name: pad.name, sub: t('deck.scratch') });
+  }
+  for (const note of notes) {
+    rows.push({ id: note.id, kind: ENTRY_KINDS.NOTE, name: note.name, sub: t('deck.note') });
+  }
+  return rows;
+}
+
+/**
+ * 自由组合：不先摆好，直接拼一套。
+ *
+ * 「存为组合」存的是此刻的两栏，这条走的是反方向——先说要哪几本、各在哪一栏，存下
+ * 来，然后才打开。理由写在 combo-builder.js 开头。
+ *
+ * 组合本身不能摆进组合：一个指着另一个组合的组合，打开时该展开成什么，没有一个
+ * 说得通的答案。
+ */
+async function buildCombo() {
+  // 满了就先说。拼完了才告诉人存不进去，等于让他白干一场。
+  if (listCombos().length >= COMBO_MAX) {
+    setStatus(t('combo.full'), true);
+    return;
+  }
+  const items = await shelfEverything();
+  if (!items.length) {
+    setStatus(t('build.nothingLeft'), true);
+    return;
+  }
+
+  // 栏名照屏幕此刻的样子叫：竖着拿平板时两栏是上下叠的。组合存成不对调，所以
+  // PRIMARY 就是左边（或上边）那一栏。
+  const column = workspace?.state?.orientation === ORIENTATIONS.COLUMN;
+  const positions = [
+    { slot: SLOTS.PRIMARY, position: column ? t('deck.top') : t('deck.left') },
+    { slot: SLOTS.SECONDARY, position: column ? t('deck.bottom') : t('deck.right') },
+  ];
+  const positionOf = (slot) => positions.find((p) => p.slot === slot)?.position || '';
+  const open = describeOpen();
+
+  const saved = await openComboBuilder({
+    items,
+    positions,
+    // 和从书架上打开一个组合时那句提醒同一句话：换掉的是哪几本，它们读到哪一页
+    // 会记下来。这里不另弹一个框——那句话就贴在「保存并打开」上面。
+    replaceNote: open.length
+      ? t('combo.useBodyOpen', { open: open.join(t('combo.join')) })
+      : '',
+    pick: ({ slot, position, inThis, inOther }) => pickResources({
+      title: t('build.pickTitle', { position }),
+      note: t('folder.pickNote'),
+      // 这一栏里已经有的不再列；另一栏里有的照样列，并且标出来——同一本书左右
+      // 各开一份是正经用法，但人得知道自己挑的是「另一份」。
+      items: items
+        .filter((one) => !inThis.has(one.id))
+        .map((one) => (inOther.has(one.id)
+          ? { ...one, sub: t('build.alsoOn', { position: positionOf(slot === SLOTS.PRIMARY ? SLOTS.SECONDARY : SLOTS.PRIMARY) }) }
+          : one)),
+      confirm: t('folder.pickConfirm'),
+      empty: t('build.nothingLeft'),
+    }),
+    askName: (suggested) => promptText({
+      title: t('build.title'),
+      label: t('build.nameLabel'),
+      value: suggested,
+      max: 40,
+      confirm: t('build.save'),
+    }),
+    save: (draft) => {
+      try {
+        return { ok: true, combo: saveCombo(draft) };
+      } catch (error) {
+        return {
+          ok: false,
+          message: error.message === COMBO_ERRORS.FULL ? t('combo.full') : t('combo.saveFailed'),
+        };
+      }
+    },
+  });
+  if (!saved) return;
+
+  setStatus(t('combo.saved', { name: saved.name }));
+  // 存完直接打开，走的是和「打开组合…」同一条路。书架这时是收着的——这一套是从
+  // 顶上那一排拼出来的——所以没有一格封面可以起飞，分栏自己滑到位就是那一下「打
+  // 开」。原来这里会先把书架摊开、刷新两遍，只为了让书从一格刚画出来、封面还没
+  // 加载的格子里飞出去。
+  await applyComboNow({ id: saved.id, name: saved.name }, saved);
 }
 
 /**
@@ -676,6 +1086,7 @@ function bindImportMenu() {
 function bindComboMenu() {
   bindBarMenu('combo-open', 'combo-menu', {
     'combo-save': () => saveCurrentCombo(),
+    'combo-build': () => buildCombo(),
     'combo-use': () => pickCombo(),
   });
 }
@@ -759,9 +1170,10 @@ async function handleImport(files, suggestedRole) {
   const role = await confirmRole(file, suggestedRole);
   if (role === null) { setStatus('已取消导入'); return; }
 
+  let meta = null;
   try {
     setStatus(`正在导入 ${file.name} …`);
-    await importPdf(file, role);
+    meta = await importPdf(file, role);
   } catch (error) {
     Logger.error('PDF', 'import failed', error);
     const reason = error.message === 'PDF_STORAGE_FULL'
@@ -771,9 +1183,133 @@ async function handleImport(files, suggestedRole) {
     return;
   }
 
+  // 在一个文件夹里导入，东西就落在这个文件夹里。人是站在「高代」里点的「＋」，
+  // 他要的不是「导进来然后自己再挪一次」。
+  if (openFolderId && meta?.id) {
+    try { moveToFolder(meta.id, openFolderId); } catch (_) { /* 落在外面也不算丢 */ }
+  }
   setStatus('已导入 1 个文档');
   // openLibrary 自己会刷新，不必先刷一遍——那是把整架书连同每一张封面重建两次。
   openLibrary();
+}
+
+/**
+ * 「全部关闭」：两栏里开着的全部，一下关掉。
+ *
+ * 先问一声，问的时候说清楚关掉的是哪几份、会不会丢东西——答案是不会：停在哪一页
+ * 记下来，文件都还在文档库里。和打开一个组合时那句提醒是同一个理由：人得看见要
+ * 关的是哪几份，才决定得了要不要关。一摞里压着的也算，所以列的是全部，不只是露在
+ * 外面的那两份。
+ */
+async function closeAllOpen() {
+  const open = workspace?.openEntries?.() || [];
+  if (!open.length) {
+    setStatus(t('pdf.closeAllNone'));
+    return;
+  }
+  const names = open.map((o) => o.name).filter(Boolean);
+  const shown = names.slice(0, 6).join(t('pdf.closeAllJoin'))
+    + (names.length > 6 ? t('pdf.closeAllMore', { count: names.length - 6 }) : '');
+  const ok = await confirmDestructive({
+    title: t('pdf.closeAllTitle', { count: open.length }),
+    body: t('pdf.closeAllBody', { names: shown }),
+    confirmLabel: t('pdf.closeAll'),
+  });
+  if (!ok) return;
+  const closed = await workspace.closeAll();
+  if (closed) setStatus(t('pdf.closedAll'));
+}
+
+/**
+ * 「导出 PDF」：一本书（连同批注）、一本笔记本或一张草稿纸，导出成 PDF 存进「文档/对页」。
+ *
+ * 次序是定死的：先问权限，再做，最后存。一本几百页的书要做好一会儿——做完才发现存
+ * 不进去，是最糟的那种顺序。没有权限、人又不给：说清楚这个功能要文件权限，别的什么
+ * 都不受影响。去设置里开了、回来：接着导出，不用再点一遍。
+ *
+ * 同一时刻只导一份。第二下点进来就说一声「上一份还在导出」，而不是悄悄排队——几百
+ * 页的书排在后面，人会以为按钮坏了。
+ */
+let exporting = null;
+function exportAsPdf(target) {
+  if (!target?.id) return Promise.resolve();
+  if (exporting) {
+    showSaveToast(t('export.busy'));
+    return exporting;
+  }
+  exporting = runExport(target)
+    .catch((error) => {
+      Logger.error('PDF', `export failed: ${error?.message || error}`, error);
+      setStatus(t('export.failed'), true);
+      showSaveToast(t('export.failed'));
+    })
+    .finally(() => { exporting = null; });
+  return exporting;
+}
+
+async function runExport({ kind, id, name }) {
+  const title = name || t('export.untitled');
+  const waiting = () => setStatus(t('export.waiting'));
+  const allowed = await ensureExportPermission({ notify: showSaveToast, onWaiting: waiting });
+  if (!allowed) {
+    setStatus('');
+    return;
+  }
+
+  // 屏幕上刚写的那几笔可能还没落盘（自动保存有几百毫秒的延迟）。导出去的必须是人
+  // 刚才看见的样子。
+  await workspace?.flushInkFor?.(id);
+
+  setStatus(t('export.working', { name: title }));
+  let built;
+  try {
+    built = await buildExport({ kind, id }, {
+      onProgress: ({ stage, done, total }) => {
+        if (stage === 'pages' && total > 1) setStatus(t('export.progress', { name: title, done, total }));
+      },
+    });
+  } catch (error) {
+    if (error?.message !== EXPORT_ERRORS.EMPTY) throw error;
+    setStatus('');
+    showSaveToast(t('export.empty'));
+    return;
+  }
+
+  const fileName = exportFileName(title, kind === EXPORT_KINDS.PDF ? t('export.suffix') : '');
+
+  // 浏览器里（开发、测试）没有原生层：交给浏览器自己的下载。
+  if (!nativeFilesAvailable()) {
+    saveFile(new Blob([built.bytes], { type: 'application/pdf' }), fileName);
+    const done = t('export.downloaded', { file: fileName });
+    setStatus(done);
+    showSaveToast(done);
+    return;
+  }
+
+  const save = () => writeExportFile(built.bytes, fileName, {
+    onProgress: (done, total) => setStatus(t('export.saving', {
+      name: title, percent: Math.round((done / total) * 100),
+    })),
+  });
+  let saved;
+  try {
+    saved = await save();
+  } catch (error) {
+    // 问过之后、写之前，人在设置里把权限关了：再问一次，给了就接着写，不从头做。
+    if (error?.message !== FILES_ERRORS.NO_PERMISSION) throw error;
+    const again = await ensureExportPermission({ notify: showSaveToast, onWaiting: waiting });
+    if (!again) {
+      setStatus('');
+      return;
+    }
+    saved = await save();
+  }
+  const done = t(built.raster ? 'export.doneRaster' : 'export.done', {
+    folder: t('export.folder'),
+    file: saved?.name || fileName,
+  });
+  setStatus(done);
+  showSaveToast(done);
 }
 
 /** Builds the PDF page and restores the previous workspace session. */
@@ -796,12 +1332,24 @@ export async function initPdfWorkspace() {
   workspace.onEmpty = () => openLibrary();
   // 空工作区卡片上那两颗「导入」和横杠上的是同一个动作，走同一条路。
   workspace.onImport = (role) => pickAndImport(role);
+  // 本栏 ⋯ 里的「导出 PDF」：导出这一栏正显示着的那一份。
+  workspace.onExport = (target) => exportAsPdf(target);
 
   chromeOff?.();
   // 菜单栏一动，工具栏就跟着让位——见 initChromeHiding 里那个泵。
   chromeOff = initChromeHiding(elRoot, {
+    // 改排版之前：借住在左边、马上要回那一排的工具栏先记下它此刻的样子（见 rowWillMove）。
+    beforeChromeMove: (hidden) => workspace?.toolbar?.rowWillMove?.(hidden),
     onChromeMove: () => workspace?.syncToolbarSafeArea?.(),
   });
+  // 窄屏上那一排先收字，再收两个标签的字，不让左右两枚胶囊伸进正中压住标签。
+  topBarOff?.();
+  topBarOff = initTopBarFit(elRoot);
+  // 工具栏也能拖进顶上那一排：收着是一颗球塞在两枚胶囊之间，点开就整条躺进那一排、
+  // 把两边挤开（top-row-dock.js 管量和挤，工具栏管自己装什么）。
+  topRowDock?.destroy();
+  topRowDock = initTopRowDock(elRoot);
+  workspace.toolbar?.setPerchHost?.(topRowDock);
 
   bindImportMenu();
   bindComboMenu();
@@ -814,6 +1362,7 @@ export async function initPdfWorkspace() {
     e.target.value = '';
   });
   elRoot.querySelector('[data-role="open-library"]')?.addEventListener('click', openLibrary);
+  elRoot.querySelector('[data-role="close-all"]')?.addEventListener('click', closeAllOpen);
   elRoot.querySelector('[data-role="close-library"]')?.addEventListener('click', closeLibrary);
   // Creating a pad is available before any PDF is opened, which is why this is
   // bound here rather than inside the workspace's own empty state.
@@ -845,6 +1394,12 @@ export async function initPdfWorkspace() {
   // 掉了，restoreSession 会把它剔掉，于是「存盘时有」而「恢复后没有」。人看到
   // 的是后者。
   if (workspace.isEmpty()) openLibrary();
+
+  // 第一次进应用：问一次文件权限（导出 PDF、列出本机 PDF 都要它）。不等它——人可能
+  // 要去设置里走一趟，开机不该卡在这里。以后不在开机时再问，到导出时才问。
+  introduceFilesPermission({ notify: showSaveToast }).catch((error) => {
+    Logger.warn('PDF', `permission intro failed: ${error?.message || error}`);
+  });
 }
 
 /** Exposed for teardown in tests and for release(). */
@@ -853,23 +1408,50 @@ export function destroyPdfWorkspace() {
   workspace = null;
   chromeOff?.();
   chromeOff = null;
+  topBarOff?.();
+  topBarOff = null;
+  topRowDock?.destroy();
+  topRowDock = null;
 }
 
-// ── hiding the two bars ─────────────────────────────────────────────────────
+// ── hiding the top row ──────────────────────────────────────────────────────
+
+/** 两栏补的那一段滑动：和横杠、两个标签的过渡同一条曲线、同一个时长，才一起到。 */
+const ROW_SLIDE_MS = 320;
+const ROW_SLIDE_EASE = 'cubic-bezier(0.32, 0.72, 0, 1)';
+
+function reducedMotion() {
+  try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (_) { return false; }
+}
 
 /**
- * Slide the import row up to put it away, and the dock down.
+ * Slide the import row up to put it away; pull down from the top edge to bring
+ * it back. The two tabs (练习 / 设置) sit in the middle of that row and go and
+ * come with it — see .app-nav in pdf.css.
  *
- * Two bars, two states, no relationship between them: putting the dock away to
- * read a page is not a reason to lose the import row, and the reverse. The
- * button in the corner is the way back — it restores whatever is hidden, and
- * puts both away when nothing is.
+ * 底下原来还有一条能单独收起来的菜单栏，收起之后靠底边正中一根小把手叫回。它挪
+ * 到了顶上这一排的正中，于是那一整套——底边的抓取带、把手、从横躺的工具栏上往
+ * 下拉、把手给工具栏让位——都没了：底边整条还给了纸，笔写到哪儿都是纸。
+ *
+ * 怎么动（两段，各管各的）：
+ *
+ *   · 那一排自己（横杠、两个标签、停在那一排里的工具栏）只靠 transform 进出，跟手、
+ *     松手后自己走完，都不碰排版。它不在文档流里（pdf.css 的 .pdf-page-bar）。
+ *   · 两栏的位置和高度只在「定了」的那一刻变一次：is-top-hidden 挂上或摘掉，工作区的
+ *     上边距当场到位。看上去的那一段滑动是补出来的——每一件先摆回原来的地方，再放它
+ *     滑到新地方（slideWorkspace）。位移走合成器，主线程这时候就算在重画 PDF 页也拖
+ *     不住它。
+ *
+ * 原来是边距本身在过渡：0.32 秒里每一帧都在改工作区的高度，两栏、PDF 页面、栏头的
+ * 适配、工具栏的安顿全跟着重来一遍；拖的时候更是每挪一下就来一遍。平板上看是一卡
+ * 一卡的——而且那条过渡后来被一条同名规则盖掉了，横杠和两栏其实是一下子跳过去的，
+ * 只有两个标签在滑。
  *
  * The gesture is read from pointer events, so a finger, a stylus and a mouse
  * all work the same way, and it only fires on a deliberate travel: a bar you
  * brush past on the way to a button must not disappear.
  */
-export function initChromeHiding(elRoot, { onChromeMove } = {}) {
+export function initChromeHiding(elRoot, { onChromeMove, beforeChromeMove } = {}) {
   // Everything below is hung on the document and on the window, and the
   // workspace can be built more than once in a session — leave the last set
   // attached and every gesture is handled twice, which for the swallowed click
@@ -879,299 +1461,380 @@ export function initChromeHiding(elRoot, { onChromeMove } = {}) {
   const alive = { signal: life.signal };
 
   const topBar = elRoot?.querySelector('.pdf-page-bar');
-  const dock = document.querySelector('.bottom-nav');
-  const peek = document.querySelector('[data-role="dock-peek"]');
-  const barPeek = document.querySelector('[data-role="bar-peek"]');
+  /** 两个标签那枚胶囊：它不在横杠里（fixed 在页面外），但按在它上面也是按在这一排上。 */
+  const nav = document.querySelector('.app-nav');
+  const workspace = elRoot?.querySelector('.pdf-workspace-host');
   const body = document.body;
 
-  /** How far each bar has to travel to be gone — its own height. */
+  const cssPx = (name, fallback) => {
+    const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name));
+    return Number.isFinite(v) ? v : fallback;
+  };
+
+  /** How tall the row is. */
   const topBarHeight = () => {
-    const v = parseFloat(getComputedStyle(document.documentElement)
-      .getPropertyValue('--pdf-bar-h'));
-    return Number.isFinite(v) && v > 0 ? v : 44;
-  };
-  const dockHeight = () => {
-    const r = dock?.getBoundingClientRect();
-    return r && r.height > 0 ? r.height : 66;
+    const v = cssPx('--pdf-bar-h', 44);
+    return v > 0 ? v : 44;
   };
 
-  /** How far a swipe must travel before it counts as one. */
-  const TRAVEL = 26;
+  /** 那一排走多远才算走完：它自己的高度，加上它离屏幕上沿那一截——下沿刚好出屏。 */
+  const rowTravel = () => topBarHeight() + Math.max(0, cssPx('--app-bar-top', 8));
 
-  const isHidden = (which) => body.classList.contains(`is-${which}-hidden`);
+  const isHidden = () => body.classList.contains('is-top-hidden');
 
-  const setHidden = (which, hidden) => {
-    if (isHidden(which) === hidden) return;
-    markMoving(which);
-    body.classList.toggle(`is-${which}-hidden`, hidden);
-    try { localStorage.setItem(`ls_chrome_${which}`, hidden ? '1' : '0'); } catch (_) { /* private mode */ }
-    // The import row is in the flow, so the panes have just changed height.
-    if (which === 'top') window.dispatchEvent(new Event('resize'));
+  // ── 两栏补的那一段滑动 ────────────────────────────────────────────────────
+
+  /**
+   * 停在那一排里的工具栏是那一排的一部分，它跟着那一排的 transform 走，不在这里挪。
+   * 挂在栏头下面的那一种（is-perch-hanging）不是：它跟着两栏。
+   * 那一排收着、借住在左边的那一个（is-off-row）也不在这里挪：那一排收起、拉回的那一刻它自己
+   * 从左边进来、往左边出去（ink-toolbar.js 的 _stepOffRow / _returnToRow），这里再给它补一段
+   * 竖着的滑动，两段动画就叠在同一个元素上了。
+   */
+  const ridesWithRow = (el) => el.classList.contains('ink-toolbar')
+    && ((el.classList.contains('is-perched') && !el.classList.contains('is-perch-hanging'))
+      || el.classList.contains('is-off-row'));
+
+  let slides = [];
+  let slideGen = 0;
+
+  /**
+   * 排版改一次（commit），然后让工作区里看得见的每一件从原来的地方滑到新地方。
+   *
+   * 逐件量、逐件滑，不是整个工作区一起滑：工作区里有 fixed 的东西（停在那一排里的
+   * 工具栏），祖先一带位移，它就改按那个祖先定位，当场跳开。滑的用的是单独的
+   * translate，不碰 transform——工具栏平时靠 transform 放自己。
+   *
+   * 滑的那一段里两栏会探出工作区的上沿（拉出来的时候，它们从原来贴着屏幕上沿的地方
+   * 往下走），所以这 0.32 秒里工作区不裁边（is-row-sliding）。
+   */
+  const slideWorkspace = (commit, { animate = true } = {}) => {
+    const pieces = workspace
+      ? Array.from(workspace.children).filter((el) => !ridesWithRow(el) && el.getClientRects().length > 0)
+      : [];
+    // 先量：正在滑的那一段也算在里面（上一段还没走完就又改了主意，从它此刻在的地方接着走）。
+    const before = pieces.map((el) => el.getBoundingClientRect().top);
+    for (const anim of slides) anim.cancel();
+    slides = [];
+    const gen = ++slideGen;
+    const sliding = pieces.length > 0 && animate && !reducedMotion();
+    // 不裁边要在改排版之前挂上：量完之后再挂，overflow 一变又把工作区弄脏一次，这一帧就得
+    // 再排一遍版（平板上量到松手那一帧本来就要二十来毫秒，不能再添一遍）。
+    workspace?.classList.toggle('is-row-sliding', sliding);
+    commit();
+    if (!sliding) return;
+    const moves = [];
+    pieces.forEach((el, i) => {
+      const dy = before[i] - el.getBoundingClientRect().top;
+      if (Number.isFinite(dy) && Math.abs(dy) >= 0.5 && typeof el.animate === 'function') moves.push([el, dy]);
+    });
+    if (!moves.length) {
+      workspace.classList.remove('is-row-sliding');
+      return;
+    }
+    let left = moves.length;
+    const landed = () => {
+      if (gen !== slideGen) return;
+      if (--left <= 0) workspace.classList.remove('is-row-sliding');
+    };
+    for (const [el, dy] of moves) {
+      const anim = el.animate(
+        [{ translate: `0 ${dy}px` }, { translate: '0 0' }],
+        { duration: ROW_SLIDE_MS, easing: ROW_SLIDE_EASE },
+      );
+      slides.push(anim);
+      anim.addEventListener('finish', landed);
+      anim.addEventListener('cancel', landed);
+    }
   };
+
+  const setHidden = (hidden, { animate = true } = {}) => {
+    if (isHidden() === hidden) return;
+    markMoving();
+    // 排版马上要变：让还画在旧位置上的东西先记下自己在哪（工具栏借住在左边、要回那一排的
+    // 时候，它的替身得从人眼里它原来的样子出发，而不是排版改完、被挪下去缩了一圈之后）。
+    beforeChromeMove?.(hidden);
+    slideWorkspace(() => {
+      body.classList.toggle('is-top-hidden', hidden);
+      // 两栏的高度刚变：工具栏先按新的高度安顿好，再量它落在哪——它和两栏一起滑过去，
+      // 而不是等两栏滑完了再自己跳一下。
+      onChromeMove?.();
+    }, { animate });
+    try { localStorage.setItem('ls_chrome_top', hidden ? '1' : '0'); } catch (_) { /* private mode */ }
+    // The panes have just changed height. 滑完再说：这一声会叫工作区把两栏重排一遍，挤在滑动的
+    // 头一帧里就是一顿（两栏自己的尺寸观察器也等滑完，见 PdfWorkspace._afterRowSlide）。
+    clearTimeout(resizeTimer);
+    const announce = () => window.dispatchEvent(new Event('resize'));
+    if (animate && !reducedMotion()) resizeTimer = setTimeout(announce, ROW_SLIDE_MS + 30);
+    else announce();
+  };
+  let resizeTimer = 0;
 
   // The row's own height, so hiding it can give exactly that much back.
   const measure = () => {
-    if (!topBar || isHidden('top')) return;
+    if (!topBar || isHidden()) return;
     const h = Math.round(topBar.getBoundingClientRect().height);
     if (h > 0) document.documentElement.style.setProperty('--pdf-bar-h', `${h}px`);
   };
   measure();
   window.addEventListener('resize', measure, alive);
+  // 换皮肤、换语言，这一排的高度会变，而窗口没变：两个标签按这个高度在它里面竖着
+  // 居中（pdf.css 的 .app-nav），只听 resize 的话它们会偏上或偏下几像素。
+  const sizeWatch = typeof ResizeObserver === 'function' && topBar ? new ResizeObserver(measure) : null;
+  sizeWatch?.observe(topBar);
+  // 换皮肤是当场量，不等 ResizeObserver 的下一轮：等的那一帧里两个标签按旧的高度摆着，
+  // 下一帧再跳到新的地方——人看到的就是「一换皮肤按钮先挪一下」。
+  window.addEventListener('skinchange', measure, alive);
 
   /**
-   * Dragging a bar away, and dragging it back.
+   * Dragging the row away, and dragging it back.
    *
-   * The bar is placed by a number — 0 out, 1 away — and while a finger is down
-   * that number is simply where the finger is. So the bar leaves under the hand
+   * The row is placed by a number — 0 out, 1 away — and while a finger is down
+   * that number is simply where the finger is. So the row leaves under the hand
    * rather than after it, and a drag that changes its mind halfway brings the
-   * bar back with it. On release it finishes the journey itself, to whichever
+   * row back with it. On release it finishes the journey itself, to whichever
    * end it is nearer, or to wherever a flick was headed.
    *
-   * Watched from the document and decided by where the press STARTED, because a
-   * bar is 44px tall: dragging it away means leaving it, and a pointerup lands
-   * on whatever is under the finger by then, which is not the bar.
+   * Watched from the document and decided by where the press STARTED, because
+   * the row is 44px tall: dragging it away means leaving it, and a pointerup
+   * lands on whatever is under the finger by then, which is not the row.
    */
 
   /**
-   * How far down the screen a press still counts as reaching for the import row.
+   * How far down the screen a press still counts as reaching for the row.
    *
-   * Generous on purpose: it is a gesture with nothing to aim at, and the only
-   * other thing a vertical drag does up here is nothing — the pane's own bar
-   * scrolls sideways. A tap is unaffected either way, because a drag is not a
-   * drag until it has travelled.
+   * Generous on purpose: it is a gesture with nothing to aim at. A tap is
+   * unaffected either way, because a drag is not a drag until it has travelled.
+   * 这一截里只有栏头和空白底子算数（见 reachesForRow）：切换条、书页这些在同一截里的，
+   * 竖着划各有各的意思。
    */
   const EDGE_TOP = 96;
+  /**
+   * 那一排收着、按在栏头两边的空白上往下拉：那里没法不让 WebView 接走竖着的拖动（两栏里有会
+   * 上下滚的列表，touch-action 不能在它们的祖先上收窄，见 pdf.css），它让手指走十来像素（平板上
+   * 实测 11px）就发 pointercancel 把手势收走。收走的时候已经往下走了这么多、而且竖着走得比横着
+   * 多，就当是在拉——放那一排下来（后面不跟手，自己走完）。
+   */
+  const CANCEL_PULL = 4;
+  /** 那一排下沿往下再让出这么一截也算按在它上面：它和两栏之间那道缝。 */
+  const ROW_SLACK = 6;
   /** Past this fraction of the way, letting go finishes the journey. */
-  const SETTLE = 0.4;
+  const SETTLE = 0.3;
   /** A flick this fast commits regardless of how far it got. */
-  const FLICK = 0.5;   // px per ms
-  /**
-   * How far above the dock a press still counts as taking hold of it.
-   *
-   * This is now the whole of it. The dock's glass runs 360-840 and its two
-   * capsules run 370-830, so there is five pixels of bar either side of them
-   * and nothing else — and a press on a capsule is a press on the capsule, not
-   * a hold on the dock. What is left to take hold of is the band above, so the
-   * band has to be worth aiming at: a thumb coming up off the bezel lands here.
-   *
-   * It is over the page, which costs nothing — the page turns on a SIDEWAYS
-   * drag, and ink is drawn with the pen.
-   */
-  const DOCK_REACH = 76;
+  const FLICK = 0.3;   // px per ms
+  /** 甩的快慢按最后这么长一段算：只看最后两个点，120Hz 的笔一帧才走一两像素，一抖就反了。 */
+  const VELOCITY_WINDOW = 80;   // ms
   /** Travel before a press becomes a drag rather than a wandering tap. */
-  const DRAG_START = 12;
+  const DRAG_START = 10;
 
-  /**
-   * The band the dock is taken hold of by — above it, never on it.
-   *
-   * Reaching INTO the dock left a boundary where both things fired at once: a
-   * finger on the few pixels between the dock's edge and a capsule's edge is
-   * on the capsule as far as the eye goes, and was on the bar as far as the
-   * box test went, so it both pressed 课本 and started dragging the dock away.
-   * There is no width of glass there worth defending — the capsules run
-   * 370-830 inside a bar that runs 360-840 — so the bar keeps none of it.
-   */
-  const dockGrip = () => {
-    const r = dock?.getBoundingClientRect();
-    if (!r || !r.width) return null;
-    return { left: r.left, right: r.right, top: r.top - DOCK_REACH, bottom: r.top };
-  };
-
-  const boxOf = (el, padTop = 0) => {
+  const boxOf = (el) => {
     if (!el) return null;
     const r = el.getBoundingClientRect();
     if (!r.width) return null;
-    return { left: r.left, right: r.right, top: r.top - padTop, bottom: r.bottom };
+    return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
   };
   const inBox = (b, x, y) => !!b && x >= b.left && x <= b.right && y >= b.top && y <= b.bottom;
 
-  /** How much of the dock's peek strip answers to a STYLUS, in CSS pixels. */
-  const PEN_PEEK_WIDTH = 200;
-
-  /**
-   * The way back to a hidden dock, which is narrower for a pen than for a hand.
-   *
-   * A finger at the bottom of the screen is reaching for the dock: there is
-   * nothing else down there for it to be doing, so it may call the dock back
-   * from anywhere along the strip. A stylus IS doing something else — the
-   * bottom of the pane is page, and a line of working that ran along it kept
-   * pulling the dock back out from under the writing hand. That is the conflict
-   * the tablet run reported.
-   *
-   * So the pen gets a handle in the middle of the strip rather than the whole
-   * of it: far enough from where a line of working ends to be deliberate, and
-   * still the obvious place to reach for. Only the way BACK is narrowed —
-   * putting the dock away is untouched, for the pen and the hand alike.
-   */
-  const dockSummonBox = (pointerType) => {
-    const box = boxOf(peek);
-    if (!box || pointerType !== 'pen') return box;
-    const middle = (box.left + box.right) / 2;
-    const half = Math.min(PEN_PEEK_WIDTH, box.right - box.left) / 2;
-    return { left: middle - half, right: middle + half, top: box.top, bottom: box.bottom };
+  /** 那一排占的那一条：整个宽度，从屏幕上沿到它下沿再往下一点。 */
+  const inRowBand = (x, y) => {
+    const b = boxOf(topBar);
+    return !!b && y >= 0 && y <= b.bottom + ROW_SLACK;
   };
 
   let drag = null;
 
   /**
-   * How long a bar is treated as still moving after it is let go.
+   * How long the row is treated as still moving after it is let go.
    *
    * A shade past the 0.32s the transform takes, so the controls come back only
-   * once the bar has actually arrived.
+   * once the row has actually arrived.
    */
   const MOVE_SETTLE = 380;
-  const moveTimers = { top: 0, bottom: 0 };
+  let moveTimer = 0;
 
   /**
-   * Marks a bar as in motion, which puts the controls on it out of reach.
+   * Marks the row as in motion, which puts the controls on it out of reach.
    *
-   * The other half of keeping the two gestures apart: a bar arriving under a
+   * The other half of keeping the two gestures apart: a row arriving under a
    * resting thumb, or leaving from under one, must not register as a press. The
    * swallowed click was not enough on its own — it catches the click a drag
-   * produces, but not a finger that comes down on a bar already in flight.
+   * produces, but not a finger that comes down on a row already in flight.
    *
    * Timed rather than waiting for transitionend, because a drag that does not
    * cross the threshold settles BACK to where it started: the class never
    * changes, and on some paths neither does the transform, so the event that
    * would end this may never arrive.
-   */
-  /**
-   * 菜单栏在动的这段时间里，每一帧都告诉外面一声。
    *
-   * 这是「菜单栏把工具栏顶起来」那件事的动力：工具栏的底边安全区是按菜单栏此刻
-   * 的上沿算的，所以只要每帧重算一次，它就贴着菜单栏走——手慢慢滑，它慢慢让；
-   * 手停住，它也停住。用 CSS 过渡去追是追不出这个效果的，那样它只会在菜单栏
-   * 到位之后自己滑一段。
-   *
-   * 拖的过程和松手之后那段自己走完的路，都被 is-*-moving 这个类框住了，所以
-   * 一个泵盯着它就够，不必在指针事件和收尾两处各接一次。
+   * 原来这里还有一个逐帧的泵，每一帧叫工作区把工具栏重新安顿一次：那时候两栏跟着
+   * 手逐帧变高。现在拖的时候两栏不动，松手那一刻安顿一次（setHidden），泵就拆了。
    */
-  let pumping = false;
-  const pump = () => {
-    onChromeMove?.();
-    const moving = document.body.classList.contains('is-top-moving')
-      || document.body.classList.contains('is-bottom-moving')
-      || !!drag;
-    if (!moving || life.signal.aborted) { pumping = false; return; }
-    requestAnimationFrame(pump);
+  const markMoving = () => {
+    body.classList.add('is-top-moving');
+    clearTimeout(moveTimer);
+    moveTimer = setTimeout(() => body.classList.remove('is-top-moving'), MOVE_SETTLE);
   };
 
-  const markMoving = (which) => {
-    if (!pumping && typeof requestAnimationFrame === 'function') {
-      pumping = true;
-      requestAnimationFrame(pump);
+  /**
+   * 跟手的那个进度只写在用它的那几样上：横杠、两个标签、停在那一排里的工具栏。
+   *
+   * 原来写在 body 上。自定义属性是继承的，body 上改一下，整页每一个元素都要重算一遍
+   * 样式——两栏里一页 PDF 的文字层就是几百上千个小块，手指每挪一下都来一遍，平板上
+   * 拖起来是一顿一顿的。写在这三样自己身上，重算的就只有它们。松手之后交给 body 上
+   * 的 is-top-hidden（那是一次性的）。
+   */
+  let tracked = [];
+  const setProgress = (p) => {
+    if (!tracked.length) {
+      tracked = [topBar, nav, document.querySelector('.ink-toolbar.is-perched')].filter(Boolean);
     }
-    document.body.classList.add(`is-${which}-moving`);
-    clearTimeout(moveTimers[which]);
-    moveTimers[which] = setTimeout(() => {
-      document.body.classList.remove(`is-${which}-moving`);
-    }, MOVE_SETTLE);
+    for (const el of tracked) el.style.setProperty('--top-drag', String(p));
   };
-
-  const setProgress = (which, p) => {
-    document.body.style.setProperty(`--${which}-drag`, String(p));
-  };
-
-  const clearProgress = (which) => {
-    document.body.style.removeProperty(`--${which}-drag`);
+  const clearProgress = () => {
+    for (const el of tracked) el.style.removeProperty('--top-drag');
+    tracked = [];
+    body.style.removeProperty('--top-drag');
   };
 
   /**
-   * Whether the press landed on something meant to be pressed.
+   * 按在哪儿不归这里管。
    *
-   * A capsule and the bar under it want opposite things from the same finger,
-   * and there is no reading of a gesture that gives both. So they are separated
-   * by where it starts: on 课本, on 设置, on 导入练习册 — on any control at all —
-   * the bar does not move, whatever the finger does next. The bar is taken hold
-   * of by its own glass, of which there is plenty either side of the capsules,
-   * or by the strip it leaves behind.
+   * 原来是「按在任何一个按钮上都不算」——胶囊里全是按钮，两个标签也是按钮，能按住往
+   * 上拉的只剩胶囊之间那几像素空白，人说收起来太难。现在按钮上也能拉：过了门槛看方
+   * 向，竖着走的归这里（点击随后被吞掉，按钮不会被顺手按下），横着走的不归这里（两个
+   * 标签划着换页；左边那枚胶囊横着划什么都不做）。
+   *
+   * 仍然不归这里的：工具栏（它自己能拖，拖它是挪它；工具、颜色上划着是在挑）、展开着的单子
+   * （里面是一列要点的东西）、输入框。
    */
-  const onControl = (t) => !!(t && t.closest)
-    && !!t.closest('button, a, input, select, textarea, [role="button"], [role="tab"]');
+  const claimedElsewhere = (t) => !!(t && t.closest)
+    && !!t.closest('.ink-toolbar, .pdf-bar-menu, input, textarea, select, [contenteditable="true"]');
+
+  /**
+   * 那一排收着的时候，按在屏幕顶上那一截（EDGE_TOP）的哪儿算是去拉它回来。
+   *
+   * 收起之后两栏顶上去，这一截里放的就是两栏的栏头。原来这里盖着一条透明条专门接这个手势，
+   * 栏头整排被它盖住、点不动（人说「收起后不该成为禁用区，唤出手势和点击选择手势并不冲突，
+   * 请仔细划分」）。现在谁都不盖，只挑：
+   *
+   *   · 栏头那枚胶囊，连同上面的按钮：按下去没走够 DRAG_START 就是点，照常落到按钮上；竖着
+   *     走过了就是拉，那一排跟手下来，随后那一下点击被吞掉。横着走的归浏览器（栏头放不下时
+   *     能横着滚）——收起时栏头只把横着的拖动交给浏览器（pdf.css）。
+   *   · 什么都没有的底子：栏头两边、两栏上面那道留白、空桌面。这里的竖着的拖动会被 WebView
+   *     接走（见 CANCEL_PULL），收走之前往下走了就放那一排下来。
+   *
+   * 这一截里别的都不归这里：切换条（上下划是换这一摞里的上一本 / 下一本）、书页和草稿纸（拖
+   * 着走、写字）、分隔条、面板和清单（上下滚）、卡片——各有各的手势，拉那一排不能顺手把它们
+   * 也带上。原来书页顶上那一截也算，笔在书页上沿往下写一笔，那一排跟着下来。
+   */
+  const BARE = '#page-pdf, .pdf-workspace-host, .pdf-workspace, .pdf-ws-slot, .pdf-ws-empty';
+  const reachesForRow = (t) => {
+    // 没有落在哪个元素上（测试里直接发在 document 上的那种）：当它是底子。
+    if (!t || t.nodeType !== 1) return true;
+    if (t.closest('input, textarea, select, [contenteditable="true"]')) return false;
+    if (t.closest('.pdf-slot-toolbar')) return true;
+    return t.matches(BARE) || t === document.body || t === document.documentElement;
+  };
+
 
   document.addEventListener('pointerdown', (e) => {
     drag = null;
-    if (document.body.classList.contains('is-library-open')) return;
-    if (onControl(e.target)) return;
+    if (body.classList.contains('is-library-open')) return;
+    // 只有练习页上才有这一排。设置页上两个标签一直在，按哪儿都不是在拉它。
+    if (body.dataset.page && body.dataset.page !== 'pdf') return;
+    if (claimedElsewhere(e.target)) return;
     const x = e.clientX;
     const y = e.clientY;
 
-    // Taking hold of a bar that is out, to push it away.
-    if (!isHidden('top') && inBox(boxOf(topBar), x, y)) {
-      drag = { which: 'top', from: 0, span: Math.max(24, topBar.getBoundingClientRect().height), sign: -1 };
-    } else if (!isHidden('bottom') && inBox(dockGrip(), x, y)) {
-      drag = { which: 'bottom', from: 0, span: Math.max(24, dock.getBoundingClientRect().height), sign: 1 };
-    // Taking hold of one that is away, to pull it back.
-    } else if (isHidden('top') && (inBox(boxOf(barPeek), x, y) || y <= EDGE_TOP)) {
-      drag = { which: 'top', from: 1, span: topBarHeight(), sign: -1 };
-    } else if (isHidden('bottom') && inBox(dockSummonBox(e.pointerType), x, y)) {
-      drag = { which: 'bottom', from: 1, span: dockHeight(), sign: 1 };
+    if (!isHidden() && (inRowBand(x, y) || inBox(boxOf(nav), x, y))) {
+      // Taking hold of the row while it is out, to push it away.
+      drag = { from: 0 };
+    } else if (isHidden() && y <= EDGE_TOP && reachesForRow(e.target)) {
+      // Taking hold of it while it is away, to pull it back.
+      drag = { from: 1 };
     }
     if (!drag) return;
+    drag.span = Math.max(24, rowTravel());
     drag.x = x;
     drag.y = y;
-    drag.at = e.timeStamp || performance.now();
     drag.moved = false;
+    drag.samples = [];
   }, { passive: true, ...alive });
+
+  /** 记下这一点，只留最后 VELOCITY_WINDOW 那一段（至少两个点）。 */
+  const track = (e) => {
+    const t = e.timeStamp || performance.now();
+    drag.samples.push({ t, y: e.clientY });
+    while (drag.samples.length > 2 && t - drag.samples[0].t > VELOCITY_WINDOW) drag.samples.shift();
+  };
+
+  /** 最后那一段的速度，往上（收起的方向）为正。 */
+  const velocity = () => {
+    const s = drag.samples;
+    if (s.length < 2) return 0;
+    const a = s[0];
+    const b = s[s.length - 1];
+    return -(b.y - a.y) / Math.max(1, b.t - a.t);
+  };
 
   document.addEventListener('pointermove', (e) => {
     if (!drag) return;
     const dy = e.clientY - drag.y;
+    const dx = e.clientX - drag.x;
+    // 每一下都记着：WebView 把手势收走的时候（CANCEL_PULL），要靠它看出刚才是不是在往下拉。
+    // pointercancel 自己带的坐标不作数（安卓上常常是旧的或者 0）。
+    drag.dx = dx;
+    drag.dy = dy;
     if (!drag.moved) {
       // A finger resting on a button wanders several pixels before it lifts, and
-      // at four the dock started sliding under every press — so the tap became a
-      // drag, the click was swallowed as one, and 课本 and 设置 simply stopped
-      // working every so often. Past twelve it was meant.
-      if (Math.abs(dy) < DRAG_START) return;
-      // And it has to be going mostly up or down. A thumb sliding along the dock
-      // is not reaching for it.
-      if (Math.abs(dy) < Math.abs(e.clientX - drag.x)) return;
+      // at four the bar started sliding under every press — so the tap became a
+      // drag, the click was swallowed as one, and the buttons simply stopped
+      // working every so often. Past ten it was meant.
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < DRAG_START) return;
+      // 过了门槛就定方向，只定这一次：横着走的不是在拉这一排（两个标签上是划着换页）——
+      // 放手，后面它怎么拐都不再归这里。
+      if (Math.abs(dy) <= Math.abs(dx)) { drag = null; return; }
       drag.moved = true;
-      document.body.classList.add('is-chrome-dragging');
+      body.classList.add('is-chrome-dragging');
     }
-    markMoving(drag.which);
-    // Toward 1 is away; `sign` says which direction that is for this bar.
-    const p = Math.max(0, Math.min(1, drag.from + (dy * drag.sign) / drag.span));
+    markMoving();
+    // Toward 1 is away, and away is up.
+    const p = Math.max(0, Math.min(1, drag.from - dy / drag.span));
     drag.p = p;
-    // Kept for the flick test: the speed of the LAST stretch of the gesture,
-    // not its average. A slow drag that changes its mind at the end has a
-    // healthy average speed in the wrong direction, and averaging would send
-    // the bar away from under a hand that was bringing it back.
-    drag.prevY = drag.lastY ?? drag.y;
-    drag.prevAt = drag.lastAt ?? drag.at;
-    drag.lastY = e.clientY;
-    drag.lastAt = e.timeStamp || performance.now();
-    setProgress(drag.which, p);
+    track(e);
+    setProgress(p);
   }, { passive: true, ...alive });
 
-  const endDrag = (e) => {
+  const endDrag = () => {
     if (!drag) return;
-    const { which } = drag;
     const p = drag.p;
     const moved = drag.moved;
-    const dt = Math.max(1, (drag.lastAt ?? drag.at) - (drag.prevAt ?? drag.at));
-    const v = moved ? ((drag.lastY ?? drag.y) - (drag.prevY ?? drag.y)) * drag.sign / dt : 0;
+    // Positive is toward away, which is up. 按最后那一小段算，不按全程的平均：慢慢拉了一
+    // 大半、最后又往回收的那一下，才是人真正的意思。
+    const v = moved ? velocity() : 0;
     drag = null;
-    document.body.classList.remove('is-chrome-dragging');
-    if (!moved || p === undefined) { clearProgress(which); return; }
+    body.classList.remove('is-chrome-dragging');
+    if (!moved || p === undefined) {
+      clearProgress();
+      return;
+    }
     armSwallow();
 
     // Thrown hard enough, it goes where it was thrown; otherwise it finishes
     // whichever journey it is nearer to completing.
     const away = v > FLICK ? true : v < -FLICK ? false : p >= SETTLE;
-    clearProgress(which);           // the class takes over, and it transitions
-    markMoving(which);              // and it is out of reach until it lands
-    setHidden(which, away);
+    clearProgress();           // the class takes over, and it transitions
+    markMoving();              // and it is out of reach until it lands
+    setHidden(away);
   };
 
   /**
    * A drag must not also press the thing it started on.
    *
-   * The gesture begins on the dock, and the dock is two buttons — so pulling it
-   * away ended on 课本 or 设置 and changed the page as it went. The click the
-   * browser synthesises afterwards is swallowed once, in the capture phase,
-   * before it can reach them. Only after a real drag: a tap is left alone, or
-   * the bars would stop working as buttons.
+   * The click the browser synthesises after a drag lands on whatever is under
+   * the finger by then — 练习 or 设置, as often as not — and would change the
+   * page as it went. It is swallowed once, in the capture phase, before it can
+   * reach them. Only after a real drag: a tap is left alone, or the row would
+   * stop working as buttons.
    */
   let swallowClick = false;
   let swallowTimer = 0;
@@ -1201,24 +1864,35 @@ export function initChromeHiding(elRoot, { onChromeMove } = {}) {
   document.addEventListener('pointerup', endDrag, { passive: true, ...alive });
   document.addEventListener('pointercancel', () => {
     if (!drag) return;
-    const which = drag.which;
+    // 那一排收着、手指在空白底子上往下走了几像素，WebView 就把手势收走了（见 CANCEL_PULL）：
+    // 那是在拉，放它下来。过没过 DRAG_START 都一样——平板上实测，WebView 让出 11px 才收走
+    // （先来 +6、+11 两下 pointermove，再 pointercancel），那时候那一排已经跟上手了。
+    const pulled = drag.from === 1
+      && (drag.dy || 0) >= CANCEL_PULL && (drag.dy || 0) > Math.abs(drag.dx || 0);
     drag = null;
-    document.body.classList.remove('is-chrome-dragging');
-    clearProgress(which);
+    body.classList.remove('is-chrome-dragging');
+    clearProgress();
+    // 被收走的手势后面没有点击，不用吞。
+    if (pulled) setHidden(false);
   }, { passive: true, ...alive });
 
   try {
-    if (localStorage.getItem('ls_chrome_top') === '1') setHidden('top', true);
-    if (localStorage.getItem('ls_chrome_bottom') === '1') setHidden('bottom', true);
-  } catch (_) { /* storage unavailable: start with both showing */ }
+    // 开机时恢复上次的样子：直接到位，不演——这时候没人在看它从哪儿来。
+    if (localStorage.getItem('ls_chrome_top') === '1') setHidden(true, { animate: false });
+    // 底部菜单栏收起来的那一笔：它已经没有了，留着的话只是一条永远读不到的记录。
+    localStorage.removeItem('ls_chrome_bottom');
+  } catch (_) { /* storage unavailable: start with the row showing */ }
 
   return () => {
     life.abort();
+    sizeWatch?.disconnect();
     clearTimeout(swallowTimer);
-    clearTimeout(moveTimers.top);
-    clearTimeout(moveTimers.bottom);
-    document.body.classList.remove('is-chrome-dragging', 'is-top-moving', 'is-bottom-moving');
-    clearProgress('top');
-    clearProgress('bottom');
+    clearTimeout(moveTimer);
+    clearTimeout(resizeTimer);
+    for (const anim of slides) anim.cancel();
+    slides = [];
+    workspace?.classList.remove('is-row-sliding');
+    body.classList.remove('is-chrome-dragging', 'is-top-moving');
+    clearProgress();
   };
 }

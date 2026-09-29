@@ -15,6 +15,23 @@ import { saveText } from '../export/save-file.js';
 
 const SKIN_KEY = 'ls_skin';
 const DEFAULT_SKIN = 'liquid-math';
+/**
+ * 三套，都共用一套尺寸和排法（liquid.css）。存盘的是左边的名字，挂到 html 上的是右边两样：
+ *
+ *   · liquid-math（液态玻璃）：data-skin="liquid-math" + data-glass="liquid"——照 liquid-glass-react
+ *     挂的那几层（src/ui/liquid-glass-react.js、liquid-glass-react.css）只认 data-glass="liquid"；
+ *   · frosted（毛玻璃）：data-skin="liquid-math"，不挂 data-glass——改写成液态玻璃之前的那一套：白色半透、
+ *     磨砂、玻璃泡。人说「把以前玻璃风格也加回来，换个名字」。它和液态玻璃是同一个 data-skin，
+ *     按 liquid-math 写的那几十条样式两套都吃，差的只是那几层；
+ *   · minimal（纸）：data-skin="minimal"，只换材质（paper.css）。
+ *
+ * 存档里的 liquid-math 原来叫「玻璃」、那时已经是液态玻璃了，名字改了、样子不变。
+ */
+const SKINS = Object.freeze({
+  'liquid-math': Object.freeze({ skin: 'liquid-math', glass: 'liquid' }),
+  frosted: Object.freeze({ skin: 'liquid-math', glass: null }),
+  minimal: Object.freeze({ skin: 'minimal', glass: null }),
+});
 
 export function initSettings() {
   initSkin();
@@ -46,10 +63,37 @@ function initAbout() {
 function initSkin() {
   const skinSelect = document.getElementById('setSkinSelect');
 
+  /**
+   * 换一套皮肤。
+   *
+   * 两套皮肤的尺寸和排法是同一套，按钮本来就不该挪；挪了的那几下都出在「换」的这一
+   * 瞬间：有过渡的属性在两套皮肤之间滑一段，靠量尺寸摆位置的东西（两个标签的上下居
+   * 中、透镜、顶上那一排的收字）要等到下一帧的观察器才重量——人看到的就是按钮先挪一
+   * 下再回来。所以这一下：
+   *   · 什么都不过渡（html.is-reskinning，base.css），颜色、圆角、影子直接换过去；
+   *   · 换完当场发一声 skinchange，要量尺寸的那几处同步重量，不等下一帧；
+   *   · 两帧之后放开过渡——一帧让新样式落地，一帧画出来。
+   * 存档里不认识的名字（老版本的皮肤）按默认的来，不然下拉框是空的、页面没穿衣服。
+   */
   const applySkin = (name) => {
-    document.documentElement.setAttribute('data-skin', name);
-    if (skinSelect) skinSelect.value = name;
-    try { localStorage.setItem(SKIN_KEY, name); } catch (_) { /* storage unavailable */ }
+    const choice = Object.hasOwn(SKINS, name) ? name : DEFAULT_SKIN;
+    const { skin, glass } = SKINS[choice];
+    const root = document.documentElement;
+    if (root.getAttribute('data-skin') !== skin || root.getAttribute('data-glass') !== glass) {
+      root.classList.add('is-reskinning');
+      root.setAttribute('data-skin', skin);
+      if (glass) root.setAttribute('data-glass', glass);
+      else root.removeAttribute('data-glass');
+      window.dispatchEvent(new Event('skinchange'));
+      const settle = () => root.classList.remove('is-reskinning');
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => requestAnimationFrame(settle));
+      } else {
+        settle();
+      }
+    }
+    if (skinSelect) skinSelect.value = choice;
+    try { localStorage.setItem(SKIN_KEY, choice); } catch (_) { /* storage unavailable */ }
   };
 
   skinSelect?.addEventListener('change', () => applySkin(skinSelect.value));

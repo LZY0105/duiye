@@ -74,7 +74,7 @@
 }
 
 .deck-arrow:active:not(:disabled) { transform: scale(0.94); }
-.deck-arrow:hover:not(:disabled) { background: rgba(37, 99, 235, 0.08); }
+.deck-arrow:hover:not(:disabled) { background: color-mix(in srgb, var(--accent, #2563eb) 8%, transparent); }
 .deck-arrow:disabled { opacity: 0.32; cursor: default; }
 
 /* Focus has to be visible: the strip is fully operable from a keyboard, and
@@ -153,7 +153,7 @@
 .deck-strip.is-single .deck-arrow { opacity: 0.32; }
 
 /* While a drag is live the strip says so, without moving. */
-.deck-strip.is-dragging { background: rgba(37, 99, 235, 0.05); }
+.deck-strip.is-dragging { background: color-mix(in srgb, var(--accent, #2563eb) 5%, transparent); }
 
 /* The target of a live preview, named rather than decoded: a preview must never
    cost a PDF render. */
@@ -209,7 +209,7 @@
   border-radius: 10px;
 }
 
-.deck-row.is-active { background: rgba(37, 99, 235, 0.08); }
+.deck-row.is-active { background: color-mix(in srgb, var(--accent, #2563eb) 8%, transparent); }
 
 .deck-row-select {
   flex: 1 1 auto;
@@ -371,7 +371,7 @@
 
 .deck-destination.is-selected {
   border-color: var(--accent, #2563eb);
-  background: rgba(37, 99, 235, 0.07);
+  background: color-mix(in srgb, var(--accent, #2563eb) 7%, transparent);
 }
 
 .deck-destination-where { font-size: 0.84rem; font-weight: 700; color: var(--text); }
@@ -392,7 +392,7 @@
 
 .deck-anchor.is-selected {
   border-color: var(--accent, #2563eb);
-  background: rgba(37, 99, 235, 0.07);
+  background: color-mix(in srgb, var(--accent, #2563eb) 7%, transparent);
 }
 
 .deck-check {
@@ -510,10 +510,10 @@
 /* ── focus mode (F10) ────────────────────────────────────────────────────── */
 
 /* One pad, the whole workspace. The other pane, the divider, the import row and
-   the dock are hidden — not closed: every deck is exactly where it was, and
-   Return restores the captured layout. */
+   the two tabs in it are hidden — not closed: every deck is exactly where it
+   was, and Return restores the captured layout. */
 body.is-scratch-focus .pdf-page-bar,
-body.is-scratch-focus .bottom-nav { display: none; }
+body.is-scratch-focus .app-nav { display: none; }
 
 body.is-scratch-focus .pdf-ws-divider,
 body.is-scratch-focus .pdf-ws-swap { display: none !important; }
@@ -633,7 +633,7 @@ body.is-scratch-focus .pdf-ws-swap { display: none !important; }
   background: var(--card, #fff);
 }
 
-.organizer-row.is-current { background: rgba(37, 99, 235, 0.08); }
+.organizer-row.is-current { background: color-mix(in srgb, var(--accent, #2563eb) 8%, transparent); }
 
 /* The placeholder the lifted row leaves behind, exactly its own height so the
    list does not jump as it goes. */
@@ -733,3 +733,263 @@ body.is-scratch-focus .pdf-ws-swap { display: none !important; }
    transient text about what is happening to this pane, and neither is the
    name. A status is not a preview, so it reads a little quieter. */
 .deck-preview.is-status { color: var(--muted); font-weight: 600; }
+
+/* ── 移动到文件夹 ────────────────────────────────────────────────────────────
+ * 三格的头：左边退出，中间说这是在干什么，右边那颗是要按的。这个排法在平板上不
+ * 是审美问题——两只拇指在两侧，中间那行字谁都够不着，也不需要够。 */
+
+.deck-folder-dialog { max-width: 460px; gap: 0.5rem; }
+
+.deck-folder-head {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 0.5rem;
+  padding-bottom: 0.2rem;
+  border-bottom: 1px solid var(--line, rgba(15, 23, 42, 0.08));
+}
+
+.deck-folder-head .deck-dialog-btn { min-width: 0; }
+.deck-folder-head [data-role="cancel"] { justify-self: start; border-color: transparent; }
+.deck-folder-head [data-role="confirm"] { justify-self: end; }
+.deck-folder-head .deck-dialog-title { text-align: center; white-space: nowrap; }
+
+/* 顶上那句「它现在在哪」：一句话，不是一个格子——没有底色、没有边、点不动。 */
+.deck-folder-where { margin: 0.15rem 0.2rem 0.1rem; }
+
+/* 一个文件夹都还没有的时候，单子上那一句。 */
+.deck-folder-empty {
+  margin: 0;
+  padding: 1.1rem 0.6rem;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.deck-folder-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-height: min(46vh, 380px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.1rem;
+}
+
+.deck-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: var(--deck-target-comfortable);
+  padding: 0.35rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  font: inherit;
+  color: var(--text);
+  text-align: start;
+  cursor: pointer;
+}
+
+/* 选中的那一行两处都说了：底色变了，右边那个勾出来了。只靠底色的话，一屏浅色里
+   它和「手指正按着」分不出来。 */
+.deck-folder-row.is-selected {
+  background: color-mix(in srgb, var(--accent, #2563eb) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #2563eb) 32%, transparent);
+}
+
+.deck-folder-icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: var(--math-gold, #d97706);
+}
+
+.deck-folder-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.deck-folder-count {
+  flex: 0 0 auto;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.deck-folder-tick {
+  flex: 0 0 auto;
+  width: 18px;
+  text-align: center;
+  font-weight: 700;
+  color: var(--accent, #2563eb);
+  opacity: 0;
+}
+
+.deck-folder-row.is-selected .deck-folder-tick,
+.deck-pick-row.is-selected .deck-folder-tick { opacity: 1; }
+
+/* 改名就在那一行原地发生：新建出来的格子不该先跑到别处去起名字，再回来找它。 */
+.deck-folder-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid var(--accent, #2563eb);
+  border-radius: 8px;
+  background: var(--card, #fff);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.deck-folder-foot {
+  display: flex;
+  justify-content: center;
+  padding-top: 0.3rem;
+  border-top: 1px solid var(--line, rgba(15, 23, 42, 0.08));
+}
+
+.deck-folder-new {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: var(--deck-target-comfortable);
+  padding: 0 1rem;
+  border: 1px dashed var(--line, rgba(15, 23, 42, 0.22));
+  border-radius: 12px;
+  background: transparent;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .deck-folder-row:hover { background: color-mix(in srgb, var(--fg, #0f172a) 5%, transparent); }
+  .deck-folder-row.is-selected:hover {
+    background: color-mix(in srgb, var(--accent, #2563eb) 14%, transparent);
+  }
+  .deck-folder-new:hover { border-style: solid; }
+}
+
+/* ── 挑几份 ──────────────────────────────────────────────────────────────────
+ * 点一下选中，再点一下取消，整行都是靶子。没有复选框那个小方块——它会让人以为
+ * 只有点中它才算数，而那个方块在平板上只有指甲盖大。 */
+
+.deck-pick-dialog { max-width: 480px; }
+
+.deck-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-height: min(52vh, 420px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.1rem;
+}
+
+.deck-pick-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: var(--deck-target-comfortable);
+  padding: 0.35rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  font: inherit;
+  color: var(--text);
+  text-align: start;
+  cursor: pointer;
+}
+
+.deck-pick-row.is-selected {
+  background: color-mix(in srgb, var(--accent, #2563eb) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #2563eb) 32%, transparent);
+}
+
+.deck-pick-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.86rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.deck-dialog-btn:disabled { opacity: 0.45; cursor: default; }
+
+@media (hover: hover) and (pointer: fine) {
+  .deck-pick-row:hover { background: color-mix(in srgb, var(--fg, #0f172a) 5%, transparent); }
+}
+
+/* ── 自由组合 ────────────────────────────────────────────────────────────────
+ * 和「整理内容」同一张脸：两列，左右各一，列头说的是位置不是角色。差别只在这张
+ * 是从零拼的——每列底下多一条「挑」，底下一排多一颗「撤销」。 */
+
+.builder .organizer-column { position: relative; }
+
+.builder-add {
+  flex: 0 0 auto;
+  min-height: var(--deck-target-comfortable);
+  margin: 0.3rem;
+  padding: 0 0.7rem;
+  border: 1px dashed var(--line, rgba(15, 23, 42, 0.22));
+  border-radius: 10px;
+  background: transparent;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+
+/* 退出前那句问话贴在单子底下，不再盖一层。再开一层对话框，人得先认出「这是第二
+   张」，而他此刻只想知道「按下去会不会没」。 */
+.builder-confirm {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid rgba(180, 35, 24, 0.3);
+  border-radius: 12px;
+  background: rgba(180, 35, 24, 0.06);
+}
+
+.builder-confirm-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.78rem;
+  color: var(--text);
+}
+
+.builder-confirm .deck-dialog-btn { min-width: 0; min-height: 40px; }
+
+/* 存不进去的时候说一句，就在按钮上面。单子不关——拼好的东西还在，人可以删掉一个
+   旧组合再回来按一次。颜色之外还有字，颜色只是加重。 */
+.builder-error {
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  border-radius: 10px;
+  background: rgba(180, 35, 24, 0.06);
+  color: #b42318;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+/* 一行两颗按钮（移到另一栏、拿走）。名字让位，按钮不换行。 */
+.builder .organizer-row .deck-row-btn { flex: 0 0 auto; }
+
+@media (hover: hover) and (pointer: fine) {
+  .builder-add:hover { border-style: solid; }
+}

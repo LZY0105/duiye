@@ -22,10 +22,41 @@
   <canvas id="mathBg" aria-hidden="true"></canvas>
   <div class="bg-overlay"></div>
 
-  <!-- 状态栏那一条的占位。这里没有导航——两个标签在屏幕底下。 -->
-
   <!-- The title bar is gone; this holds only the status-bar inset. -->
   <div class="spacer-top"></div>
+
+  <!-- 两个标签：练习、设置。在顶上正中，和练习页那一排的两枚胶囊同一行。
+
+       原来是底下一枚浮着的胶囊。它和顶上那一排隔着整整一屏，自成一处，看着像是
+       漏在底边的一块；顶上那一排中间却空着一大截。挪上来之后：左边往桌上摆东西，
+       中间换页，右边收拾桌子——一行说完。
+
+       fixed 在这里而不是放进练习页那一排：设置页也要它，而那一排只在练习页上。那
+       一排在正中留了一格同样宽的空位（.pdf-bar-nav-slot），两边的胶囊不会伸进来；
+       收起那一排时它一起走（pdf.css）。 -->
+  <nav class="app-nav">
+    <button class="active" data-page="pdf">
+      <!-- 练习：一张纸，和一支正在上面写的笔。 -->
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M14.5 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6"/>
+        <path d="M8 8h5M8 12h3"/>
+        <path d="M20.4 12.6a1.7 1.7 0 0 0-2.4 0L13 17.6V21h3.4l5-5a1.7 1.7 0 0 0 0-2.4z"/>
+      </svg>
+      <span data-i18n="nav.pdf">练习</span>
+    </button>
+    <button data-page="settings">
+      <!-- 设置：三条推子。这一页上全是开关和下拉框，推子说的正是这件事；
+           而原来那颗齿轮有十二个凹凸，在 24px 下只会糊成一团灰。 -->
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 7h5M13 7h7"/><circle cx="11" cy="7" r="2"/>
+        <path d="M4 12h9M17 12h3"/><circle cx="15" cy="12" r="2"/>
+        <path d="M4 17h3M11 17h9"/><circle cx="9" cy="17" r="2"/>
+      </svg>
+      <span data-i18n="nav.settings">设置</span>
+    </button>
+  </nav>
 
   <!-- 启动图。原生那张（values-v31/styles.xml）交接到这里，同底色同记号。 -->
   <div class="splash" id="splash">
@@ -51,12 +82,12 @@
          这里曾经还有第三个 Tab——公式编辑器，由 MathLive 在 JS 里建出来。
          它和依赖的那套识别栈一起删掉了，那一行注释却留到了现在。 -->
     <div class="page" id="page-pdf">
-      <!-- The import row and the dock are put away by swiping them off, and
-           brought back by swiping down from the top edge or up from the bottom.
+      <!-- The import row is put away by swiping it off, and brought back by
+           swiping down from the top edge; the two tabs go and come with it.
            There was a chevron in the corner that did the same thing; it was the
            only control on this screen with nothing to do with reading, it sat
            over the page it was making room for, and once the gesture worked
-           reliably at both edges nobody was going to aim at a 30px circle. -->
+           reliably nobody was going to aim at a 30px circle. -->
       <div class="pdf-page-bar">
         <div class="pdf-bar-group">
           <!-- 一个「导入」，点开是一张单子。
@@ -71,7 +102,7 @@
                这块以墨色为主的界面上会跳出来抢注意力。 -->
           <div class="pdf-bar-menu-host">
             <button type="button" class="pdf-bar-btn" data-role="import-open"
-                    aria-haspopup="menu" aria-expanded="false" data-i18n="pdf.import">导入</button>
+                    aria-haspopup="menu" aria-expanded="false" data-i18n="pdf.import"><svg class="pdf-bar-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10.2"/><path d="m7.6 10 4.4 4.4 4.4-4.4"/><path d="M4.5 14.5V17A2.5 2.5 0 0 0 7 19.5h10a2.5 2.5 0 0 0 2.5-2.5v-2.5"/></svg>导入</button>
             <div class="pdf-bar-menu" data-role="import-menu" role="menu" hidden>
               <button type="button" class="pdf-bar-menu-item" role="menuitem" data-role="import-exercise">
                 <svg class="pdf-bar-menu-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -97,7 +128,7 @@
               </button>
             </div>
           </div>
-          <button type="button" class="pdf-bar-btn" data-role="open-library" data-i18n="pdf.library">文档库</button>
+          <button type="button" class="pdf-bar-btn" data-role="open-library" data-i18n="pdf.library"><svg class="pdf-bar-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4.5" width="4" height="15" rx="1"/><rect x="10" y="4.5" width="4" height="15" rx="1"/><path d="m15.6 6 3.1-.8 2.9 13.7-3.1.8z"/></svg>文档库</button>
           <!-- 组合：一套「书是怎么摆的」。
 
                两项而不是一颗按钮，是因为这件事有两个方向：把现在这套摆法记
@@ -105,7 +136,7 @@
                只留「存」的话，人存完之后要自己想起去文档库里找它。 -->
           <div class="pdf-bar-menu-host">
             <button type="button" class="pdf-bar-btn" data-role="combo-open"
-                    aria-haspopup="menu" aria-expanded="false" data-i18n="combo.bar">组合</button>
+                    aria-haspopup="menu" aria-expanded="false" data-i18n="combo.bar"><svg class="pdf-bar-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="14" rx="2.6"/><path d="M12 5v14"/></svg>组合</button>
             <div class="pdf-bar-menu" data-role="combo-menu" role="menu" hidden>
               <button type="button" class="pdf-bar-menu-item" role="menuitem" data-role="combo-save">
                 <svg class="pdf-bar-menu-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -117,6 +148,17 @@
                         stroke-width="1.6" stroke-linecap="round"/>
                 </svg>
                 <span data-i18n="combo.saveItem">存为组合</span>
+              </button>
+              <button type="button" class="pdf-bar-menu-item" role="menuitem" data-role="combo-build">
+                <svg class="pdf-bar-menu-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="3.2" y="4.6" width="7.4" height="14.8" rx="1.4"
+                        fill="none" stroke="currentColor" stroke-width="1.6"/>
+                  <rect x="13.4" y="4.6" width="7.4" height="14.8" rx="1.4"
+                        fill="none" stroke="currentColor" stroke-width="1.6"/>
+                  <path d="M6.9 9.4v5.6M4.1 12.2h5.6M17.1 9.4v5.6M14.3 12.2h5.6"
+                        fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                </svg>
+                <span data-i18n="build.item">自由组合…</span>
               </button>
               <button type="button" class="pdf-bar-menu-item" role="menuitem" data-role="combo-use">
                 <svg class="pdf-bar-menu-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -134,9 +176,20 @@
           <!-- Beside the import actions, never instead of them: creating a
                scratchpad is a third way to fill a pane, and it is available
                before any PDF has been opened. -->
-          <button type="button" class="pdf-bar-btn is-accent" data-role="new-scratch" data-i18n="note.new">新建纸张</button>
+          <button type="button" class="pdf-bar-btn" data-role="new-scratch" data-i18n="note.new"><svg class="pdf-bar-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M11.5 4.5H7A2.5 2.5 0 0 0 4.5 7v10A2.5 2.5 0 0 0 7 19.5h10a2.5 2.5 0 0 0 2.5-2.5v-4.5"/><path d="M17.9 3.9a1.8 1.8 0 0 1 2.5 2.5l-7.6 7.6-3.3.8.8-3.3z"/></svg>新建纸张</button>
         </div>
-        <span class="pdf-status" data-role="pdf-status"></span>
+        <!-- 正中那一格留给「练习 / 设置」两个标签（.app-nav，在页面外面、fixed）。
+             这一格只占位，两边的胶囊伸不进来。 -->
+        <span class="pdf-bar-nav-slot" aria-hidden="true"></span>
+        <div class="pdf-bar-trail">
+          <span class="pdf-status" data-role="pdf-status"></span>
+          <!-- 一下关掉两栏里开着的全部。单独一枚、靠在最右边：它是收拾桌子，和左
+               边那几件「往桌上摆东西」是反方向的动作，挨着放会被当成同一类，也会被
+               挤在一排字的末尾找不到。 -->
+          <div class="pdf-bar-group is-end">
+            <button type="button" class="pdf-bar-btn" data-role="close-all" data-i18n="pdf.closeAll"><svg class="pdf-bar-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="m9.3 9.3 5.4 5.4M14.7 9.3l-5.4 5.4"/></svg>全部关闭</button>
+          </div>
+        </div>
         <!-- 只收 PDF。想加 Word 的话，改这两行 accept 是不够的，而且会更糟。
 
              这个应用没有读 Word 的能力：依赖里只有 pdfjs-dist，importPdf() 第一
@@ -161,7 +214,7 @@
         <div class="pdf-library-header">
           <strong data-i18n="pdf.library">文档库</strong>
           <span class="pdf-library-usage" data-role="library-usage"></span>
-          <button type="button" class="pdf-library-btn" data-role="close-library" data-i18n="pdf.close">关闭</button>
+          <button type="button" class="pdf-library-btn" data-role="close-library" data-i18n="pdf.close"><svg class="pdf-bar-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>关闭</button>
         </div>
         <div class="pdf-library-list" data-role="library-list"></div>
       </div>
@@ -170,6 +223,8 @@
     <!-- 设定页 -->
     <div class="page" id="page-settings">
       <div class="settings-body">
+        <!-- 大标题，和文档库、说明书一样：人一眼知道自己在哪一页。 -->
+        <h1 class="settings-title" data-i18n="nav.settings">设置</h1>
 
           <!-- ═══ Tab: AI 服务商 ═══ -->
               <div class="settings-panel" data-panel="general">
@@ -180,8 +235,9 @@
               <div class="set-section-title" data-i18n="settings.skin">皮肤</div>
               <div class="set-select-wrap">
                 <select class="set-select" id="setSkinSelect">
-                  <option value="liquid-math" data-i18n="skin.liquid">对页 · 液态玻璃</option>
-                  <option value="minimal" data-i18n="skin.paper">对页 · 纸</option>
+                  <option value="liquid-math" data-i18n="skin.liquid">液态玻璃</option>
+                  <option value="frosted" data-i18n="skin.frosted">毛玻璃</option>
+                  <option value="minimal" data-i18n="skin.paper">纸</option>
                 </select>
               </div>
             </div>
@@ -257,34 +313,9 @@
 
   </div>
 
-  <!-- 底部两个标签：练习、设定 -->
-  <!-- Where each bar is taken hold of once it has slid away. Inert until then. -->
-  <div class="bar-peek" data-role="bar-peek" aria-hidden="true"></div>
-  <div class="dock-peek" data-role="dock-peek" aria-hidden="true"></div>
-
-  <nav class="bottom-nav">
-    <button class="active" data-page="pdf">
-      <!-- 练习：一张纸，和一支正在上面写的笔。 -->
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M14.5 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6"/>
-        <path d="M8 8h5M8 12h3"/>
-        <path d="M20.4 12.6a1.7 1.7 0 0 0-2.4 0L13 17.6V21h3.4l5-5a1.7 1.7 0 0 0 0-2.4z"/>
-      </svg>
-      <span data-i18n="nav.pdf">练习</span>
-    </button>
-    <button data-page="settings">
-      <!-- 设置：三条推子。这一页上全是开关和下拉框，推子说的正是这件事；
-           而原来那颗齿轮有十二个凹凸，在 24px 下只会糊成一团灰。 -->
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M4 7h5M13 7h7"/><circle cx="11" cy="7" r="2"/>
-        <path d="M4 12h9M17 12h3"/><circle cx="15" cy="12" r="2"/>
-        <path d="M4 17h3M11 17h9"/><circle cx="9" cy="17" r="2"/>
-      </svg>
-      <span data-i18n="nav.settings">设置</span>
-    </button>
-  </nav>
+  <!-- 那一排收起来之后从哪儿叫回：原来这里有一条盖在屏幕顶上的透明条，收起后两栏顶上去，它
+       正好盖住两栏的栏头，整排按钮点不动。现在不盖东西，往下拉和点按钮靠手势分开，见
+       pdf-workspace-ui.js 的 initChromeHiding（reachesForRow）。 -->
 
   <!-- ═══ Liquid Glass refraction filter ═══
        Real glass does not just blur what is behind it, it bends it: the

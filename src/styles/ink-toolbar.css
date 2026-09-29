@@ -77,7 +77,10 @@
     scale 140ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 .ink-toolbar[data-orientation='vertical'] { flex-direction: column; }
-.ink-toolbar[data-orientation='horizontal'] { flex-direction: row; }
+/* 横躺的那一条只许横向的手势归浏览器（原来竖着拉它是在拉菜单栏，那个手势后来不认工具栏了，
+   见 pdf-workspace-ui.js 的 claimedElsewhere）。工具、颜色那两组什么手势都不让给浏览器——
+   它们上面划着是在挑（见下面 .ink-tools 那条）。 */
+.ink-toolbar[data-orientation='horizontal'] { flex-direction: row; touch-action: pan-x; }
 
 .ink-toolbar.no-motion,
 .ink-toolbar.no-motion * { transition: none !important; animation: none !important; }
@@ -93,6 +96,9 @@
   display: flex;
   gap: var(--ink-gap);
   align-items: center;
+  /* 按住划着挑（ink-toolbar.js 的 _installScrub）：顺着横杠的那个方向要是让给浏览器，它划过
+     一截就发一个 pointercancel 把手势收走——横躺的那一条原来就是 pan-x。 */
+  touch-action: none;
 }
 
 .ink-toolbar[data-orientation='vertical'] .ink-tools,
@@ -101,12 +107,14 @@
 /* A vertical bar can hold more tools than fit; scroll smoothly rather than
    clip. The mask is the affordance: with the scrollbar hidden and nothing
    else to see, a clipped last tool looked like the end of the list. Fading
-   the cut edge says there is more below without spending any width. */
+   the cut edge says there is more below without spending any width.
+
+   手指不再能把这一列上下拖着滚（上下划是在挑，touch-action 见上）：划着挑到头上 / 底下，它
+   自己往那边滚（_installScrub 的 autoScroll）；滚轮照旧。 */
 .ink-toolbar[data-orientation='vertical'] .ink-tools {
   max-height: 48vh;
   overflow-y: auto;
   overscroll-behavior: contain;
-  touch-action: pan-y;
   scrollbar-width: none;
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
           mask-image: linear-gradient(to bottom, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
@@ -253,6 +261,44 @@
   from { opacity: 0; scale: 0.72; }
   to   { opacity: 1; scale: 1; }
 }
+
+/* 划着挑的时候：选中那一格的镜片和蓝色让给手指底下那块玻璃（它把镜片「拿起来」了），手指底下那一格
+   变蓝。一开始按下去的那一格别一直陷着——手指早就不在它上面了。颜色那一排的圈留在原处，松手才挪。 */
+.ink-tools.is-scrubbing .ink-tool.is-selected::before { opacity: 0; }
+.ink-tools.is-scrubbing .ink-tool.is-selected { color: var(--fg); }
+.ink-tools.is-scrubbing .ink-tool.is-scrub-target { color: var(--accent); }
+.ink-tools.is-scrubbing .ink-tool:active,
+.ink-tools.is-scrubbing .ink-tool.liquid-bulge-press,
+.ink-swatches.is-scrubbing .ink-swatch:active,
+.ink-swatches.is-scrubbing .ink-swatch.liquid-bulge-press {
+  scale: 1;
+  box-shadow: none;
+}
+/* 划着的时候什么都不渐变：换到哪一格，那一格当场变色（按下时放出的那道水波纹，划起来就由
+   ink-toolbar.js 摘掉）。这一排是玻璃，里面有东西在动的每一帧，整片都要按新画面重合成——平板上
+   量过，划的时候图标颜色一路渐变、水波纹一路扩散，29% 的帧超过 12ms；这两样不做，降到 17%。
+   样子不变，只是变色那一下不再有 0.2 秒的过渡。 */
+.ink-tools.is-scrubbing .ink-tool,
+.ink-swatches.is-scrubbing .ink-swatch,
+.ink-swatches.is-scrubbing .ink-swatch-fill { transition: none; }
+
+/* 那块玻璃（ink-toolbar.js 的 _installScrub 挂在 body 上，浮在横杠上面——理由见那里）。位置、大小
+   由脚本写（translate、width、height）；浮起来时比镜片大一圈，松手缩回镜片那么大、淡掉。
+   各皮肤给它的样子：玻璃（折射）在下面 liquid-math 那一节和 liquid-glass-react.css，纸在 paper.css。 */
+.ink-scrub-drop {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 2000;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  scale: 1;
+  background: rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.7), 0 6px 16px -4px rgba(15, 23, 42, 0.22);
+}
+/* 浮起来放大多少：纸不浮起来，把它设成 1（paper.css）。 */
+.ink-scrub-drop.is-on { opacity: 1; scale: var(--scrub-lift, 1.3); }
 /* ── colour swatches ──────────────────────────────────────────────────────── */
 
 .ink-swatch {
@@ -420,6 +466,66 @@
   border: 2px solid var(--card-bg, #fff);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
+/* ── 停在顶上那一排里 ─────────────────────────────────────────────────────────
+
+   工具栏可以拖进顶上那一排（和「练习 / 设置」同一行）的空当里：收着是一颗和那
+   一排一样高的球，点开就整条横躺在那一排里，把两边挤开。位置由 JS 按那一排写
+   （fixed、视口坐标，见 ink-toolbar.js 的 _positionPerchedBar 和
+   src/pdf/top-row-dock.js）；这里只管它跟着那一排收起、以及点开那一段里图标怎么
+   露出来。 */
+
+/* 和两个标签跟着同一个进度走：收起顶上那一排时一起上去、一起淡出（公式和 pdf.css
+   里 .app-nav 那一条一样）。transform 在这个状态下只管这一件事——位置写的是
+   left / top。 */
+.ink-toolbar.is-perched {
+  transform: translateY(calc(-1 * (var(--pdf-bar-h, 44px) + var(--app-bar-top, 8px)) * var(--top-drag, 0)));
+  opacity: calc(1 - var(--top-drag, 0));
+  z-index: 40;
+  transition:
+    background 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    box-shadow 240ms cubic-bezier(0.32, 0.72, 0, 1),
+    padding 200ms cubic-bezier(0.32, 0.72, 0, 1),
+    border-radius 200ms cubic-bezier(0.32, 0.72, 0, 1),
+    scale 140ms cubic-bezier(0.32, 0.72, 0, 1),
+    transform 0.32s cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 0.26s ease;
+}
+body.is-chrome-dragging .ink-toolbar.is-perched { transition: none; }
+/* is-instant 照样要赢：上面那条过渡和它一样具体、又更晚，不重说的话，停进这一排那一下
+   内边距还在从 0 往 5px 走，量出来的宽度差 10px，点开之后横杠就压到「全部关闭」上去了。 */
+.ink-toolbar.is-perched.is-instant { transition: none; }
+body.is-top-hidden .ink-toolbar.is-perched { pointer-events: none; }
+
+/* 那一排挤不下时，点开的那一条挂在栏头下面（ink-toolbar.js 的 _hangBelowHeaders）：它
+   不在那一排里，跟着两栏走——收起那一排时按新的栏头重新摆一次，和两栏一起滑过去
+   （pdf-workspace-ui.js 的 slideWorkspace），不淡出、照样能点。 */
+.ink-toolbar.is-perched.is-perch-hanging {
+  transform: none;
+  opacity: 1;
+}
+body.is-top-hidden .ink-toolbar.is-perched.is-perch-hanging { pointer-events: auto; }
+
+/* 收着的那颗球：和那一排的胶囊一样高，不是平时那颗 3rem 的。 */
+.ink-toolbar.is-perched.is-docked .ink-token {
+  width: var(--app-nav-h, 44px);
+  height: var(--app-nav-h, 44px);
+}
+
+/* 点开 / 收起那一段：露出来那一截由 clip-path 定（逐帧写），里面那几格跟着淡入淡
+   出——一颗球那么大的时候，里面只会是被切开的半个图标。 */
+.ink-toolbar.is-perch-animating > * { opacity: var(--perch-reveal, 1); }
+
+/* 拖在手里那颗球在所有东西上面，包括顶上那两个标签（1000）：它要飞过那一排。 */
+.ink-toolbar.is-dragging { z-index: 1100; }
+
+/* 拖着经过顶上那一排、被它接住的时候：球缩到和那一排一样高，贴着那一排横着走（位
+   置由 top-row-dock.js 的 beginDrag 逐帧摆，碰上标签就推着它走）。球自己就是「松手
+   停在这儿」的预告，不再另亮一圈虚影、也不鼓起来——鼓起来会顶到标签上。 */
+.ink-toolbar.is-dragging.is-row-drag .ink-token {
+  width: var(--app-nav-h, 44px);
+  height: var(--app-nav-h, 44px);
+}
+
 /* ── setting cards ────────────────────────────────────────────────────────── */
 
 .ink-card {
@@ -449,6 +555,24 @@
    the duration. */
 @media (prefers-reduced-motion: reduce) {
   .ink-card { animation: none; }
+}
+
+/* 退场。换一张卡片（笔的换成颜色的、钢笔的换成荧光笔的）或者关掉，走掉的那一张
+   淡出、往上收一点——和入场反着走，人分得出谁来谁走。原来它是当场消失的：新的
+   那张浮上来、旧的凭空没了，看着像闪了一下。演完由 ink-toolbar.js 的
+   _dismissCard 拿掉；这一小段里它点不到。
+
+   同一张卡片原地重建（换了语言之类）挂 is-instant：那不是来了一张新卡片，不重
+   播入场。 */
+.ink-card.is-leaving {
+  pointer-events: none;
+  animation: ink-card-out 150ms cubic-bezier(0.32, 0.72, 0, 1) forwards;
+}
+.ink-card.is-instant { animation: none; }
+
+@keyframes ink-card-out {
+  from { opacity: 1; translate: 0 0; scale: 1; }
+  to   { opacity: 0; translate: 0 -4px; scale: 0.97; }
 }
 
 .ink-card-title {
@@ -839,6 +963,26 @@
   backdrop-filter: blur(14px) saturate(220%) brightness(108%);
 }
 
+/* 划着挑时手指底下那块玻璃：透明的，不铺白（人嫌「练习 / 设置」那块透镜是一层白），只弯背后——
+   横杠连同它的图标。毛玻璃用原来那段 #lg-refract-soft（分段控件的透镜也是它）；液态玻璃换成库里的
+   那一段，见 liquid-glass-react.css。一圈白边、一道上沿的高光、一点影子：它浮起来了。 */
+[data-skin="liquid-math"] .ink-scrub-drop {
+  background: transparent;
+  backdrop-filter: url(#lg-refract-soft);
+  box-shadow:
+    inset 0 0 0 0.75px rgba(255, 255, 255, 0.75),
+    inset 0 1.5px 1px -0.5px rgba(255, 255, 255, 0.95),
+    inset 0 -1.5px 2px -1px rgba(15, 23, 42, 0.14),
+    0 0 0 0.5px rgba(15, 23, 42, 0.10),
+    0 8px 18px -6px rgba(15, 23, 42, 0.26);
+}
+@media (prefers-reduced-transparency: reduce) {
+  [data-skin="liquid-math"] .ink-scrub-drop {
+    backdrop-filter: none;
+    box-shadow: inset 0 0 0 2px var(--accent);
+  }
+}
+
 [data-skin="liquid-math"] .ink-seg-btn.is-selected {
   background: rgba(255, 255, 255, 0.28);
   color: var(--accent);
@@ -857,7 +1001,9 @@
 .ink-toolbar.is-dragging .ink-token {
   transition:
     transform 160ms cubic-bezier(0.32, 0.72, 0, 1),
-    box-shadow 160ms cubic-bezier(0.32, 0.72, 0, 1);
+    box-shadow 160ms cubic-bezier(0.32, 0.72, 0, 1),
+    width 200ms cubic-bezier(0.32, 0.72, 0, 1),
+    height 200ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 .ink-toolbar.is-corner-armed .ink-token {
   transform: scale(1.14);
@@ -876,102 +1022,8 @@
 }
 
 
-/* ══════════════════════════════════════════════════════════════
-   皮肤：对页 · 纸 —— 浮动笔迹栏
-   ══════════════════════════════════════════════════════════════ */
-
-/* 这两件东西是真的悬在页面上方的，所以它们是这套皮肤里少数几个有影子的表面。
-   上一版把影子也一并去掉了，结果工具栏和它下面的纸贴成了一层。 */
-[data-skin="minimal"] .ink-toolbar,
-[data-skin="minimal"] .ink-card {
-  background: #ffffff;
-  border: 1px solid var(--border-color);
-  box-shadow: var(--glass-cast);
-  backdrop-filter: none;
-}
-[data-skin="minimal"] .ink-toolbar { border-radius: var(--btn-radius-lg); }
-[data-skin="minimal"] .ink-card { border-radius: var(--card-radius); }
-
-/* 菲涅耳环与高光是玻璃独有的两层，纸里没有对应的东西可留。 */
-[data-skin="minimal"] .ink-toolbar::before,
-[data-skin="minimal"] .ink-toolbar::after,
-[data-skin="minimal"] .ink-card::before,
-[data-skin="minimal"] .ink-card::after { display: none; }
-
-/* 收起后的圆令牌：它是悬空的，也保留圆形——那个形状本身就是"还没落位"的意思。 */
-[data-skin="minimal"] .ink-token {
-  background: #ffffff;
-  border: 1px solid var(--border-color);
-  box-shadow: var(--glass-cast);
-  backdrop-filter: none;
-}
-
-/* 选中：黑白反转。不用色，因为正文就是黑的，再上一个彩色块只会多一处争抢；
-   而反转在任何底色上都读得出来。
-
-   工具按钮的选中态由 .is-selected::before 那枚圆形透镜承担——按钮本身不能再填
-   一次底色，否则会得到一个黑方块里套着一个灰圆圈：上一版就是这样，两条规则各画
-   各的。这里让透镜变成一整块墨，图标反白，形状仍是圆的，因为工具按钮本来就是圆的。 */
-/* 不用实心黑。
- *
- * 反白确实一眼就能认出来，但一块纯黑落在一整条白色工具栏上，是这块屏幕上最重的
- * 东西——比正文的字还重。选中一支笔而已，不该抢到那个份量。
- *
- * 改成同一支墨的最浅一档做底，外加一圈细边。图标保持墨色不反白：认出"选中"靠的
- * 是那圈边和底色的变化，不是靠把图标整个换掉。 */
-[data-skin="minimal"] .ink-tool.is-selected {
-  background: transparent;
-  color: var(--fg);
-}
-[data-skin="minimal"] .ink-tool.is-selected::before {
-  background: rgba(15, 23, 42, 0.06);
-  box-shadow: inset 0 0 0 1.5px rgba(15, 23, 42, 0.55);
-  backdrop-filter: none;
-}
-
-/* 分段按钮是方的，所以它按方的来反转。 */
-[data-skin="minimal"] .ink-seg-btn.is-selected {
-  background: rgba(15, 23, 42, 0.06);
-  color: var(--fg);
-  border-radius: var(--btn-radius);
-  box-shadow: inset 0 0 0 1.5px rgba(15, 23, 42, 0.55);
-  backdrop-filter: none;
-  font-weight: 500;
-}
-
-/* 笔迹样例是一小块纸，要有自己的边界，否则白落在白上。 */
-[data-skin="minimal"] .ink-preview {
-  background: #ffffff;
-  box-shadow: inset 0 0 0 1px var(--border-color);
-  border-radius: var(--btn-radius);
-}
-
-/* 颜色小样保持圆形：这里的圆不是装饰，是"这是一滴墨"的意思。 */
-[data-skin="minimal"] .ink-swatch.is-selected {
-  box-shadow: 0 0 0 2px #ffffff, 0 0 0 3.5px var(--fg);
-}
-
-/* 分隔线用更淡的一档：它分的是同一件工具的两组按钮，不是两张纸。 */
-[data-skin="minimal"] .ink-sep {
-  background: var(--glass-border-subtle, rgba(15, 23, 42, 0.07));
-}
-
-
-/* 收起时只留那一个圆。
- *
- * 工具栏本身是 8px 圆角的方块，收起后里面只剩一枚 48px 的圆形令牌——于是屏幕上
- * 是一个圆被裹在一个方里，两种形状各说各的。液态玻璃那边早就处理过：收起和拖动
- * 时外壳整个隐去，只留令牌。这套皮肤照做。
- *
- * 顺带说明这里的形状规则，免得下次又打架：会浮起来、单独完成一件事的东西是圆的
- * （令牌、颜色小样、互换按钮）；盛放内容的东西是圆角方块（面板、工具栏、胶囊栏、
- * 卡片）。两类各有其形，但不能同时出现在同一个东西上。 */
-[data-skin="minimal"] .ink-toolbar.is-docked,
-[data-skin="minimal"] .ink-toolbar.is-dragging {
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-}
+/* 纸皮肤里这条工具栏的样子（纸条、荧光笔点的选中、收起和拖动时外壳让开、不磨砂）在
+   paper.css「笔迹工具栏」那一节——纸的规则都在那一个文件里。 */
 
 /* 套住一片字迹之后，浮在套索线旁的那两个动作。
  *
@@ -1030,6 +1082,43 @@
 }
 
 .ink-selection-dot:active { transform: scale(0.9); }
+
+/* 圈里有闭合形状时：边框一排、填充一排，各挑各的。每排左边一个字说它改的是哪一
+   样——两排一模一样的色点，不说就分不出哪排是哪排。 */
+.ink-selection-palette.is-two-rows {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.ink-selection-palette-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ink-selection-palette-label {
+  flex: 0 0 auto;
+  min-width: 2.6em;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted, #64748b);
+  text-align: right;
+}
+
+/* 这一片眼下就是这个色：一圈间隔加一圈强调色，底下什么色都认得出来。 */
+.ink-selection-dot.is-current {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px var(--accent, #2563eb);
+}
+
+/* 「不填充」：斜着划掉的一格，和形状卡片上填充那一排头一格一个样。 */
+.ink-selection-dot.is-none {
+  background:
+    linear-gradient(to bottom right, transparent calc(50% - 1px),
+      var(--danger, #dc2626) calc(50% - 1px), var(--danger, #dc2626) calc(50% + 1px),
+      transparent calc(50% + 1px)),
+    var(--card-bg, #fff);
+  border-color: var(--border-color, rgba(15, 23, 42, 0.16));
+}
 
 .ink-selection-btn {
   display: inline-flex;

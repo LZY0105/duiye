@@ -174,6 +174,18 @@ export class InkHistory {
     this.record({ type: INK_OPS.RESTYLE, before, color });
   }
 
+  /**
+   * 填充换了。和换色是同一种操作——改的是样子不是形——只是改的那一样不同，所以
+   * 同一个 type，带一个 field。
+   *
+   * @param {Array<{id:string, fill:?string}>} before 各自原来的填充（null 是没填）
+   * @param {?string} fill 新的填充
+   */
+  recordRefill(before, fill) {
+    if (!before?.length) return;
+    this.record({ type: INK_OPS.RESTYLE, field: 'fill', before, fill });
+  }
+
   recordClear(entries) {
     if (!entries.length) return;
     this.record({ type: INK_OPS.CLEAR, entries });
@@ -233,9 +245,11 @@ export class InkHistory {
         restorePoints(this.layer, op.before);
         break;
       case INK_OPS.RESTYLE:
-        for (const { id, color } of op.before) {
-          const stroke = this.layer.getById(id);
-          if (stroke) stroke.color = color;
+        for (const entry of op.before) {
+          const stroke = this.layer.getById(entry.id);
+          if (!stroke) continue;
+          if (op.field === 'fill') stroke.fill = entry.fill;
+          else stroke.color = entry.color;
         }
         break;
       default:
@@ -267,7 +281,9 @@ export class InkHistory {
       case INK_OPS.RESTYLE:
         for (const { id } of op.before) {
           const stroke = this.layer.getById(id);
-          if (stroke) stroke.color = op.color;
+          if (!stroke) continue;
+          if (op.field === 'fill') stroke.fill = op.fill;
+          else stroke.color = op.color;
         }
         break;
       default:
