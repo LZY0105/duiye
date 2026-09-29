@@ -8,6 +8,10 @@
 import { createTextSource, TEXT_ORIGIN } from './text-source.js';
 import { createAgentPanel } from './agent-panel.js';
 import { requestAgent } from '../agent/agent-client.js';
+import {
+  createAgentConversationStore,
+  createAgentSessionKey,
+} from '../agent/agent-conversation.js';
 import { PdfPane } from './pdf-pane.js';
 import { FIT_MODES } from './pdf-view-state.js';
 import {
@@ -278,6 +282,9 @@ export class PdfWorkspace {
     this.activeSlot = SLOTS.PRIMARY;
     /** The document and page captured when the Agent dialog was opened. */
     this.agentTarget = null;
+    /** In-memory Agent conversations, isolated by document ID and page. */
+    this.agentConversations = createAgentConversationStore();
+    this._agentRequestSequence = 0;
     // Per slot, the width the slot toolbar wanted at each rung of HEADER_LADDER,
     // so _syncPaneHeaderFit knows how much room it takes to put a rung back.
     this._headerWanted = {};
@@ -395,6 +402,7 @@ export class PdfWorkspace {
     };
     this.agentPanel = createAgentPanel(this.root, {
       onOpen: () => this.openAgentForActiveDocument(),
+      onSubmit: (question) => this.submitAgentQuestion(question),
       onClose: () => { this.agentTarget = null; },
     });
 
@@ -3755,30 +3763,84 @@ export class PdfWorkspace {
 
   openAgentForActiveDocument() {
     const slot = this._activeAgentSlot();
-    if (slot) this.showAgentForPage(slot);
-  }
-
-  _isAgentTargetCurrent(target) {
-    return this.agentTarget === target
-      && this.panes[target.slot]?.doc === target.doc;
-  }
-
-  async showAgentForPage(slot) {
-    const pane = this.panes[slot];
+    const pane = slot ? this.panes[slot] : null;
     if (!pane?.isLoaded()) return;
+
+    const documentId = pane.meta?.id;
+    const page = pane.state.pageNumber;
+    if (!documentId) return;
 
     const target = {
       slot,
       doc: pane.doc,
-      page: pane.state.pageNumber,
+      documentId,
+      page,
+      sessionKey: createAgentSessionKey(documentId, page),
       documentName: pane.meta?.name || '当前文档',
     };
+
     this.agentTarget = target;
     this.agentPanel?.open({
       documentName: target.documentName,
       page: target.page,
     });
-    this.agentPanel?.showLoading();
+    this.agentPanel?.showConversation(
+      this.agentConversations.get(target.sessionKey),
+    );
+  }
+
+  _isAgentTargetCurrent(target) {
+    return this.agentTarget === target
+      && this.panes[target.slot]?.doc === target.doc
+      && this.panes[target.slot]?.state.pageNumber === target.page;
+  }
+
+  _showAgentConversation(sessionKey, nextMetadata = null) {
+    const activeTarget = this.agentTarget;
+
+    if (
+      !activeTarget
+      || activeTarget.sessionKey !== sessionKey
+      || !this._isAgentTargetCurrent(activeTarget)
+    ) {
+      return;
+    }
+
+    this.agentPanel?.showConversation(
+      this.agentConversations.get(sessionKey),
+      nextMetadata,
+    );
+  }
+
+  async submitAgentQuestion(userQuestion) {
+    const target = this.agentTarget;
+    if (!target) return;
+
+    if (!this._isAgentTargetCurrent(target)) {
+      this.agentPanel?.showNotice(
+        '页面已经切换，请关闭 Agent 后在当前页重新打开。',
+      );
+      return;
+    }
+
+    const sessionKey = target.sessionKey;
+    const conversation = this.agentConversations.get(sessionKey);
+
+    // 同一文档页面一次只处理一个请求。
+    if (conversation.pendingRequestId) return;
+
+    const requestId = `agent-${++this._agentRequestSequence}`;
+
+    this.agentConversations.append(sessionKey, {
+      id: `${requestId}:user`,
+      role: 'user',
+      content: userQuestion,
+      status: 'done',
+    });
+    this.agentConversations.setPending(sessionKey, requestId);
+    this._showAgentConversation(sessionKey);
+
+    let textOrigin = null;
 
     try {
       const source = createTextSource(target.doc, {
@@ -3789,31 +3851,73 @@ export class PdfWorkspace {
         { needReadable: true },
       );
 
-      if (!this._isAgentTargetCurrent(target)) return;
-      if (!result.text || result.origin === TEXT_ORIGIN.NONE) {
-        this.agentPanel?.showNotice(
-          '当前页文字无法可靠提取，暂不调用 Agent。',
-          { textOrigin: result.origin },
-        );
+      textOrigin = result.origin;
+
+      // 如果已有更新的请求接管会话，旧请求不能再写入回答。
+      if (
+        this.agentConversations.get(sessionKey).pendingRequestId
+        !== requestId
+      ) {
         return;
       }
 
+      if (!result.text || result.origin === TEXT_ORIGIN.NONE) {
+        this.agentConversations.append(sessionKey, {
+          id: `${requestId}:assistant`,
+          role: 'assistant',
+          content: '当前页文字无法可靠提取，暂不调用 Agent。',
+          status: 'error',
+        });
+        return;
+      }
+
+      const requestMessages = this.agentConversations
+        .get(sessionKey)
+        .messages;
+
       const answer = await requestAgent({
-        version: 1,
+        version: 2,
         page: target.page,
         questionText: result.text,
+        messages: requestMessages,
         textOrigin: result.origin,
       });
 
-      if (!this._isAgentTargetCurrent(target)) return;
-      this.agentPanel?.showResult({
-        ...answer,
-        textOrigin: result.origin,
+      if (
+        this.agentConversations.get(sessionKey).pendingRequestId
+        !== requestId
+      ) {
+        return;
+      }
+
+      this.agentConversations.append(sessionKey, {
+        id: `${requestId}:assistant`,
+        role: 'assistant',
+        content: answer.answer || 'Agent 暂时没有返回结果。',
+        status: answer.ok ? 'done' : 'error',
       });
     } catch (error) {
-      if (!this._isAgentTargetCurrent(target)) return;
+      if (
+        this.agentConversations.get(sessionKey).pendingRequestId
+        !== requestId
+      ) {
+        return;
+      }
+
       Logger.error('Agent', 'agent request failed', error);
-      this.agentPanel?.showNotice('Agent 处理失败。');
+      this.agentConversations.append(sessionKey, {
+        id: `${requestId}:assistant`,
+        role: 'assistant',
+        content: 'Agent 处理失败。',
+        status: 'error',
+      });
+    } finally {
+      // 只清除属于本次请求的 pending 状态，不能清除后来的请求。
+      this.agentConversations.clearPending(sessionKey, requestId);
+      this._showAgentConversation(
+        sessionKey,
+        textOrigin ? { textOrigin } : null,
+      );
     }
   }
 

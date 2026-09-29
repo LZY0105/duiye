@@ -5,6 +5,8 @@
 // workspace supplies metadata and result text through the small imperative API
 // returned by createAgentPanel().
 
+import { renderAgentAnswer } from '../agent/answer-renderer.js';
+
 const SOURCE_LABELS = Object.freeze({
   LAYER: 'PDF 文字层',
   OCR: 'OCR',
@@ -24,6 +26,34 @@ function metadataLabel(metadata = {}) {
   return parts.filter(Boolean).join(' · ');
 }
 
+function createMessageElement(
+  role,
+  content,
+  { pending = false, status = 'done' } = {},
+) {
+  const messageEl = document.createElement('article');
+  messageEl.className = `pdf-agent-message is-${role}`;
+  messageEl.dataset.role = 'agent-message';
+  messageEl.dataset.messageRole = role;
+
+  if (pending) messageEl.classList.add('is-pending');
+
+  if (status === 'error') messageEl.classList.add('is-error');
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'pdf-agent-message-body';
+
+  if (role === 'assistant' && !pending) {
+    bodyEl.innerHTML = renderAgentAnswer(content);
+  } else {
+    // 用户消息和加载提示永远只作为文本处理。
+    bodyEl.textContent = content;
+  }
+
+  messageEl.appendChild(bodyEl);
+  return messageEl;
+}
+
 /**
  * Mounts the workspace-level Agent trigger and dialog.
  *
@@ -31,7 +61,10 @@ function metadataLabel(metadata = {}) {
  * DOM and lifecycle, while this module should remain independent of document
  * loading, text quality and the eventual C++ transport.
  */
-export function createAgentPanel(root, { onOpen, onClose } = {}) {
+export function createAgentPanel(
+  root,
+  { onOpen, onClose, onSubmit } = {},
+) {
   const layer = document.createElement('div');
   layer.className = 'pdf-agent-layer';
   layer.innerHTML = `
@@ -67,6 +100,18 @@ export function createAgentPanel(root, { onOpen, onClose } = {}) {
       <div class="pdf-agent-dialog-content"
            data-role="agent-content"
            aria-live="polite"></div>
+      <form class="pdf-agent-form" data-role="agent-form">
+        <textarea class="pdf-agent-question"
+                  data-role="agent-question"
+                  rows="2"
+                  maxlength="500"
+                  aria-label="输入关于当前页的问题"
+                  placeholder="输入关于当前页的问题……"></textarea>
+        <button type="submit"
+                class="pdf-agent-submit"
+                data-role="agent-submit"
+                disabled>发送</button>
+      </form>
     </section>
   `;
   root.appendChild(layer);
@@ -76,9 +121,13 @@ export function createAgentPanel(root, { onOpen, onClose } = {}) {
   const closeButton = layer.querySelector('[data-role="agent-close"]');
   const metaEl = layer.querySelector('[data-role="agent-meta"]');
   const contentEl = layer.querySelector('[data-role="agent-content"]');
+  const form = layer.querySelector('[data-role="agent-form"]');
+  const questionInput = layer.querySelector('[data-role="agent-question"]');
+  const submitButton = layer.querySelector('[data-role="agent-submit"]');
 
   let available = false;
   let opened = false;
+  let busy = false;
   let metadata = {};
   let previousFocus = null;
 
@@ -87,27 +136,92 @@ export function createAgentPanel(root, { onOpen, onClose } = {}) {
     dialog.hidden = !opened;
   };
 
+  const syncForm = () => {
+    const hasQuestion = Boolean(questionInput.value.trim());
+    questionInput.disabled = busy;
+    submitButton.disabled = busy || !hasQuestion;
+    submitButton.textContent = busy ? '处理中…' : '发送';
+  };
+
   const renderMetadata = () => {
     metaEl.textContent = metadataLabel(metadata);
   };
 
+  const renderConversation = (conversation = {}) => {
+    const messages = Array.isArray(conversation.messages)
+      ? conversation.messages
+      : [];
+    const fragment = document.createDocumentFragment();
+
+    for (const message of messages) {
+      if (
+        message?.role !== 'user'
+        && message?.role !== 'assistant'
+      ) {
+        continue;
+      }
+
+      const content = String(message.content ?? '').trim();
+      if (!content) continue;
+
+      fragment.appendChild(
+        createMessageElement(
+          message.role,
+          content,
+          { status: message.status },
+        ),
+      );
+    }
+
+    if (conversation.pendingRequestId) {
+      fragment.appendChild(
+        createMessageElement(
+          'assistant',
+          'Agent 正在思考……',
+          { pending: true },
+        ),
+      );
+    }
+
+    busy = Boolean(conversation.pendingRequestId);
+
+    if (fragment.childNodes.length === 0) {
+      contentEl.dataset.state = 'notice';
+      contentEl.textContent = '输入一个关于当前页的问题。';
+    } else {
+      contentEl.dataset.state = 'conversation';
+      contentEl.replaceChildren(fragment);
+      contentEl.scrollTop = contentEl.scrollHeight;
+    }
+
+    syncForm();
+  };
+
   const open = (nextMetadata = {}) => {
     if (!available) return;
-    metadata = { ...nextMetadata };
     previousFocus = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
+    metadata = { ...nextMetadata };
     opened = true;
+    busy = false;
+    contentEl.dataset.state = 'notice';
+    contentEl.textContent = '输入一个关于当前页的问题。';
     renderMetadata();
     syncVisibility();
-    closeButton.focus();
+    syncForm();
+    questionInput.focus();
   };
 
   const close = ({ notify = true } = {}) => {
+    if (!opened) return;
     opened = false;
+    busy = false;
     metadata = {};
     contentEl.replaceChildren();
     contentEl.dataset.state = '';
+    questionInput.value = '';
+    syncForm();
     syncVisibility();
     if (notify) onClose?.();
     if (available) fab.focus();
@@ -117,6 +231,19 @@ export function createAgentPanel(root, { onOpen, onClose } = {}) {
 
   fab.addEventListener('click', () => onOpen?.());
   closeButton.addEventListener('click', () => close());
+
+  questionInput.addEventListener('input', syncForm);
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+
+    const question = questionInput.value.trim();
+    if (!question || busy) return;
+
+    onSubmit?.(question);
+    questionInput.value = '';
+    syncForm();
+  });
 
   return {
     setAvailable(value) {
@@ -129,31 +256,52 @@ export function createAgentPanel(root, { onOpen, onClose } = {}) {
 
     close,
 
+    showConversation(conversation = {}, nextMetadata = null) {
+      if (nextMetadata) {
+        metadata = { ...metadata, ...nextMetadata };
+        renderMetadata();
+      }
+
+      renderConversation(conversation);
+    },
+
     showLoading(nextMetadata = null) {
+      busy = true;
+
       if (nextMetadata) {
         metadata = { ...metadata, ...nextMetadata };
         renderMetadata();
       }
       contentEl.dataset.state = 'loading';
       contentEl.textContent = '正在检查当前页文字……';
+
+      syncForm();
     },
 
     showResult(result = {}) {
+      busy = false;
+
       if (result.textOrigin) {
         metadata = { ...metadata, textOrigin: result.textOrigin };
         renderMetadata();
       }
       contentEl.dataset.state = result.ok ? 'result' : 'error';
-      contentEl.textContent = result.answer || 'Agent 暂时没有返回结果。';
+      contentEl.innerHTML = renderAgentAnswer(result.answer || 'Agent 暂时没有返回结果。',);
+
+      syncForm();
     },
 
     showNotice(message, nextMetadata = null) {
+      busy = false;
+
       if (nextMetadata) {
         metadata = { ...metadata, ...nextMetadata };
         renderMetadata();
       }
       contentEl.dataset.state = 'notice';
       contentEl.textContent = message || '';
+
+      syncForm();
     },
 
     destroy() {

@@ -37,7 +37,8 @@ import path from 'node:path';
 const COMPATIBLE = new Set([
   '0BSD', 'MIT', 'MIT-0', 'ISC', 'Apache-2.0',
   'BSD-2-Clause', 'BSD-3-Clause', 'BSD-3-Clause-Clear',
-  'BlueOak-1.0.0', 'Unlicense', 'CC0-1.0', 'Python-2.0', 'Zlib',
+  'BlueOak-1.0.0', 'Unlicense', 'CC0-1.0',
+  'Python-2.0', 'PSF-2.0', 'Zlib',
   'MPL-2.0',
 ]);
 

@@ -9,6 +9,30 @@ const configuredAccessToken = typeof import.meta !== 'undefined'
 const AGENT_PROXY_URL = (configuredProxyUrl || 'http://127.0.0.1:8787').replace(/\/+$/, '');
 const REQUEST_TIMEOUT_MS = 65_000;
 const HEALTH_TIMEOUT_MS = 3_000;
+const MAX_HISTORY_MESSAGES = 12;
+
+function normalizeMessages(messages) {
+  if (!Array.isArray(messages)) return [];
+
+  let normalized = messages
+    .filter((message) => (
+      (message?.role === 'user' || message?.role === 'assistant')
+      && message?.status !== 'error'
+    ))
+    .map((message) => ({
+      role: message.role,
+      content: String(message.content ?? '').trim(),
+    }))
+    .filter((message) => Boolean(message.content))
+    .slice(-MAX_HISTORY_MESSAGES);
+
+  // 上下文不能从失去对应问题的孤立回答开始。
+  while (normalized[0]?.role === 'assistant') {
+    normalized = normalized.slice(1);
+  }
+
+  return normalized;
+}
 
 function clientTokenHeaders() {
   return configuredAccessToken
@@ -73,8 +97,16 @@ export async function requestAgent({
   version = 1,
   page,
   questionText,
+  userQuestion,
+  messages,
   textOrigin,
 }) {
+  const normalizedUserQuestion = typeof userQuestion === 'string'
+    ? userQuestion.trim()
+    : '';
+
+  const normalizedMessages = normalizeMessages(messages);
+
   try {
     const response = await fetchWithTimeout(`${AGENT_PROXY_URL}/v1/agent/answer`, {
       method: 'POST',
@@ -86,6 +118,11 @@ export async function requestAgent({
         version,
         page,
         questionText,
+        ...(version === 2
+          ? { messages: normalizedMessages }
+          : normalizedUserQuestion
+            ? { userQuestion: normalizedUserQuestion }
+            : {}),
         textOrigin,
       }),
     }, REQUEST_TIMEOUT_MS);
