@@ -1,0 +1,1397 @@
+/* liquid.css — 对页的界面：iPadOS 26 那一套做法，落到这个应用上。两套皮肤（玻璃、纸）
+ * 共用这里的一切尺寸和排法；「纸」在 paper.css 里换一套材质。
+ *
+ * 最后加载，在 material.css 之后。它只管「看起来什么样」：颜色、字、形状、阴影、
+ * 图标、间距、层次。哪一层是玻璃、哪一层是纸、哪一层是控件，仍然由 material.css
+ * 说了算——这里只在各自那一层里把它做好，不把任何东西从一层搬到另一层。唯一的
+ * 例外写在顶上那一排那一节：横杠本身不再是一块玻璃，玻璃落到了它上面那两枚胶囊
+ * 上，所以胶囊重新拿回它的「玻璃」身份。
+ *
+ * 所有规则都挂在 html[data-skin] 下面，两套皮肤一起用：一个按钮在两套皮肤里一样大、
+ * 摆在同一个地方——换皮肤时什么都不许挪（人说「换界面时按钮会短暂位移」，挪的就是两
+ * 套各写各的尺寸）。颜色、玻璃、影子写成 tokens（下面第一节），「纸」在 paper.css 里
+ * 改写 tokens，再把几处玻璃独有的东西（渐变底、磨砂、胶囊的圆）换成纸的样子。只有
+ * settings.js 认得的两个名字会被挂上 data-skin。
+ *
+ * 几条贯穿全篇的规矩：
+ *
+ *   · 常驻在正文上的东西（顶上那一排和它正中的两个标签、栏头、工具栏）不磨砂。它们横
+ *     在人正在读的字上，磨砂糊掉的是内容——这是 base.css 和 pdf.css 里早就定下
+ *     的，这里照守。它们靠半透的底色、上沿一道亮边、柔和的投影读出「浮着」。
+ *   · 临时盖上来的东西（对话框、菜单、文档库、说明书）才磨砂：它们出现的时候，人
+ *     本来就不在读底下那一页。
+ *   · 控件平时是透明的，按下去才有一层填充；只有一件事用主题色——那一组里最主
+ *     要的那个动作。
+ *   · 图标是线条，1.8 的笔画、圆头圆角，颜色跟着字走（currentColor）。
+ *   · 行为相关的东西一概不碰：pointer-events、touch-action、菜单栏被拖动时的位
+ *     移、谁在谁上面。这些由各自的文件管，而且有测试钉着。
+ */
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Tokens
+   ══════════════════════════════════════════════════════════════════════════ */
+
+html[data-skin] {
+  /* 字：系统字。苹果设备上是 SF / 苹方，荣耀上是它自己的系统字——跟系统走，
+     比指定一种要这台机器专门下载的字体更像「原生」。 */
+  --font-stack: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "PingFang SC", "HarmonyOS Sans SC", "HONOR Sans", "MiSans", "Noto Sans CJK SC",
+    "Source Han Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+
+  /* 系统颜色（浅色）。和 iOS 的 label / secondaryLabel / separator / fill 一一对应。 */
+  --lg-label: #1d1d1f;
+  --lg-label-2: rgba(60, 60, 67, 0.64);
+  --lg-label-3: rgba(60, 60, 67, 0.38);
+  --lg-separator: rgba(60, 60, 67, 0.16);
+  --lg-fill: rgba(120, 120, 128, 0.12);
+  --lg-fill-2: rgba(120, 120, 128, 0.2);
+  /* 更淡的一档：栏头那枚胶囊的底。它只是把几颗按钮收成一组，不该比页面上的字重。 */
+  --lg-fill-soft: rgba(120, 120, 128, 0.075);
+  /* 输入框：比它所在的那一层亮一档。 */
+  --lg-field: rgba(255, 255, 255, 0.82);
+  /* 按钮是玻璃，颜色在字上。
+
+     人先说：既然是玻璃，那些按钮就该是玻璃，不该是一块蓝；换成全黑白之后又说太单调。
+     于是分开：底下那一块不再是一片蓝，而是一颗浮起来的玻璃泡——上亮下透的白、上沿一道
+     高光、底下一圈很淡的影子（--lg-bubble）；颜色回到它上面的图标和字上。选中的那一格
+     （当前页签、开着的按钮、划着的那一格）是白泡蓝字；主要的那一个动作（对答案、保存设
+     置、对话框里的「打开」、空桌面的「导入」）是一层平平的淡蓝、深一点的蓝字（--lg-primary，
+     见下面那条注释）。按钮底下那一层（胶囊、卡片、菜单）不动。
+
+     这支蓝是沉一点的 #3176dd（iOS 的 #007aff 铺开来晃眼，设置页那颗「保存设置」原来就是
+     被它晃的），只落在字、图标、细边上，不再整块铺开。 */
+  --lg-tint: #3176dd;
+  --lg-tint-press: #2a66c3;
+  --lg-tint-soft: rgba(49, 118, 221, 0.12);
+  --lg-tint-softer: rgba(49, 118, 221, 0.08);
+  /* 泡：上面比下面透一点（光从上面来），上沿一道半像素的高光——只到八成白、只有半像素：
+     人说边缘高光别过曝，原来那道 1px 纯白的边在浅色底上看着像打了过曝的光。 */
+  --lg-bubble: linear-gradient(180deg, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0.66) 100%);
+  --lg-bubble-press: linear-gradient(180deg, rgba(248, 249, 252, 0.86) 0%, rgba(236, 238, 243, 0.74) 100%);
+  --lg-bubble-shadow:
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.8),
+    inset 0 -0.5px 0 rgba(15, 23, 42, 0.05),
+    0 0 0 0.5px rgba(15, 23, 42, 0.08),
+    0 1px 4px -1px rgba(15, 23, 42, 0.14);
+  /* 主要的那一个动作：一层平平的淡蓝、深一点的蓝字，什么光都不打（纸里是一块钢笔色的章，
+     paper.css 改写）。
+     原来是一颗「带一点蓝的玻璃泡」：上浅下深的蓝白渐变、上沿一道白高光、一圈蓝边、底下一圈
+     蓝色的光晕——人说「这两个打光 AI 味太浓了」（对答案、保存设置）。渐变、高光、彩色的边和
+     光晕叠在一起，正是生成出来的界面最常见的那副样子。现在是 iOS 里 tinted 按钮的做法：一层
+     主题色的淡底，颜色就是全部的强调；字深一档（#2a66c3），淡底上读得清楚。 */
+  --lg-primary: rgba(49, 118, 221, 0.12);
+  --lg-primary-press: rgba(49, 118, 221, 0.2);
+  --lg-primary-text: var(--lg-tint-press);
+  --lg-primary-shadow: 0 0 #0000;
+  --lg-red: #ff3b30;
+  --lg-red-soft: rgba(255, 59, 48, 0.1);
+  --lg-green: #34c759;
+
+  /* 玻璃。按钮和菜单都是它（人说：既然是液态玻璃，按钮和菜单都该是玻璃质感——文件栏里
+     那条栏头除外）。
+
+     「半透」那一档给顶上那一排和按钮：上面透、下面更透一点的白，底下那层渐变透得上来；
+     磨砂（--lg-chrome-blur）——顶上那一排不压在正文上，底下只有桌面那片渐变，磨砂糊掉的
+     不是字。「厚」那一档给临时盖上来的菜单、对话框：白得多一点，列表里的字才读得清。 */
+  --lg-glass: linear-gradient(180deg, rgba(255, 255, 255, 0.66) 0%, rgba(255, 255, 255, 0.48) 100%);
+  --lg-glass-thin: rgba(255, 255, 255, 0.56);
+  --lg-glass-thick: linear-gradient(180deg, rgba(255, 255, 255, 0.86) 0%, rgba(247, 248, 251, 0.76) 100%);
+  --lg-blur: blur(30px) saturate(180%);
+  --lg-chrome-blur: blur(22px) saturate(170%);
+  /* 边缘高光：上沿半像素、四周一圈极细的白，都收着——原来是 1px 纯白的上沿加六成白的一圈，
+     浅色底上看着过曝。外面再一圈极淡的暗边，让白底上的玻璃也有轮廓。 */
+  --lg-rim:
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.78),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.3);
+  --lg-edge: 0 0 0 0.5px rgba(15, 23, 42, 0.07);
+  --lg-float:
+    0 1px 2px rgba(15, 23, 42, 0.06),
+    0 10px 28px -10px rgba(15, 23, 42, 0.22);
+  --lg-lift:
+    0 2px 6px rgba(15, 23, 42, 0.06),
+    0 28px 70px -24px rgba(15, 23, 42, 0.38);
+
+  --lg-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  /* 间距的那一格。屏幕四边、顶上那一排和两栏之间、两栏彼此之间，都是它——一屏
+     之内只有一种空隙，眼睛才读得出节奏。原来是四种（上 16、左右 14、栏外 6、栏间
+     20），两栏之间那道缝比栏外宽三倍，看着像两个各自为政的窗口。 */
+  --lg-gutter: 10px;
+  --app-bar-top: var(--lg-gutter);
+  --app-bar-gap: var(--lg-gutter);
+  --app-nav-h: 44px;
+  --lg-radius-control: 10px;
+  --lg-radius-card: 22px;
+  --lg-radius-sheet: 28px;
+
+  /* 老的几个变量也换成新的一套，没被这里点名的地方跟着变。 */
+  --fg: var(--lg-label);
+  --muted: rgba(60, 60, 67, 0.64);
+  --accent: var(--lg-tint);
+  --accent-light: var(--lg-tint-soft);
+  --text: var(--lg-label);
+}
+
+html[data-skin] body {
+  font-family: var(--font-stack);
+  color: var(--lg-label);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* 底色是一块很淡的冷暖渐变，不是一片平灰：玻璃要有东西可透，才看得出是玻璃。
+     淡到放一页白纸上去，纸仍然是整屏最亮、最清楚的那一块。 */
+  background:
+    radial-gradient(1100px 720px at 6% -14%, rgba(186, 206, 255, 0.36), transparent 62%),
+    radial-gradient(900px 640px at 108% 112%, rgba(233, 211, 248, 0.34), transparent 60%),
+    radial-gradient(700px 500px at 96% -8%, rgba(206, 238, 246, 0.3), transparent 60%),
+    linear-gradient(180deg, #f4f5f9 0%, #eceef4 100%);
+  background-attachment: fixed;
+}
+
+/* 工作区本身透明，让底下那层渐变透上来。 */
+html[data-skin] .pdf-workspace,
+html[data-skin] .pdf-workspace-host {
+  background: transparent;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   顶上那一排：三枚浮着的胶囊
+   ══════════════════════════════════════════════════════════════════════════
+
+   原来是一条横贯全屏的长条，左边挤着五个纯文字按钮，右边一大片空白。现在长条本
+   身透明，只剩它上面的胶囊：左边是「往桌上摆东西」的那几件（文档库、导入、组合、
+   新建纸张），正中是「练习 / 设置」两个标签（原来是底下一枚孤零零的胶囊，和这一
+   排隔着整整一屏），右边单独一枚是「收拾桌子」（全部关闭）——它和左边那几件是反
+   方向的动作，不该挨着，也不该被挤在一排字的末尾找不到。
+
+   三枚一样高（44）、一样的玻璃、一样的圆；离屏幕上沿、离左右两边、离下面的两栏，
+   都是 --lg-gutter。
+
+   胶囊是这一层唯一的玻璃，所以它拿回 material.css 摘掉的那块「玻璃」身份：那边
+   摘掉它，是因为它原来坐在横杠那块玻璃上，玻璃叠玻璃；横杠透明了，就没有叠。
+   不磨砂（理由见文件开头），靠底色、亮边和投影浮起来。 */
+
+/* 上边距不写在这里：它是 pdf.css 里的 --app-bar-top。那一排和两栏之间的缝也不是它
+   自己的下边距（它不在文档流里），是 --app-bar-gap，由工作区让出来。原来这里写死了
+   margin: 8px 14px 6px，收起顶栏时横杠滑走了，它占的那 66px 却还空在那里。 */
+html[data-skin] .pdf-page-bar {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  border-radius: 0;
+  margin-inline: var(--lg-gutter);
+  padding: 0;
+  column-gap: 12px;
+  min-height: 44px;
+}
+
+/* material.css 第三层里有一条 .pdf-bar-group { backdrop-filter: none !important }：那时候胶囊坐在一整
+   条玻璃横杠上，玻璃叠玻璃。横杠早就透明了，玻璃就在胶囊自己身上，这里要压过它。 */
+html[data-skin] .pdf-bar-group {
+  background: var(--lg-glass) !important;
+  backdrop-filter: var(--lg-chrome-blur) !important;
+  border: 0;
+  border-radius: 999px;
+  box-shadow: var(--lg-rim), var(--lg-edge), var(--lg-float);
+  padding: 4px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+html[data-skin] .pdf-bar-group.is-end {
+  margin-inline-start: auto;
+}
+
+html[data-skin] .pdf-page-bar .pdf-bar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px 0 11px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--lg-label);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  box-shadow: none;
+  transform: none;
+  transition: background 0.18s ease, color 0.18s ease, scale 0.16s var(--lg-ease);
+}
+
+/* 字号也得在这里再说一遍：上面那条 font-size: 14px 和 pdf.css 里收字那条一样具
+   体、又比它晚，不重说的话字收不掉，挤在 40px 里竖着排。 */
+html[data-skin] body.is-bar-compact .pdf-page-bar .pdf-bar-btn {
+  width: 40px;
+  padding: 0;
+  gap: 0;
+  font-size: 0;
+  justify-content: center;
+}
+
+/* 悬停只给真能悬停的设备。触摸屏上 Chrome 会把 :hover 留在最后碰过的那一格上——
+   平板上点完「导入」，那一格就一直顶着一块底色，像是卡住了。 */
+@media (hover: hover) and (pointer: fine) {
+  html[data-skin] .pdf-page-bar .pdf-bar-btn:hover {
+    background: var(--lg-hover, rgba(255, 255, 255, 0.7));
+    box-shadow: none;
+    transform: none;
+  }
+}
+
+/* 按下去、以及它的单子开着（导入、组合）：这一格是一颗玻璃泡。这是这一排里仅有的两种
+   「真的状态」——手一抬、单子一收，它就回去。 */
+html[data-skin] .pdf-page-bar .pdf-bar-btn:active,
+html[data-skin] .pdf-page-bar .pdf-bar-btn[aria-expanded="true"] {
+  background: var(--lg-bubble);
+  box-shadow: var(--lg-bubble-shadow);
+  transform: none;
+  scale: 0.97;
+}
+html[data-skin] .pdf-page-bar .pdf-bar-btn[aria-expanded="true"] { scale: 1; }
+
+.pdf-bar-icon {
+  width: 19px;
+  height: 19px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 「新建纸张」原来一直是蓝字、加粗，算是这一组里「最主要的那一个」。人说它一直是蓝的，点别
+   的按钮它也不变——看上去像是被选中了、卡住了。这四个都是动作，没有「现在选的是哪一个」，
+   所以一个样；亮只亮在真的状态上（按下、单子开着，见上面）。 */
+
+/* 「全部关闭」：图标是红的，字是正常的颜色。它会关掉东西，但不会删掉任何东西，
+   所以不整颗染红——染红是「永久删除」那种不可逆的事的颜色。 */
+html[data-skin] .pdf-page-bar .pdf-bar-btn[data-role="close-all"] .pdf-bar-icon {
+  color: var(--lg-red);
+}
+@media (hover: hover) and (pointer: fine) {
+  html[data-skin] .pdf-page-bar .pdf-bar-btn[data-role="close-all"]:hover {
+    background: var(--lg-red-soft);
+  }
+}
+
+html[data-skin] .pdf-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--lg-label-2);
+}
+html[data-skin] .pdf-status.is-error { color: var(--lg-red); }
+
+/* 展开的那两张单子（导入、组合）：iOS 的弹出菜单。临时盖上来的，磨砂。 */
+html[data-skin] .pdf-bar-menu,
+html[data-skin] .pdf-slot-menu {
+  background: var(--lg-glass-thick);
+  backdrop-filter: var(--lg-blur);
+  border: 0;
+  border-radius: 16px;
+  box-shadow: var(--lg-rim), var(--lg-edge), var(--lg-lift);
+  padding: 6px;
+  min-width: 232px;
+}
+
+html[data-skin] .pdf-bar-menu-item,
+html[data-skin] .pdf-slot-menu-item {
+  min-height: 44px;
+  border-radius: 10px;
+  padding: 0 14px;
+  gap: 12px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--lg-label);
+  letter-spacing: -0.01em;
+}
+@media (hover: hover) and (pointer: fine) {
+  html[data-skin] .pdf-bar-menu-item:hover,
+  html[data-skin] .pdf-slot-menu-item:hover { background: rgba(120, 120, 128, 0.1); }
+}
+html[data-skin] .pdf-bar-menu-item:active,
+html[data-skin] .pdf-slot-menu-item:active { background: rgba(120, 120, 128, 0.18); }
+
+/* 单子里相邻两项之间一道细线，和 iOS 的菜单一样；危险的那一项前面线粗一点，
+   把它和前面那些隔开。 */
+html[data-skin] .pdf-slot-menu-item:not([hidden]) ~ .pdf-slot-menu-item:not([hidden]),
+html[data-skin] .pdf-bar-menu-item ~ .pdf-bar-menu-item {
+  box-shadow: inset 0 0.5px 0 var(--lg-separator);
+}
+html[data-skin] .pdf-slot-menu-item.is-danger:not([hidden]) {
+  box-shadow: inset 0 6px 0 -5.5px rgba(60, 60, 67, 0.22);
+  margin-top: 4px;
+}
+html[data-skin] .pdf-slot-menu-item.is-danger { color: var(--lg-red); }
+@media (hover: hover) and (pointer: fine) {
+  html[data-skin] .pdf-slot-menu-item.is-danger:hover { background: var(--lg-red-soft); }
+}
+
+html[data-skin] .pdf-bar-menu-icon {
+  width: 21px;
+  height: 21px;
+  color: var(--lg-tint);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   两栏：卡片、栏头、切换条
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* 两栏和屏幕四边、和顶上那一排、和彼此之间，都隔 --lg-gutter。
+
+   两栏之间原来是 20px（3 + 14 + 3），栏外只有 6px：中间那道缝比外面宽三倍多，两
+   张卡片读起来像两个各自为政的窗口，而不是一个分成两半的桌面。现在它和外面一样
+   宽，那条细竖线也不画了——缝本身就是分隔，握柄（那颗 φ）说明它能拖。握柄的可按
+   范围比这道缝宽（pdf.css 的 .pdf-ws-divider-grip::before），手指照样按得中。 */
+html[data-skin] .pdf-workspace {
+  padding: 0 var(--lg-gutter) var(--lg-gutter);
+  gap: 0;
+}
+html[data-skin] .pdf-ws-divider { flex-basis: var(--lg-gutter); }
+html[data-skin] .pdf-ws-divider::before { display: none; }
+
+/* 每一栏是一张浮着的卡片：更圆、更轻的投影、上沿一道亮边。
+
+   卡片里原来还有一层随着光「流动」的高光（::before）。让它流动的那段指针追踪早就
+   拆了，它于是永远停在左上角——一块不动的反光，只是装饰。拿掉：卡片是装内容的，
+   不是玻璃；玻璃只给浮在上面的那几样。 */
+html[data-skin] .pdf-ws-slot {
+  border-radius: 24px;
+  border: 0;
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: var(--lg-rim), var(--lg-edge), var(--lg-float);
+}
+html[data-skin] .pdf-ws-slot::before { display: none; }
+
+/* 栏头：一枚按内容收着的胶囊，摆在这一栏顶上正中。
+
+   原来它从卡片左边拉到右边，底下再划一道线，读起来是一整条菜单栏压在页面上——人说
+   「太宽了，喧宾夺主，主体应该是显示的文件」。现在它只有那几颗按钮那么宽，一层极淡
+   的底把它们收成一组，两边空出来的是纸。图标用次一档的灰，按下去才是正常的黑。
+
+   放不下的时候照旧由 PdfWorkspace 的那道「阶梯」收读数（页码总数、缩放比例），它量
+   的是「这一栏能给多宽」——栏宽减去两边各一个 --slot-bar-gutter——不是胶囊自己的宽
+   度（那永远是刚好放得下）。 */
+html[data-skin] .pdf-slot-toolbar {
+  --slot-bar-gutter: 10px;
+  align-self: center;
+  width: fit-content;
+  max-width: calc(100% - 2 * var(--slot-bar-gutter));
+  height: 38px;
+  min-height: 0;
+  margin: 6px 0 0;
+  padding: 3px;
+  gap: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--lg-fill-soft);
+  backdrop-filter: none;
+  box-shadow: none;
+}
+/* 胶囊里没有「挤到最右边」这回事：尾巴上那道分隔线原来靠 auto 外边距把专注和 ⋯ 推到
+   卡片右上角，现在它们就挨着前面那几颗。 */
+html[data-skin] .pdf-slot-toolbar .pdf-slot-sep.is-tail { margin-inline-start: 3px; }
+
+/* 阶梯上那几级（material.css 的 is-narrow / is-snug）原来是靠「把间距收小」省地方
+   的，给的是 0.2rem——比这里的基础间距（0）还宽。挂上它反而更挤，挤了又退不回来。
+   在这套外观里间距本来就是 0，那几级只负责收字和读数。 */
+html[data-skin] .pdf-ws-slot.is-narrow .pdf-slot-toolbar,
+html[data-skin] .pdf-ws-slot.is-snug .pdf-slot-toolbar {
+  gap: 0;
+  padding-inline: 3px;
+}
+
+/* 草稿纸的名字不在栏头里说：下面那一行（切换条）就是它的名字，说两遍只是多占一截。 */
+html[data-skin] .pdf-slot-toolbar .pdf-slot-title { display: none; }
+
+html[data-skin] .pdf-slot-btn {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--lg-label-2);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: none;
+  transform: none;
+  transition: background 0.16s ease, color 0.16s ease, scale 0.14s var(--lg-ease);
+}
+@media (hover: hover) and (pointer: fine) {
+  html[data-skin] .pdf-slot-btn:hover:not(:disabled) { background: var(--lg-fill); color: var(--lg-label); }
+}
+html[data-skin] .pdf-slot-btn:active:not(:disabled) {
+  background: var(--lg-fill-2);
+  color: var(--lg-label);
+  transform: none;
+  scale: 0.94;
+}
+html[data-skin] .pdf-slot-btn:disabled { color: var(--lg-label-3); opacity: 1; }
+html[data-skin] .pdf-slot-btn.is-active {
+  color: var(--lg-tint);
+  background: var(--lg-bubble);
+  box-shadow: var(--lg-bubble-shadow);
+}
+
+.pdf-slot-icon {
+  width: 19px;
+  height: 19px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 页码框：一枚小灰胶囊，数字等宽，改页码时数字不会左右跳。 */
+html[data-skin] .pdf-slot-page {
+  width: 38px;
+  height: 26px;
+  margin-inline: 1px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--lg-field);
+  color: var(--lg-label);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  box-shadow: none;
+}
+html[data-skin] .pdf-slot-page:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--lg-tint-soft), inset 0 0 0 1px var(--lg-tint);
+}
+html[data-skin] .pdf-slot-total,
+html[data-skin] .pdf-slot-zoom {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--lg-label-3);
+  font-variant-numeric: tabular-nums;
+}
+html[data-skin] .pdf-slot-total { margin-inline: 2px 4px; }
+/* 读数的最小宽度只在它露着的时候作数：阶梯收它的时候是把 max-width 收到 0，而
+   min-width 比 max-width 硬——原来两样都在，它看不见了，那 3.1em 的空却还占着，「−」
+   和「+」之间平白隔出一大截。 */
+html[data-skin] .pdf-slot-zoom { min-width: 3.1em; text-align: center; }
+html[data-skin] .pdf-ws-slot.is-snugger .pdf-slot-zoom { min-width: 0; }
+/* 最窄那一级再收一点：一本书那一栏在平板上左右分栏时只有 472 宽，两级都收了还差 24px，最后那颗「⋯」
+   被挤出胶囊。按钮各窄 2px、页码框窄 4px、「对答案」（这时只剩图标）的内边距收小，正好放下。 */
+html[data-skin] .pdf-ws-slot.is-snugger .pdf-slot-btn { min-width: 30px; padding-inline: 4px; }
+html[data-skin] .pdf-ws-slot.is-snugger .pdf-slot-btn.is-answer-action { padding-inline: 6px; }
+html[data-skin] .pdf-ws-slot.is-snugger .pdf-slot-page { width: 34px; }
+
+html[data-skin] .pdf-slot-sep {
+  width: 0.5px;
+  height: 18px;
+  margin-inline: 3px;
+  background: var(--lg-separator);
+}
+
+/* 「对答案」：这一栏里最主要的那个动作，胶囊里一小块平平的淡蓝（--lg-primary，不打光）。 */
+html[data-skin] .pdf-slot-btn.is-answer-action {
+  color: var(--lg-primary-text);
+  background: var(--lg-primary);
+  box-shadow: var(--lg-primary-shadow);
+  border-radius: 999px;
+  padding: 0 10px 0 8px;
+  margin-inline: 2px;
+  gap: 4px;
+  font-weight: 600;
+}
+@media (hover: hover) and (pointer: fine) {
+  html[data-skin] .pdf-slot-btn.is-answer-action:hover:not(:disabled) {
+    background: var(--lg-primary-press);
+    color: var(--lg-primary-text);
+  }
+}
+
+/* 草稿纸的「回原点」「适合全部」原来是两枚带字的灰胶囊，整条栏头因为它们宽出去一
+   大截。现在和书的「适合宽度」「整页」一样是图标（字在 aria-label 和 title 里）。
+   保存读数也收着：存好了只是一个小勾，存着、没存、存坏了才用字说。 */
+html[data-skin] .pdf-slot-toolbar .scratch-save {
+  height: 28px;
+  margin-inline: 1px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--lg-label-3);
+  font-size: 12px;
+}
+html[data-skin] .pdf-slot-toolbar .scratch-save.is-unsaved { color: var(--lg-label-2); }
+html[data-skin] .pdf-slot-toolbar .scratch-save.is-failed {
+  color: var(--lg-red);
+  background: var(--lg-red-soft);
+  padding: 0 10px;
+}
+
+/* 切换条：一栏里叠着几本、现在是哪一本。
+
+   它读起来该是「这一栏的标题」，不是栏头底下的第二条菜单栏：不横贯整栏、不划线、不
+   上底色，按内容收着摆在胶囊正下方，字小一号。两头的箭头也收成小圆钮，只有要翻的
+   时候才看它们。 */
+html[data-skin] .deck-strip {
+  align-self: center;
+  width: fit-content;
+  max-width: calc(100% - 20px);
+  height: 28px;
+  min-height: 0;
+  margin: 2px 0 4px;
+  padding: 0;
+  gap: 2px;
+  border: 0;
+  border-bottom: 0;
+  background: transparent;
+}
+
+html[data-skin] .deck-arrow {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  color: var(--lg-label-3);
+  background: transparent;
+}
+@media (hover: hover) and (pointer: fine) {
+  html[data-skin] .deck-arrow:hover:not(:disabled) {
+    background: var(--lg-fill);
+    color: var(--lg-label);
+  }
+}
+html[data-skin] .deck-arrow:active:not(:disabled) { background: var(--lg-fill-2); }
+html[data-skin] .deck-arrow svg { width: 15px; height: 15px; stroke-width: 2; }
+
+html[data-skin] .deck-title {
+  flex: 0 1 auto;
+  min-height: 26px;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 0 10px;
+}
+@media (hover: hover) and (pointer: fine) {
+  html[data-skin] .deck-title:hover { background: var(--lg-fill-soft); }
+}
+html[data-skin] .deck-title:active { background: var(--lg-fill); }
+
+/* 「PDF」「草稿纸」那一小块：灰的，不是主题色——它是注脚，颜色留给能按的东西。 */
+html[data-skin] .deck-kind {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--lg-fill);
+  color: var(--lg-label-2);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+html[data-skin] .deck-name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--lg-label);
+}
+html[data-skin] .deck-count {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--lg-label-3);
+  font-variant-numeric: tabular-nums;
+}
+html[data-skin] .deck-hint {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--lg-label-3);
+}
+
+/* 本栏内容那张单子：同一种弹出菜单。 */
+html[data-skin] .deck-list {
+  background: var(--lg-glass-thick);
+  backdrop-filter: var(--lg-blur);
+  border: 0;
+  border-radius: 18px;
+  box-shadow: var(--lg-rim), var(--lg-edge), var(--lg-lift);
+}
+
+/* 纸在卡片里：一张真的纸——白、四角微圆、下面一道很软的影子。 */
+html[data-skin] .pdf-pane-canvas {
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 0.5px rgba(15, 23, 42, 0.06),
+    0 1px 3px rgba(15, 23, 42, 0.06),
+    0 14px 32px -18px rgba(15, 23, 42, 0.28);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   练习 / 设置：顶上正中的两个标签
+   ══════════════════════════════════════════════════════════════════════════
+
+   iPadOS 的做法：标签栏在顶上正中，和两边的按钮同一行。原来它是底边一枚孤零零
+   的胶囊，和顶上那一排隔着整整一屏，看着像漏在底下的一块；顶上那一排的正中却空
+   着一大截。挪上来之后三枚胶囊一行说完：摆东西、换页、收拾。
+
+   和两边的胶囊同一种玻璃、同一个高度、同一种按钮（36 高、图标＋字）。当前那一
+   格由那枚会滑的透镜标出来——一块淡淡的主题色，和栏头里「开着的」那几颗按钮
+   （.pdf-slot-btn.is-active）是同一种「选中」。不磨砂，理由见 base.css 里「顶上两
+   个标签」那条注释。 */
+
+html[data-skin] .app-nav {
+  padding: 4px;
+  gap: 2px;
+  border-radius: 999px;
+  background: var(--lg-glass);
+  backdrop-filter: var(--lg-chrome-blur);
+  box-shadow: var(--lg-rim), var(--lg-edge), var(--lg-float);
+}
+
+/* 字的颜色跟着透镜走，不跟着「选中的是哪一格」：透镜此刻盖住这一格的字多少（--lens-cover，
+   0～1，liquid-glass.js 逐帧写），这一格就蓝多少。人说「胶囊按钮完全离开字时，字的蓝色也该结束，
+   消失或去到另一个字」——原来蓝色挂在 .active 上，按住透镜划走、或者点了另一格透镜还在路上，
+   蓝色和透镜对不上。选中的那一格默认是 1：透镜还没摆上的那一两帧照旧是蓝的。颜色不过渡（pdf.css
+   那条 color 过渡在这里去掉）：它每一帧都跟着透镜算，再过渡就慢半拍。字重仍跟着选中的那一格——
+   跟着透镜变粗变细，字宽一变，整条都跟着抖。纸里 --lg-tint 是钢笔色，一样跟着那道线走。 */
+html[data-skin] .app-nav button {
+  min-height: 0;
+  height: 36px;
+  padding: 0 16px 0 13px;
+  gap: 6px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  --lens-cover: 0;
+  color: color-mix(in oklab, var(--lg-tint) calc(var(--lens-cover) * 100%), var(--lg-label-2));
+  transition: scale var(--transition-fast);
+}
+@media (hover: hover) and (pointer: fine) {
+  html[data-skin] .app-nav button:hover:not(.active) {
+    color: color-mix(in oklab, var(--lg-tint) calc(var(--lens-cover) * 100%), var(--lg-label));
+  }
+}
+html[data-skin] .app-nav button.active {
+  --lens-cover: 1;
+  color: color-mix(in oklab, var(--lg-tint) calc(var(--lens-cover) * 100%), var(--lg-label-2));
+  font-weight: 600;
+}
+html[data-skin] .app-nav button svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.9;
+  filter: none;
+  transform: none;
+}
+html[data-skin] body.is-bar-tight .app-nav button {
+  width: 44px;
+  padding: 0;
+  gap: 0;
+  font-size: 0;
+}
+
+/* 透镜：一颗浮起来的玻璃泡（原来是一块淡淡的蓝）。material.css 用 !important 把它钉成
+   了「无色、只折射」的那一种——那是给磨砂底上的分段控件的；这里底下是不磨砂的玻璃，
+   无色的透镜什么都看不出来。所以在这里给它实在的白和一道高光；material.css 那两层随
+   光转的高光拿掉，免得和这里的高光叠在一起发亮。纸上它是一块平的浅灰（paper.css 的
+   tokens）。 */
+html[data-skin] .app-nav .nav-glass-lens {
+  background: var(--lg-bubble) !important;
+  backdrop-filter: none !important;
+  box-shadow: var(--lg-bubble-shadow) !important;
+  border: 0 !important;
+}
+html[data-skin] .app-nav .nav-glass-lens::before,
+html[data-skin] .app-nav .nav-glass-lens::after { display: none !important; }
+
+/* 停进这一排里的工具栏：和另外三枚胶囊同一种玻璃、同一个高度——它是这一排里的第四枚，
+   不是浮在那一排上方的另一样东西。平时那种更透的玻璃和那两层高光在这里不要。收着的
+   那颗球也一样。 */
+html[data-skin] .ink-toolbar.is-perched:not(.is-docked) {
+  background: var(--lg-glass);
+  box-shadow: var(--lg-rim), var(--lg-edge), var(--lg-float);
+  backdrop-filter: var(--lg-chrome-blur);
+}
+html[data-skin] .ink-toolbar.is-perched::before,
+html[data-skin] .ink-toolbar.is-perched::after { display: none; }
+html[data-skin] .ink-toolbar.is-perched .ink-token {
+  background: var(--lg-glass);
+  box-shadow: var(--lg-rim), var(--lg-edge), var(--lg-float);
+  backdrop-filter: var(--lg-chrome-blur);
+}
+html[data-skin] .top-row-perch-hint {
+  background: var(--lg-tint-softer);
+  box-shadow: inset 0 0 0 1.5px var(--lg-tint), 0 0 0 5px var(--lg-tint-softer);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   文档库：大标题、一排五本
+   ══════════════════════════════════════════════════════════════════════════ */
+
+html[data-skin] .pdf-library {
+  background:
+    radial-gradient(900px 600px at 0% -10%, rgba(196, 214, 255, 0.36), transparent 60%),
+    radial-gradient(800px 560px at 105% 110%, rgba(236, 216, 248, 0.36), transparent 60%),
+    rgba(246, 247, 250, 0.9);
+  backdrop-filter: var(--lg-blur);
+  box-shadow: none;
+}
+
+/* iOS 的大标题：顶上一行只放按钮，大标题在它下面。
+
+   顶上那一行和练习页那一排是同一行——两个标签就浮在它的正中（它们在书架上面也
+   一直在），右边那颗「关闭」和练习页的「全部关闭」同一个位置、同一个高度。原来
+   标题和关闭并排在一行里，那一行比两个标签低半截，三样东西三个高度。 */
+html[data-skin] .pdf-library-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: var(--app-nav-h) auto auto;
+  grid-template-areas:
+    ".     close"
+    "title title"
+    "usage usage";
+  align-items: center;
+  column-gap: 16px;
+  row-gap: 2px;
+  padding: var(--app-bar-top) var(--lg-gutter) 10px 28px;
+  background: transparent;
+  border-bottom: 0;
+}
+html[data-skin] .pdf-library-header strong { margin-top: 4px; }
+html[data-skin] .pdf-library-header strong {
+  grid-area: title;
+  font-size: 34px;
+  line-height: 1.12;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--lg-label);
+}
+html[data-skin] .pdf-library-usage {
+  grid-area: usage;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--lg-label-2);
+}
+html[data-skin] .pdf-library-usage.is-error { color: var(--lg-red); }
+
+html[data-skin] .pdf-library-header .pdf-library-btn {
+  grid-area: close;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 38px;
+  padding: 0 16px 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--lg-glass);
+  backdrop-filter: var(--lg-chrome-blur);
+  box-shadow: var(--lg-rim), var(--lg-edge), var(--lg-float);
+  color: var(--lg-label);
+  font-size: 15px;
+  font-weight: 600;
+}
+html[data-skin] .pdf-library-header .pdf-library-btn:active { scale: 0.96; }
+
+html[data-skin] .pdf-library-list { padding: 4px 20px 48px; }
+
+/* 一排五本（平板横着大约每本 200px）。书架上原来的规矩是「宁可往下滚，也不把
+   封面缩到认不出」——两百像素的封面认得出来，四本一排那种两百六十像素的大块反
+   倒让一屏只装得下一排半。 */
+html[data-skin] .pdf-shelf {
+  grid-template-columns: repeat(auto-fill, minmax(min(176px, 100%), 1fr));
+  gap: 30px 26px;
+  padding: 14px 8px 40px;
+}
+
+html[data-skin] .pdf-book-block {
+  border-radius: 4px 12px 12px 4px;
+  box-shadow:
+    0 0 0 0.5px rgba(15, 23, 42, 0.08),
+    0 2px 4px rgba(15, 23, 42, 0.06),
+    0 18px 34px -16px rgba(15, 23, 42, 0.36);
+}
+
+/* 本子：封面就是它第一页的纸，空本子是一片白。不往上面画假的横线——人挑的是白
+   纸，封面就该是白纸——而是把书脊画成本子的样子：一道淡蓝的装订边，上面一列装订
+   孔。一眼看得出「这是一本可以写的本子」，不是一张什么都没印的封面。 */
+html[data-skin] .pdf-book-block.is-note::before {
+  width: 14px;
+  background:
+    radial-gradient(circle at 7px 50%, rgba(255, 255, 255, 0.95) 0 2.2px, transparent 2.6px) 0 8px / 14px 18px repeat-y,
+    linear-gradient(90deg, #cfdcf5 0%, #dfe8f8 70%, rgba(15, 23, 42, 0.08) 100%);
+}
+
+html[data-skin] .pdf-book-name {
+  margin-top: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--lg-label);
+}
+html[data-skin] .pdf-book-sub {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--lg-label-2);
+}
+
+/* 角上那个 ⋯：一枚小玻璃圆，压在封面右上角，一直看得见（触摸屏没有悬停）。液态玻璃里它挂成真的玻璃按钮
+   （liquid-glass-react.js 的 TARGETS），这里的底、磨砂、影子由 .lgr.lgr 撤掉；毛玻璃里就是这一颗。 */
+html[data-skin] .pdf-book-more {
+  top: 8px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+  opacity: 1;
+  z-index: 4;
+  border-radius: 999px;
+  background: var(--lg-glass-thick);
+  backdrop-filter: var(--lg-chrome-blur);
+  box-shadow: var(--lg-rim), 0 0 0 0.5px rgba(15, 23, 42, 0.1), 0 2px 8px rgba(15, 23, 42, 0.14);
+  color: var(--lg-label);
+}
+
+html[data-skin] .pdf-book-tag {
+  top: 10px;
+  left: 14px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(29, 29, 31, 0.64);
+}
+html[data-skin] .pdf-book-tag.is-combo {
+  background: var(--lg-tint);
+  color: #fff;
+}
+
+/* 文档库、说明书盖满整屏的时候，Agent 那颗圆按钮（层级比它们高）先退下：它问的
+   是「这一栏里这本书」，而这时候屏幕上没有哪一栏。 */
+body.is-library-open .pdf-agent-layer,
+body:has(.pdf-guide) .pdf-agent-layer { visibility: hidden; }
+
+html[data-skin] .pdf-book-block.is-add {
+  border: 1.5px dashed rgba(60, 60, 67, 0.24);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.45);
+  color: var(--lg-tint);
+  font-size: 40px;
+  font-weight: 300;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   对话框：iOS 的弹窗和操作单
+   ══════════════════════════════════════════════════════════════════════════ */
+
+html[data-skin] .deck-overlay {
+  background: rgba(15, 23, 42, 0.2);
+}
+
+html[data-skin] .deck-dialog {
+  max-width: 420px;
+  padding: 22px 20px 18px;
+  gap: 12px;
+  border-radius: var(--lg-radius-sheet);
+  background: var(--lg-glass-thick);
+  backdrop-filter: var(--lg-blur);
+  box-shadow: var(--lg-rim), var(--lg-edge), var(--lg-lift);
+}
+
+html[data-skin] .deck-dialog-title {
+  font-size: 18px;
+  line-height: 1.3;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--lg-label);
+}
+html[data-skin] .deck-dialog-note {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--lg-label-2);
+}
+
+/* 一列动作：一整块白底，行与行之间一道细线，像 iOS 设置里的分组。 */
+html[data-skin] .deck-actions {
+  gap: 0;
+  margin: 4px 0 2px;
+  border-radius: 16px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 0 0 0.5px rgba(15, 23, 42, 0.06);
+}
+html[data-skin] .deck-action {
+  min-height: 50px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--lg-label);
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+html[data-skin] .deck-action + .deck-action {
+  box-shadow: inset 0 0.5px 0 var(--lg-separator);
+}
+html[data-skin] .deck-action:active { background: rgba(120, 120, 128, 0.16); }
+html[data-skin] .deck-action.is-danger { color: var(--lg-red); }
+@media (hover: hover) and (pointer: fine) {
+  html[data-skin] .deck-action:hover { background: rgba(120, 120, 128, 0.1); }
+  html[data-skin] .deck-action.is-danger:hover {
+    background: var(--lg-red-soft);
+    color: var(--lg-red);
+  }
+}
+
+html[data-skin] .deck-dialog-actions {
+  gap: 10px;
+  padding-top: 4px;
+}
+html[data-skin] .deck-dialog-btn {
+  min-height: 46px;
+  min-width: 110px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--lg-bubble);
+  box-shadow: var(--lg-bubble-shadow);
+  color: var(--lg-label);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  transition: background 0.16s ease, scale 0.14s var(--lg-ease);
+}
+html[data-skin] .deck-dialog-btn:active:not(:disabled) { scale: 0.97; }
+@media (hover: hover) and (pointer: fine) {
+  html[data-skin] .deck-dialog-btn:hover:not(:disabled) { background: var(--lg-bubble-press); }
+}
+html[data-skin] .deck-dialog-btn.is-primary {
+  background: var(--lg-primary);
+  color: var(--lg-primary-text);
+  box-shadow: var(--lg-primary-shadow);
+  font-weight: 700;
+}
+html[data-skin] .deck-dialog-btn.is-primary:active:not(:disabled) { background: var(--lg-primary-press); }
+@media (hover: hover) and (pointer: fine) {
+  html[data-skin] .deck-dialog-btn.is-primary:hover:not(:disabled) {
+    background: var(--lg-primary-press);
+  }
+}
+html[data-skin] .deck-dialog-btn.is-danger {
+  background: var(--lg-red);
+  color: #fff;
+}
+/* 只有一颗「取消」的那种单子（操作单）：它占满整行，和上面那一列动作对齐。 */
+html[data-skin] .deck-actions + .deck-dialog-actions .deck-dialog-btn:only-child {
+  flex: 1;
+}
+
+html[data-skin] .deck-dialog input[type="text"],
+html[data-skin] .deck-dialog input:not([type]),
+html[data-skin] .deck-dialog textarea {
+  border: 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 0 0 0.5px rgba(15, 23, 42, 0.1);
+  font-size: 16px;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   提示条：一枚浮在底部的玻璃胶囊
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* 离底边的高度：原来要让开底下那条菜单栏（96）；现在让开的是贴底边横着的工具栏
+   （它顶上大约在 66 的地方）。 */
+html[data-skin] .save-toast {
+  bottom: calc(76px + var(--safe-b, 0px));
+  max-width: min(560px, calc(100vw - 48px));
+  padding: 12px 20px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(29, 29, 31, 0.82);
+  backdrop-filter: blur(20px) saturate(160%);
+  box-shadow: 0 0 0 0.5px rgba(255, 255, 255, 0.12), 0 16px 40px -12px rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  text-align: center;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   空的工作区
+   ══════════════════════════════════════════════════════════════════════════ */
+
+html[data-skin] .pdf-empty-card {
+  border-radius: 30px;
+  padding: 40px 44px 36px;
+  box-shadow: var(--lg-rim), var(--lg-edge), var(--lg-float);
+}
+html[data-skin] .pdf-empty-icon {
+  width: 76px;
+  height: 76px;
+  border-radius: 20px;
+  background: var(--lg-primary);
+  color: var(--lg-tint);
+  /* 底下原来还有一团蓝色的光晕，和那两颗按钮是同一种「打光」，一起拿掉。 */
+  box-shadow: var(--lg-primary-shadow);
+}
+html[data-skin] .pdf-empty-title {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--lg-label);
+}
+html[data-skin] .pdf-empty-desc {
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--lg-label-2);
+  /* 只在标点处换行、几行一样长：中文默认哪两个字之间都能断，一段说明会断成「另一 / 栏就翻到」
+     那样。每一小句都不长，放得下。 */
+  word-break: keep-all;
+  text-wrap: balance;
+}
+html[data-skin] .pdf-empty-btn {
+  min-height: 46px;
+  padding: 0 22px;
+  border-radius: 999px;
+  font-size: 16px;
+  font-weight: 600;
+}
+/* 空桌面上那颗「导入」：主要的那个动作，一颗玻璃泡（纸里是一块墨）。 */
+html[data-skin] .pdf-empty-btn.primary {
+  background: var(--lg-primary);
+  color: var(--lg-primary-text);
+  box-shadow: var(--lg-primary-shadow);
+}
+html[data-skin] .pdf-empty-btn.secondary {
+  background: var(--lg-bubble);
+  box-shadow: var(--lg-bubble-shadow);
+  color: var(--lg-label);
+  border: 0;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   设置：iOS 设置那种分组
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* 上边距由 base.css 给（让开顶上的两个标签）；这里只把大标题往上提一点，免得
+   它和两个标签之间空得像断了一截。 */
+html[data-skin] #page-settings .settings-title { margin-top: 6px; }
+
+html[data-skin] .settings-body {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.settings-title {
+  margin: 18px 4px 18px;
+  font-size: 34px;
+  line-height: 1.12;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--lg-label, #1d1d1f);
+}
+
+html[data-skin] .set-group {
+  border-radius: 18px;
+  padding: 6px 18px;
+  margin-bottom: 26px;
+  box-shadow: 0 0 0 0.5px rgba(15, 23, 42, 0.06), 0 8px 24px -16px rgba(15, 23, 42, 0.2);
+  border: 0;
+}
+
+/* 分组的名字：小一号的灰字，像 iOS 分组上面那一行。 */
+html[data-skin] .set-group-title {
+  margin: 10px 0 4px;
+  padding: 0;
+  border: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--lg-label-2);
+}
+
+html[data-skin] .set-section {
+  margin: 0;
+  padding: 12px 0;
+}
+html[data-skin] .set-section + .set-section {
+  box-shadow: inset 0 0.5px 0 var(--lg-separator);
+}
+
+/* 一行：名字在左、取值在右。 */
+html[data-skin] .set-section:has(> .set-select-wrap) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 220px);
+  align-items: center;
+  column-gap: 16px;
+}
+html[data-skin] .set-section:has(> .set-select-wrap) > .set-section-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--lg-label);
+}
+html[data-skin] .set-select-btn {
+  min-height: 38px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--lg-bubble);
+  box-shadow: var(--lg-bubble-shadow);
+  color: var(--lg-label);
+  font-size: 15px;
+  font-weight: 500;
+}
+/* 下拉出来的那张单子：和顶上那几张单子同一种厚玻璃。它原来是近乎不透明的白（理由见
+   base.css：卡片里的字会透上来）——厚玻璃 + 30px 的磨砂，底下的字糊成一片，读不出来，也
+   就不会和选项叠在一起。 */
+html[data-skin] .set-select-dropdown {
+  background: var(--lg-glass-thick);
+  backdrop-filter: var(--lg-blur);
+  border: 0;
+  border-radius: 14px;
+  box-shadow: var(--lg-rim), var(--lg-edge), var(--lg-lift);
+}
+
+/* 开关：名字在左、开关在右——iOS 从来都是这么摆的。原来开关在前、字在后。 */
+html[data-skin] .set-toggle {
+  display: flex;
+  flex-direction: row-reverse;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  min-height: 36px;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--lg-label);
+}
+html[data-skin] .set-toggle input:checked + .set-toggle-track { background: var(--lg-green); }
+
+html[data-skin] .action-btn {
+  min-height: 46px;
+  border-radius: 999px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+/* 「保存设置」：这一页最主要的那个动作，一层平平的淡蓝、深蓝字（纸里是一块钢笔色的章）。
+   最早是整条实心的蓝、外面再带一圈蓝光——人说晃眼；后来是一颗打了光的淡蓝玻璃泡——人说
+   AI 味太浓。现在不打光（见 tokens 里 --lg-primary 那条注释）。 */
+html[data-skin] #settingsSave {
+  background: var(--lg-save-bg, var(--lg-primary)) !important;
+  color: var(--lg-save-text, var(--lg-primary-text)) !important;
+  border: 0;
+  box-shadow: var(--lg-save-shadow, var(--lg-primary-shadow)) !important;
+}
+html[data-skin] #settingsSave:active {
+  background: var(--lg-save-press, var(--lg-primary-press)) !important;
+}
+html[data-skin] .action-btn.secondary {
+  background: var(--lg-bubble);
+  box-shadow: var(--lg-bubble-shadow);
+  color: var(--lg-tint);
+  border: 0;
+}
+
+html[data-skin] .set-legal-name {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+html[data-skin] .set-legal-line {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--lg-label-2);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   使用说明：iOS「提示」那种卡片
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* 不透明，不磨砂——理由见 pdf.css 里 .pdf-guide 上的注释：底下压着一整架封面，
+   隔着毛玻璃照样认得出来，和要读的说明搅在一起。渐变画在一块实底上。 */
+html[data-skin] .pdf-guide {
+  background:
+    radial-gradient(900px 600px at 0% -10%, rgba(196, 214, 255, 0.45), transparent 60%),
+    radial-gradient(800px 560px at 105% 110%, rgba(236, 216, 248, 0.45), transparent 60%),
+    #f5f6fa;
+}
+html[data-skin] .pdf-guide-body { padding-bottom: 48px; }
+/* 顶上一行和练习页那一排同一行：两个标签浮在它的正中，右边的「关闭」和「全部关
+   闭」一个位置。 */
+html[data-skin] .pdf-guide-header {
+  background: transparent;
+  border-bottom: 0;
+  box-sizing: content-box;
+  flex: none;
+  height: var(--app-nav-h);
+  padding: var(--app-bar-top) var(--lg-gutter) 0 24px;
+}
+html[data-skin] .pdf-guide-header strong {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--lg-label-2);
+}
+html[data-skin] .pdf-guide-header .pdf-library-btn {
+  height: 38px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--lg-glass);
+  backdrop-filter: var(--lg-chrome-blur);
+  box-shadow: var(--lg-rim), var(--lg-edge), var(--lg-float);
+  color: var(--lg-label);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+html[data-skin] .guide-head h2 {
+  font-size: 34px;
+  line-height: 1.12;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  color: var(--lg-label);
+}
+html[data-skin] .guide-head p {
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--lg-label-2);
+}
+
+html[data-skin] .guide-card {
+  border: 0;
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 0 0 0.5px rgba(15, 23, 42, 0.06), 0 16px 40px -24px rgba(15, 23, 42, 0.3);
+}
+/* 章节标签：玻璃小胶囊，前面一枚编号。 */
+html[data-skin] .guide-toc { gap: 10px; margin-top: 22px; }
+html[data-skin] .guide-toc-chip {
+  min-height: 40px;
+  padding: 0 16px 0 6px;
+  border: 0;
+  background: var(--lg-glass);
+  backdrop-filter: var(--lg-chrome-blur);
+  box-shadow: var(--lg-rim), var(--lg-edge), var(--lg-float);
+  color: var(--lg-label);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  transition: scale 0.14s var(--lg-ease), background 0.16s ease;
+}
+html[data-skin] .guide-toc-chip:active { scale: 0.96; }
+html[data-skin] .guide-toc-no,
+html[data-skin] .guide-chapter-no {
+  background: var(--lg-tint);
+  color: #fff;
+}
+
+html[data-skin] .guide-chapter { margin-top: 40px; }
+html[data-skin] .guide-chapter-title {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--lg-label);
+}
+
+html[data-skin] .guide-card-text h4 {
+  font-size: 19px;
+  line-height: 1.3;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--lg-label);
+}
+html[data-skin] .guide-card-text p {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--lg-label-2);
+}
+html[data-skin] .guide-foot {
+  font-size: 13px;
+  color: var(--lg-label-3);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Reduce Transparency / Reduce Motion
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@media (prefers-reduced-transparency: reduce) {
+  html[data-skin] .pdf-bar-group,
+  html[data-skin] .pdf-bar-menu,
+  html[data-skin] .pdf-slot-menu,
+  html[data-skin] .deck-list,
+  html[data-skin] .deck-dialog,
+  html[data-skin] .save-toast,
+  html[data-skin] .pdf-guide {
+    backdrop-filter: none !important;
+    background: #fff !important;
+    color: var(--lg-label) !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-skin] .pdf-page-bar .pdf-bar-btn,
+  html[data-skin] .pdf-slot-btn,
+  html[data-skin] .deck-dialog-btn { transition: none; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   找页面板：分段控件
+   ══════════════════════════════════════════════════════════════════════════
+
+   顶上那三页（目录、缩略图、书签）原来是带下划线的一排字。iOS 里「同一块地方
+   的几种看法」用分段控件：一条灰槽，选中的那一段是一块浮起来的白。面板本身还是
+   不透明的（理由见 pdf.css 里 .pdf-outline-panel 上的注释），只是下沿收成圆角，
+   和卡片、菜单是同一套形状。 */
+
+html[data-skin] .pdf-outline-panel {
+  border-bottom: 0;
+  border-radius: 0 0 20px 20px;
+  box-shadow: 0 0 0 0.5px rgba(15, 23, 42, 0.06), 0 18px 40px -20px rgba(15, 23, 42, 0.32);
+}
+
+html[data-skin] .pdf-panel-tabs {
+  align-self: center;
+  gap: 2px;
+  margin: 2px auto 10px;
+  padding: 3px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--lg-fill);
+}
+
+html[data-skin] .pdf-panel-tab {
+  min-width: 92px;
+  margin: 0;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--lg-label);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  transition: background 0.18s ease, box-shadow 0.18s ease;
+}
+
+html[data-skin] .pdf-panel-tab.is-selected {
+  background: #fff;
+  color: var(--lg-label);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12), 0 0 0 0.5px rgba(15, 23, 42, 0.05);
+}
+
+/* 点和划都行（liquid-glass.js 给它挂了一块会滑的透镜）：选中的那块白由透镜来画，跟
+   着手指走、松手落到哪一格就是哪一格；那一格自己不再另铺一层，不然会看到两块白。
+   material.css 用 !important 把透镜钉成了「无色、只折射」的那种，这里把它改回一块
+   实在的白，那两层高光也拿掉。 */
+html[data-skin] .pdf-panel-tabs { position: relative; touch-action: none; }
+html[data-skin] .pdf-panel-tabs .segmented-glass-lens {
+  border-radius: 8px !important;
+  background: var(--lg-seg-thumb, #fff) !important;
+  backdrop-filter: none !important;
+  box-shadow: var(--lg-seg-thumb-shadow, 0 1px 3px rgba(15, 23, 42, 0.12), 0 0 0 0.5px rgba(15, 23, 42, 0.05)) !important;
+}
+html[data-skin] .pdf-panel-tabs .segmented-glass-lens::before,
+html[data-skin] .pdf-panel-tabs .segmented-glass-lens::after { display: none !important; }
+html[data-skin] .pdf-panel-tabs:has(.segmented-glass-lens) .pdf-panel-tab.is-selected {
+  background: transparent;
+  box-shadow: none;
+}

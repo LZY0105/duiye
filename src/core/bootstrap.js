@@ -36,20 +36,81 @@ export async function bootstrap() {
  * 迟早会漏掉后来加进点击那一份里的事情——背景的开关就是这么来的。
  */
 function bindTabs() {
-  for (const tab of document.querySelectorAll('.bottom-nav button')) {
+  for (const tab of document.querySelectorAll('.app-nav button')) {
     tab.addEventListener('click', () => showPage(tab.dataset.page));
   }
 }
 
-/** 让某一页成为当前页；标签的高亮和背景跟着走。 */
-function showPage(name) {
-  for (const tab of document.querySelectorAll('.bottom-nav button')) {
+/**
+ * 走掉的那一页淡出多久：取最长的那一段——练习页顶上那两枚胶囊收拢要 0.3 秒，整页
+ * 的计时（pdf.css 的 pageHold）是 0.32 秒。兜底的计时器再多给一点余量：动画结束
+ * 事件没来（页面在后台、动画被系统停了）也照样收得掉。
+ */
+export const PAGE_LEAVE_MS = 320;
+
+/**
+ * 让某一页成为当前页；标签的高亮和背景跟着走。
+ *
+ * 来的那一页淡入（.page.active 上的 pageFadeIn），走的那一页也要淡出——原来它是
+ * 当场消失的：一页凭空没了、另一页慢慢浮上来，两半动作不对称，看着像闪了一下。
+ * 走的那一页挂上 is-leaving，钉在它原来的位置上（滚过的距离也算上）淡出，结束了
+ * 才真的收起来。它在淡出的时候什么都点不到（pointer-events: none、inert）。
+ *
+ * body 上记一笔现在是哪一页：两个标签在顶上正中，练习页上它们跟着那一排一起收
+ * 起来，设置页上没有那一排，它们得一直在——CSS 靠这个分。
+ */
+export function showPage(name) {
+  for (const tab of document.querySelectorAll('.app-nav button')) {
     tab.classList.toggle('active', tab.dataset.page === name);
   }
+  const reduced = prefersReducedMotion();
   for (const page of document.querySelectorAll('.page')) {
-    page.classList.toggle('active', page.id === `page-${name}`);
+    const coming = page.id === `page-${name}`;
+    const was = page.classList.contains('active');
+    if (coming) settlePage(page);
+    else if (was && !reduced) leavePage(page);
+    page.classList.toggle('active', coming);
   }
+  if (document.body) document.body.dataset.page = name;
   syncBackgroundToPage(name);
+}
+
+/** 这一页淡出。回来得比它走完还快的话，settlePage 会把它拦下。 */
+function leavePage(page) {
+  settlePage(page);
+  // 钉住的是它此刻在屏幕上的位置：它要变成 fixed，而 fixed 不跟着文档滚。
+  page.style.setProperty('--leave-top', `${-(window.scrollY || 0)}px`);
+  page.classList.add('is-leaving');
+  page.inert = true;
+  // 只认它自己的那一段动画：页里别的东西（转圈、卡片入场）的 animationend 也会冒
+  // 泡到这里。
+  const done = (e) => {
+    if (e && e.target !== page) return;
+    settlePage(page);
+  };
+  page.addEventListener('animationend', done);
+  page._leaveTimer = setTimeout(done, PAGE_LEAVE_MS + 60);
+  page._leaveDone = done;
+}
+
+/** 收尾：不管是淡完了、还是半路被叫了回来。 */
+function settlePage(page) {
+  clearTimeout(page._leaveTimer);
+  if (page._leaveDone) page.removeEventListener('animationend', page._leaveDone);
+  page._leaveTimer = 0;
+  page._leaveDone = null;
+  if (!page.classList.contains('is-leaving')) return;
+  page.classList.remove('is-leaving');
+  page.style.removeProperty('--leave-top');
+  page.inert = false;
+}
+
+function prefersReducedMotion() {
+  try {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  } catch (_) {
+    return false;
+  }
 }
 
 /**

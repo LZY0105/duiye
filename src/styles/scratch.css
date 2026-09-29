@@ -122,6 +122,14 @@
 
 .scratch-save.is-saved,
 .scratch-save.is-saving { color: var(--muted); }
+/* 存好了只是一个小勾（字在 aria-label 里）：不要底、不要边，就一个勾。 */
+.scratch-save.is-saved {
+  min-width: 26px;
+  padding: 0 3px;
+  border-color: transparent;
+  background: transparent;
+}
+.scratch-save .pdf-slot-icon { width: 16px; height: 16px; stroke-width: 2; }
 
 /* Unsaved is not an alarm — it is the ordinary state of a pad being written
    on — so it only steps up to the same weight as the labels around it. */
@@ -262,7 +270,7 @@
 
 .style-segment.is-selected {
   border-color: var(--accent, #2563eb);
-  background: rgba(37, 99, 235, 0.08);
+  background: color-mix(in srgb, var(--accent, #2563eb) 8%, transparent);
 }
 
 .style-note { margin: 0; font-size: 0.74rem; line-height: 1.5; }

@@ -34,8 +34,13 @@ export function screenToDocument(transform, x, y) {
   };
 }
 
-/** Width at a sample, blending the tool's base width with pen pressure. */
-function widthAt(stroke, pressure) {
+/**
+ * Width at a sample, blending the tool's base width with pen pressure.
+ *
+ * 导出 PDF 时也用它（src/export/pdf-export.js）：导出来的每一笔和屏幕上那一笔必须是
+ * 同一个粗细，所以两边问同一个函数，而不是各算各的。
+ */
+export function widthAt(stroke, pressure) {
   const defaults = TOOL_DEFAULTS[stroke.tool] || TOOL_DEFAULTS[INK_TOOLS.PEN];
   const range = defaults.pressureRange;
   if (!range) return stroke.width;

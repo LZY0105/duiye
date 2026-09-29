@@ -17,7 +17,16 @@
 // dispatching one real click so the app's own handler does the routing.
 
 const EASE = 'cubic-bezier(0.32, 0.72, 0, 1)';
+/** 透镜滑到新那一格用多久（点一下、拖完松手都是它）。 */
+const SLIDE_MS = 380;
 const DRAG_THRESHOLD = 4;
+/**
+ * 横着的那几种（两个标签、分段控件）要走多远才定方向。和顶上那一排的收起手势
+ * （pdf-workspace-ui.js 的 DRAG_START）是同一个数、同一条规矩：过了这么远，竖着走得
+ * 多的归收起，横着走得多（或一样多）的归这里。两边在同一个事件上各自下结论，结论正好
+ * 互补——不会一个在滑透镜、一个在收那一排。
+ */
+const AXIS_DECIDE = 10;
 
 let isInitialized = false;
 /** Set by initLiquidGlass(); gives every listener and observer back. */
@@ -61,7 +70,8 @@ const transitionFor = (props, ms = 380) =>
  * @param {HTMLElement} container element the lens rides inside
  * @param {string} itemSelector   the items it snaps between
  * @param {string} lensClass      class of the lens element to create
- * @param {{vertical?: boolean, activeClasses?: string[]}} [opts]
+ * @param {{vertical?: boolean, activeClasses?: string[], tintFollows?: boolean}} [opts]
+ *   tintFollows：字的颜色跟着透镜走（见下面的 paintCover）。
  */
 function setupSlidingLens(container, itemSelector, lensClass, opts = {}) {
   if (!container || container._hasSlidingLens) return;
@@ -101,6 +111,54 @@ function setupSlidingLens(container, itemSelector, lensClass, opts = {}) {
 
   const activeItem = () => container.querySelector(activeSelector) || items[0];
 
+  // 透镜正滑向新那一格时（点了另一格、刚松开拖动），这一段滑完之前的时刻。
+  let slideEndsAt = 0;
+
+  // ── 字的颜色跟着透镜走 ──
+  //
+  // 人说「胶囊按钮完全离开字时，字的蓝色也该结束，消失或去到另一个字」：原来蓝色挂在选中的
+  // 那一格（.active）上，按住透镜划到另一格、或者点了另一格透镜还在路上，蓝色早就（或者还）
+  // 在那一格上，和透镜对不上。现在每一格记一个 --lens-cover：透镜此刻盖住它的字多少（0～1）；
+  // 样式按它在蓝和灰之间调（liquid.css 的 .app-nav button）。完全离开是 0——灰；整个盖住是 1——蓝。
+  // 量的是字（和前面那个图标）实际画在哪，不是整颗按钮：按钮比字宽一截内边距，透镜离开按钮
+  // 的边时，字早就没被盖着了。
+  const tintFollows = !!opts.tintFollows;
+  const contentOf = (item) => {
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(item);
+      const r = range.getBoundingClientRect();
+      if (r && r.width > 0) return r;
+    } catch (_) { /* 没有 Range 的地方：退回整颗按钮 */ }
+    return item.getBoundingClientRect();
+  };
+  const paintCover = () => {
+    if (!tintFollows) return;
+    const l = lens.getBoundingClientRect();
+    for (const item of items) {
+      const b = contentOf(item);
+      const covered = Math.max(0, Math.min(l.right, b.right) - Math.max(l.left, b.left));
+      const cover = b.width > 0 ? Math.min(1, covered / b.width) : 0;
+      item.style.setProperty('--lens-cover', String(Math.round(cover * 1000) / 1000));
+    }
+  };
+  // 透镜靠过渡滑的那一段（点了另一格、松开拖动）没有事件可听：这段时间里逐帧量。
+  let coverFrame = 0;
+  let coverUntil = 0;
+  const followCover = (ms) => {
+    if (!tintFollows) return;
+    paintCover();
+    if (typeof requestAnimationFrame !== 'function') return;
+    coverUntil = Math.max(coverUntil, performance.now() + ms);
+    if (coverFrame) return;
+    const tick = () => {
+      coverFrame = 0;
+      paintCover();
+      if (performance.now() < coverUntil) coverFrame = requestAnimationFrame(tick);
+    };
+    coverFrame = requestAnimationFrame(tick);
+  };
+
   const place = (target, immediate = false) => {
     // A user-driven drag owns the lens until it lets go.
     if (isSliding) return;
@@ -113,14 +171,33 @@ function setupSlidingLens(container, itemSelector, lensClass, opts = {}) {
     // lens in the corner, and the transition would animate it out from there.
     if (cRect.width === 0 || iRect.width === 0) return;
 
-    lens.style.transition = (immediate || reduced)
-      ? 'none'
-      : transitionFor(['left', 'top', 'width', 'height', 'transform']);
-    lens.style.left = `${iRect.left - cRect.left}px`;
-    lens.style.top = `${iRect.top - cRect.top}px`;
-    lens.style.width = `${iRect.width}px`;
-    lens.style.height = `${iRect.height}px`;
+    const left = `${iRect.left - cRect.left}px`;
+    const top = `${iRect.top - cRect.top}px`;
+    const width = `${iRect.width}px`;
+    const height = `${iRect.height}px`;
+
+    // 滑着的时候来一声「当场重摆」，不跳，接着滑、只把终点改到量出来的新位置上。
+    //
+    // 人说「这个条点击选择时也做滑过去的动画」：从设置点回练习，透镜是一帧跳过去的。点下去
+    // 那一刻它确实开始滑了，可同一帧里顶上那一排从藏着变成露出来，top-bar-fit 量完就叫一声
+    // 重摆（_relayoutLens），过渡一关、当场落到终点。同样会来掐的还有工作区发的 resize、
+    // 哪一格尺寸变了（ResizeObserver）。重摆本来是给「没在动的时候尺寸变了」用的，那时照旧当场到位。
+    const now = performance.now();
+    const animate = !reduced && (!immediate || now < slideEndsAt);
+    const moves = lens.style.left !== left || lens.style.top !== top
+      || lens.style.width !== width || lens.style.height !== height;
+    if (animate && !immediate && moves) slideEndsAt = now + SLIDE_MS;
+
+    lens.style.transition = animate
+      ? transitionFor(['left', 'top', 'width', 'height', 'transform'], SLIDE_MS)
+      : 'none';
+    lens.style.left = left;
+    lens.style.top = top;
+    lens.style.width = width;
+    lens.style.height = height;
     lens.style.removeProperty('scale');
+    // 字的颜色：滑着的那一段逐帧跟着量（多给一点，过渡的最后一帧也量到），当场到位的量一次。
+    if (animate) followCover(SLIDE_MS + 60); else paintCover();
   };
 
   // Follow the active item wherever it is set from — the app's own routing, a
@@ -132,6 +209,15 @@ function setupSlidingLens(container, itemSelector, lensClass, opts = {}) {
   // Two frames: one for the class to land, one for layout to settle under it.
   requestAnimationFrame(() => requestAnimationFrame(relayout));
   window.addEventListener('resize', relayout, { passive: true });
+  // 容器或者哪一格自己变了大小——从藏着到露出来（找页面板打开）、换了皮肤、换了语言——
+  // 当场重摆，不演。原来只听窗口的 resize：这几种时候透镜停在旧的地方，等下一次点才滑
+  // 过去，看上去就是选中的那一格底色「晃了一下」。ResizeObserver 在排完版、画出来之前
+  // 回调，摆完正好赶上这一帧。
+  if (typeof ResizeObserver === 'function') {
+    const sizeWatch = new ResizeObserver(() => { if (!isSliding) relayout(); });
+    sizeWatch.observe(container);
+    items.forEach((item) => sizeWatch.observe(item));
+  }
   if (document.fonts?.ready) document.fonts.ready.then(relayout).catch(() => {});
   container._relayoutLens = relayout;
 
@@ -174,7 +260,19 @@ function setupSlidingLens(container, itemSelector, lensClass, opts = {}) {
     const dy = e.clientY - startY;
 
     if (!isSliding) {
-      if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+      if (opts.vertical) {
+        if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+      } else {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < AXIS_DECIDE) return;
+        // 竖着走的不是在挑：顶上那两个标签上是在拉那一排（initChromeHiding），面板里
+        // 是在滚。放手，而且要在拿指针之前放——拿了，后面整段都改道到这里，松手还会
+        // 替人点一下最近的那一格（顶上那两个就是换页）。
+        if (Math.abs(dy) > Math.abs(dx)) {
+          isTracking = false;
+          capturedId = null;
+          return;
+        }
+      }
       isSliding = true;
       try { container.setPointerCapture(capturedId); } catch (_) { /* not capturable */ }
       lens.style.transition = 'none';
@@ -193,6 +291,8 @@ function setupSlidingLens(container, itemSelector, lensClass, opts = {}) {
     if (opts.vertical) {
       lens.style.top = `${Math.max(0, Math.min(cRect.height - grabbedHeight, pointerY - grabbedHeight / 2))}px`;
     }
+    // 按住划着：透镜在手指底下，字的颜色跟着它走——离开哪一格，那一格就灰下去。
+    paintCover();
 
     // No `--glass-angle` is written here any more. The pill's rim is a fixed
     // top-to-bottom Fresnel gradient now, so rotating a custom property nothing
@@ -392,12 +492,18 @@ export function initLiquidGlass() {
   // ── bind lenses and capsules, including elements created later ────────────
 
   const bind = () => {
-    setupSlidingLens(document.querySelector('.bottom-nav'), 'button', 'nav-glass-lens');
+    // 字的颜色跟着透镜走（透镜离开哪一格，那一格的蓝就退掉；盖到哪一格，哪一格就蓝）。
+    setupSlidingLens(document.querySelector('.app-nav'), 'button', 'nav-glass-lens', { tintFollows: true });
+    // 顶上左边那枚胶囊（导入、文档库、组合、新建纸张）只能点，不能划：人说「左上方那个菜单栏把滑
+    // 动选择去掉」。划着挑搬到了笔迹工具栏上（ink-toolbar.js 的 _installScrub）。
 
     const segmented = [
       ['.recog-tabs', '.mode-tab'],
       ['.mode-tabs', '.mode-tab'],
       ['.settings-tabs', '.settings-tab'],
+      // 找页面板顶上那三页（目录、缩略图、书签）：和顶上那两个标签一样，点和划都行。
+      // 面板是打开时才造的，造出来那一刻被下面那个 MutationObserver 接住。
+      ['.pdf-panel-tabs', '.pdf-panel-tab', ['is-selected']],
       // The camera bar marks its two modes with different classes —
       // `active` for rectangle, `lasso-active` for lasso — so the lens has to
       // be told about both or it never follows the selection to the lasso.
@@ -449,10 +555,16 @@ export function initLiquidGlass() {
   bindObserver.observe(document.body, { childList: true, subtree: true });
 
   const onResize = () => {
-    document.querySelectorAll('.bottom-nav, .settings-tabs')
+    document.querySelectorAll('.app-nav, .settings-tabs')
       .forEach(c => c._relayoutLens?.());
   };
   window.addEventListener('resize', onResize, { passive: true });
+  // 换皮肤：每一块透镜当场按新的尺寸摆好（settings.js 换完皮肤就发这一声）。
+  const onSkin = () => {
+    document.querySelectorAll('.app-nav, .settings-tabs, .pdf-panel-tabs, .mode-tabs, .recog-tabs, .cam-mode-bar')
+      .forEach(c => c._relayoutLens?.());
+  };
+  window.addEventListener('skinchange', onSkin);
 
   // ── reduced motion ────────────────────────────────────────────────────────
 
@@ -491,6 +603,10 @@ export function initLiquidGlass() {
 
     const pressed = e.target.closest(PRESSABLE);
     if (!pressed) return;
+    // 挂着 liquid-glass-react 那几层的按钮（.lgr）按下去由那边管：缩到 0.96、亮光打满。
+    // 这里的鼓起和水波纹再叠一层就是两套按压；水波纹的 mix-blend-mode 还会让整块玻璃
+    // 自成一组，里面那层看不到背后。
+    if (pressed.classList.contains('lgr')) return;
 
     pressed.classList.add('liquid-bulge-press');
     const release = () => {
@@ -538,6 +654,7 @@ export function initLiquidGlass() {
   teardown = () => {
     bindObserver.disconnect();
     window.removeEventListener('resize', onResize);
+    window.removeEventListener('skinchange', onSkin);
     window.removeEventListener('pointerdown', onPointerDown);
     if (motionQuery) {
       try { motionQuery.removeEventListener('change', onMotionChange); } catch (_) { /* never attached */ }

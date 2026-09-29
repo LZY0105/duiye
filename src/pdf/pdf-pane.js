@@ -23,6 +23,15 @@ import {
   zoomOut,
 } from './pdf-view-state.js';
 import { hydrateViewState } from './document-session.js';
+import {
+  constrainFold,
+  foldProgress,
+  pointVelocity,
+  releaseCommits,
+  spineX,
+  stepFold,
+  turnedPoint,
+} from './page-fold.js';
 import { InkSurface } from '../ink/ink-surface.js';
 import { loadLayer, prefetchInk, saveLayer } from '../ink/ink-store.js';
 import { notifyPeers, releaseLayer, shareLayer } from '../ink/ink-shared.js';
@@ -85,6 +94,37 @@ const TURN_CORNER_BAND = 1 / 3;
  * shadow lying across the page underneath. The fold is told by its crease.
  */
 const TURN_BACK = '#ffffff';
+
+/**
+ * 翻完以后多久一定把纸拿走（ms）：松手以后那一段是逐帧的弹簧，帧要是停了（页面转到后台），
+ * 不能让一张旧页面的照片一直盖在新页面上。
+ */
+const TURN_DROP_MAX = 1200;
+
+/** 折痕那一窄条影子：CSS 里那条渐变的原始宽度（.pdf-fold-shade），按要的宽度横向缩放。 */
+const FOLD_SHADE_BASE = 32;
+
+/** CSS 的 matrix(a, b, c, d, e, f)。 */
+function cssMatrix(m) {
+  return `matrix(${m.map((v) => (Math.abs(v) < 1e-9 ? 0 : +v.toFixed(5))).join(', ')})`;
+}
+
+/** 两个仿射变换相乘（先做 n，再做 m），都按 CSS matrix 的顺序 [a, b, c, d, e, f]。 */
+function mulMatrix(m, n) {
+  return [
+    m[0] * n[0] + m[2] * n[1],
+    m[1] * n[0] + m[3] * n[1],
+    m[0] * n[2] + m[2] * n[3],
+    m[1] * n[2] + m[3] * n[3],
+    m[0] * n[4] + m[2] * n[5] + m[4],
+    m[1] * n[4] + m[3] * n[5] + m[5],
+  ];
+}
+
+/** 现在，毫秒。测试环境里没有 performance 也能跑。 */
+function clock() {
+  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+}
 
 /**
  * How many rasterised pages a pane keeps.
@@ -516,8 +556,13 @@ export class PdfPane {
             if (Math.abs(dx) >= TURN_GRAB && Math.abs(dx) > Math.abs(dy)) {
               const direction = dx < 0 ? 'next' : 'prev';
               // Where the page was FIRST touched decides which way it peels —
-              // the top corner, the bottom corner, or straight across.
-              if (this.beginLiveTurn(direction, { x: swipe.x, y: swipe.y })) {
+              // the top corner, the bottom corner, or straight across. Where it
+              // is NOW is where the sheet starts following from: the 28px it
+              // took to tell a turn from a pinch are not carried into the fold,
+              // or the sheet would arrive already a fifth of the way over.
+              if (this.beginLiveTurn(direction, {
+                x: swipe.x, y: swipe.y, from: { x: e.clientX, y: e.clientY },
+              })) {
                 swipe.turning = direction;
               }
             }
@@ -607,14 +652,17 @@ export class PdfPane {
       // only question left is whether it goes over or comes back.
       if (from.turning) {
         if (e.type !== 'pointerup') { this.endLiveTurn(false); return; }
-        const dx = e.clientX - from.x;
-        const dt = (e.timeStamp || performance.now()) - from.at;
-        // Either it was carried most of the way, or it was thrown — a flick
-        // should not have to cross half the page to count.
-        const carried = this._live ? this._live.progress >= TURN_COMMIT : false;
-        const flicked = Math.abs(dx) >= SWIPE_DISTANCE && dt <= SWIPE_MAX_MS;
         try {
-          this.endLiveTurn(carried || flicked);
+          // Either it was carried most of the way, or it was thrown — a flick
+          // should not have to cross half the page to count. And a flick BACK
+          // puts it back, however far over it had been carried: the speed of
+          // the hand at the moment it lets go says which way it meant.
+          const live = this._live;
+          const commit = live
+            ? releaseCommits(live.direction, live.progress,
+              pointVelocity(live.samples, clock()).vx, TURN_COMMIT)
+            : false;
+          this.endLiveTurn(commit);
         } catch (_) {
           // A turn that fails must not leave a photograph of the old page lying
           // over the live one.
@@ -684,11 +732,26 @@ export class PdfPane {
   /**
    * Photographs the page and lays the photograph over it.
    *
-   * Everything the turn draws is drawn into this one canvas: the part of the
-   * sheet still lying flat, the part folded back on itself, the shadow in the
-   * crease. It has to be a canvas rather than transformed boxes because the
-   * fold is a reflection about a line that is rarely vertical, and a box cannot
-   * be reflected about a diagonal.
+   * The turn is a few boxes moved by transforms, not a canvas redrawn every
+   * frame. It used to be one canvas that repainted the whole sheet on each
+   * frame — the flat part, the flap, the crease — and on the tablet that
+   * re-rasterised a million-pixel canvas five times over per frame: a third of
+   * the frames of every turn fell to 60fps. Now the photograph is taken once and
+   * only transforms change while the hand moves:
+   *
+   *   half    a very large box with overflow:hidden whose right edge IS the
+   *           crease, turned to the crease's angle: it keeps what is on the
+   *           flat side and cuts away the rest. Inside it —
+   *   photo   the page, carried back upright to where it lies (the inverse of
+   *           half's transform), so only its flat part shows;
+   *   back    a blank white page reflected in the crease — the part that has
+   *           folded over, showing the back of the paper;
+   *   crease  one hairline along half's edge.
+   *   shade   a narrow shadow on the far side of the crease, on the page being
+   *           uncovered (see _paintTurn).
+   *
+   * A box CAN be reflected about a diagonal — a CSS matrix with a negative
+   * determinant — and a half-plane is a rotated box that clips.
    */
   _makeLeaf(direction, vp, source, rect, box) {
     let sheet;
@@ -728,24 +791,48 @@ export class PdfPane {
       return null;                          // a tainted or zero-sized canvas
     }
 
+    const w = rect.width;
+    const h = rect.height;
     const leaf = document.createElement('div');
     leaf.className = 'pdf-page-leaf';
     leaf.dataset.direction = direction;
     leaf.style.left = `${rect.left - box.left}px`;
     leaf.style.top = `${rect.top - box.top}px`;
-    leaf.style.width = `${rect.width}px`;
-    leaf.style.height = `${rect.height}px`;
+    leaf.style.width = `${w}px`;
+    leaf.style.height = `${h}px`;
 
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const view = document.createElement('canvas');
-    view.width = Math.max(1, Math.round(rect.width * dpr));
-    view.height = Math.max(1, Math.round(rect.height * dpr));
-    view.style.width = '100%';
-    view.style.height = '100%';
-    leaf.appendChild(view);
+    // Big enough that, turned to any angle and set against a crease anywhere
+    // near the page, it still covers the whole page on the flat side.
+    const size = Math.ceil(3 * Math.hypot(w, h));
+    const half = document.createElement('div');
+    half.className = 'pdf-fold-half';
+    half.style.width = `${size}px`;
+    half.style.height = `${size}px`;
 
+    sheet.className = 'pdf-fold-photo';
+    sheet.style.width = `${w}px`;
+    sheet.style.height = `${h}px`;
+
+    const back = document.createElement('div');
+    back.className = 'pdf-fold-back';
+    back.style.width = `${w}px`;
+    back.style.height = `${h}px`;
+    back.style.background = TURN_BACK;
+
+    const crease = document.createElement('div');
+    crease.className = 'pdf-fold-crease';
+    crease.style.left = `${size - 1}px`;
+    crease.style.height = `${size}px`;
+
+    half.append(sheet, back, crease);
+
+    const shade = document.createElement('div');
+    shade.className = 'pdf-fold-shade';
+    shade.style.height = `${size}px`;
+
+    leaf.append(half, shade);
     vp.appendChild(leaf);
-    return { leaf, sheet, view, dpr, w: rect.width, h: rect.height };
+    return { leaf, sheet, half, back, crease, shade, size, w, h };
   }
 
   /**
@@ -768,143 +855,83 @@ export class PdfPane {
   }
 
   /**
-   * Draws the sheet folded so that `anchor` has been carried to `point`.
+   * Lays the sheet folded so that `anchor` has been carried to `point`.
    *
    * The fold is the perpendicular bisector of the line between where the corner
    * started and where the hand has taken it — which is the whole geometry of a
    * page bending over: every point of the flap is as far past the crease as its
    * twin is short of it. So the flap is the page reflected in that line, and
    * the reverse of the paper is what the reflection shows.
+   *
+   * Going forward the part that folds is the page being left and the flap is
+   * its blank back; going back it is the same geometry from the other edge. The
+   * back is blank either way: a little of the page used to show through from
+   * the other side, which is true of paper and looked like a mistake on a
+   * screen — mirrored characters read as a rendering fault.
+   *
+   * Only transforms change here (see _makeLeaf); nothing is repainted.
    */
   _paintTurn(live, point) {
-    const { view, sheet, dpr, w, h } = live;
-    const ctx = view.getContext('2d');
-    if (!ctx) return;
+    const { w, size } = live;
     const a = live.anchor;
 
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, view.width, view.height);
-    ctx.save();
-    ctx.scale(dpr, dpr);
-
-    // The crease: through the midpoint, square to the travel.
-    const dx = point.x - a.x;
-    const dy = point.y - a.y;
-    const len = Math.hypot(dx, dy);
-    if (len < 0.5) {
-      ctx.drawImage(sheet, 0, 0, w, h);
-      ctx.restore();
-      return;
+    // The crease: through the midpoint, square to the travel. Before the hand
+    // has moved there is no crease; one is laid just inside the edge being
+    // lifted, so the whole page shows and nothing has folded yet.
+    let dx = point.x - a.x;
+    let dy = point.y - a.y;
+    let len = Math.hypot(dx, dy);
+    const lifted = len >= 0.5;
+    if (!lifted) {
+      dx = live.direction === 'next' ? -0.5 : 0.5;
+      dy = 0;
+      len = 0.5;
     }
-    const nx = dx / len;
+    const nx = dx / len;                  // from the anchor toward the hand
     const ny = dy / len;
-    const mx = (a.x + point.x) / 2;
-    const my = (a.y + point.y) / 2;
-    const k = mx * nx + my * ny;          // the crease is { p : p·n = k }
+    const fx = a.x + dx / 2;              // a point on the crease
+    const fy = a.y + dy / 2;
+    const k = fx * nx + fy * ny;          // the crease is { p : p·n = k }
 
-    // Everything on the anchor's side of the crease has folded over.
-    const anchorSide = Math.sign(a.x * nx + a.y * ny - k) || -1;
-    const far = Math.hypot(w, h) * 2;
-    /**
-     * One side of the crease, as a polygon big enough to cover the page.
-     *
-     * It starts ON the crease and runs `far` in the direction asked for. It used
-     * to start `far` out on that side and run `2 * far` back, which begins
-     * beyond the page on one side and ends beyond it on the other — a polygon
-     * covering the WHOLE plane, whichever side was asked for. Nothing was ever
-     * clipped: the flap's paper was painted over the entire sheet, including the
-     * part that had not moved and the part that should have been left clear for
-     * the page arriving underneath. That is why a paused turn showed a blank
-     * page, and why the fold read as a wash lying over everything.
-     */
-    const halfPlane = (side) => {
-      const cx = k * nx;                  // the foot of the crease
-      const cy = k * ny;
-      const ex = -ny * far;               // along the crease
-      const ey = nx * far;
-      const ox = side * far * nx;         // and away from it, on one side only
-      const oy = side * far * ny;
-      ctx.beginPath();
-      ctx.moveTo(cx + ex, cy + ey);
-      ctx.lineTo(cx - ex, cy - ey);
-      ctx.lineTo(cx - ex + ox, cy - ey + oy);
-      ctx.lineTo(cx + ex + ox, cy + ey + oy);
-      ctx.closePath();
-    };
+    // half: local (u, v) → page = F + R(φ)·(u − size, v − size/2), where R(φ)
+    // turns the local x axis to point across the crease toward the anchor's
+    // side. Its right edge (u = size) lies on the crease; everything it keeps
+    // is on the flat side.
+    const c = -nx;                        // cos φ, sin φ of the anchor-side normal
+    const sn = -ny;
+    const halfM = [c, sn, -sn, c,
+      fx - c * size + sn * size / 2,
+      fy - sn * size - c * size / 2];
+    // Its inverse carries the photo back upright to where the page lies.
+    const inv = [c, -sn, sn, c,
+      size - (c * fx + sn * fy),
+      size / 2 - (-sn * fx + c * fy)];
+    // Reflection about p·n = k:  p' = p − 2(p·n − k)n
+    const reflect = [1 - 2 * nx * nx, -2 * nx * ny, -2 * nx * ny, 1 - 2 * ny * ny,
+      2 * k * nx, 2 * k * ny];
 
-    // 1 ── the part of the page that has not moved.
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, 0, w, h);
-    ctx.clip();
-    halfPlane(-anchorSide);
-    ctx.clip();
-    ctx.drawImage(sheet, 0, 0, w, h);
-    ctx.restore();
+    live.half.style.transform = cssMatrix(halfM);
+    live.sheet.style.transform = cssMatrix(inv);
+    live.back.style.transform = cssMatrix(mulMatrix(inv, reflect));
+    live.crease.style.opacity = lifted ? '1' : '0';
 
-    // 2 ── the flap: the sheet, reflected in the crease.
-    //
-    // Reflecting the anchor's half of the page lands it back ON the half that
-    // has not moved, which is what folding a corner over actually does — the
-    // paper comes back across the page rather than leaving the page. What shows
-    // there is the BACK of a sheet.
-    //
-    // WHICH sheet is the difference between the two directions, and it is the
-    // whole reason a book feels bound on one side:
-    //
-    //   FORWARD  the page being left is what folds away, so its own printing
-    //            shows faintly through from the other side of the paper.
-    //   BACKWARD the page arriving is what unfolds in, hinged on the same left
-    //            edge — it is the back of a page that has not been read yet,
-    //            and there is no bitmap of it to show through. Plain paper is
-    //            not an approximation here, it is what the reader would see.
-    //
-    // The crease shading is drawn inside this same clip, in this same reflected
-    // space, or it lands on the half the fold has left empty.
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, 0, w, h);
-    ctx.clip();                                   // never outside the page
-    // Reflection about p·n = k:  p' = p - 2(p·n - k)n
-    ctx.transform(
-      1 - 2 * nx * nx, -2 * nx * ny,
-      -2 * nx * ny, 1 - 2 * ny * ny,
-      2 * k * nx, 2 * k * ny,
-    );
-    halfPlane(anchorSide);
-    ctx.clip();
-    ctx.fillStyle = TURN_BACK;
-    ctx.fillRect(0, 0, w, h);
-    // Nothing is printed on it.
-    //
-    // A little of the page used to show through from the other side, which is
-    // true of real paper and looked like a mistake on a screen: mirrored
-    // characters over half the pane read as a rendering fault, not as a sheet
-    // seen from behind. The back is blank.
+    // The shadow the lip of the fold casts on the page being uncovered: a
+    // narrow band on the anchor's side of the crease, darkest at the crease.
+    // Not on the back of the sheet — a gradient there read as a smear across
+    // the reverse of the page. Without it the crease is a white band between
+    // two white pages; with it the fold stands up. It fades in as the fold opens.
+    const progress = foldProgress(a, point, w);
+    const lift = lifted ? Math.min(1, progress * 6) : 0;
+    const reach = 10 + 22 * Math.min(1, progress * 2);
+    live.shade.style.opacity = lift.toFixed(3);
+    live.shade.style.transform = cssMatrix(mulMatrix(
+      [c, sn, -sn, c, fx + sn * size / 2, fy - c * size / 2],
+      [reach / FOLD_SHADE_BASE, 0, 0, 1, 0, 0],
+    ));
 
-    // One hairline where the sheet doubles back. Not a shadow across the back —
-    // just the edge, so the fold has somewhere to be rather than fading into
-    // the page it is lying on.
-    ctx.strokeStyle = 'rgba(15, 23, 42, 0.13)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(k * nx - ny * far, k * ny + nx * far);
-    ctx.lineTo(k * nx + ny * far, k * ny - nx * far);
-    ctx.stroke();
-
-    // No shading on the back of the sheet.
-    //
-    // There was a gradient down the fold here. Even softened it read as a smear
-    // across the reverse of the page rather than as a crease, and the reverse of
-    // a page is the one surface in the whole turn with nothing on it — paper
-    // catching the light, not paper in shadow. The fold is legible from the
-    // geometry alone: the crease is where the printing stops and the blank side
-    // begins, which is exactly how it looks in the hand.
-    ctx.restore();
-
-    ctx.restore();
+    live.fold = { nx, ny, k, reflect };
     live.point = point;
-    live.progress = this._turnProgress(live, point);
+    live.progress = lifted ? this._turnProgress(live, point) : 0;
   }
 
   /**
@@ -950,9 +977,7 @@ export class PdfPane {
 
   /** How far across the page the crease has travelled, 0..1. */
   _turnProgress(live, point) {
-    const span = live.w || 1;
-    const travelled = Math.abs(point.x - live.anchor.x);
-    return Math.max(0, Math.min(1, travelled / (span * 2)));
+    return foldProgress(live.anchor, point, live.w);
   }
 
   /**
@@ -964,7 +989,10 @@ export class PdfPane {
    * second copy of the one being left.
    *
    * @param {'next'|'prev'} direction
-   * @param {{x:number,y:number}} [grab] where the hand took hold, in viewport px
+   * @param {{x:number,y:number,from?:{x:number,y:number}}} [grab] where the hand
+   *   took hold, in viewport px — that picks the corner. `from` is where the
+   *   sheet starts following the hand (where the turn was decided); without it,
+   *   the grab point itself.
    * @returns {boolean} whether a live turn is now running.
    */
   beginLiveTurn(direction, grab) {
@@ -999,9 +1027,11 @@ export class PdfPane {
     // Held rather than re-measured: the element this came from is replaced when
     // the page under the sheet changes.
     const basis = { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
-    this._live = { ...made, direction, holder, basis, progress: 0 };
+    this._live = { ...made, direction, holder, basis, progress: 0, samples: [] };
     const grabY = grab ? grab.y - rect.top : rect.height / 2;
     this._live.anchor = this._grabAnchor(direction, grabY, rect.width, rect.height);
+    const follow = grab?.from || grab;
+    this._live.origin = follow ? { x: follow.x - rect.left, y: follow.y - rect.top } : null;
     made.leaf.dataset.corner = this._live.anchor.corner;
     this._paintTurn(this._live, { ...this._live.anchor });
 
@@ -1019,7 +1049,20 @@ export class PdfPane {
     // The fold is worked out in the page's own pixels, so the hand has to be
     // put into them too — against the same box the sheet was cut from.
     const b = live.basis;
-    this._paintTurn(live, { x: point.x - b.left, y: point.y - b.top });
+    const at = { x: point.x - b.left, y: point.y - b.top };
+    // 被拉起来的那一点跟着手走：手从开始跟手的那一点走了多少，它就从原来的位置走多少。原来是
+    // 直接放到手指底下——手指要是按在页面中间，纸一拿起来就已经折过去四分之一，是跳出来的。
+    if (!live.origin) live.origin = at;
+    const raw = {
+      x: live.anchor.x + (at.x - live.origin.x),
+      y: live.anchor.y + (at.y - live.origin.y),
+    };
+    // 折痕不越过固定的那一边：往后翻是左边，往前翻是右边（见 page-fold.js）。斜着拉一个角，
+    // 拉到头就拉不动了，不会把固定那一边的角也折起来。
+    const p = constrainFold(raw, live.anchor, spineX(live.direction, live.w), live.h);
+    this._paintTurn(live, p);
+    live.samples.push({ t: clock(), x: p.x, y: p.y });
+    if (live.samples.length > 16) live.samples.shift();
   }
 
   /**
@@ -1028,28 +1071,46 @@ export class PdfPane {
    * Animated frame by frame, because the fold has to keep being computed as it
    * travels — the crease moves and turns the whole way, and no keyframe can
    * express that.
+   *
+   * 剩下那一段是一个临界阻尼弹簧，从松手那一刻手的速度接着走：甩出去的纸是被甩出去的，不是停一
+   * 下再按固定的时长重新起步。每一帧照样收回到「折痕不越过固定边」的范围里。
    */
   endLiveTurn(commit) {
     const live = this._live;
     if (!live) return;
     this._live = null;
-    const { leaf, holder, direction, anchor } = live;
+    const { leaf, direction, anchor } = live;
 
     if (!commit) {
       if (direction === 'next') this.previous(); else this.next();
     }
 
+    const spine = spineX(direction, live.w);
     const from = live.point || { ...anchor };
-    // Over the far edge, or back to where it was picked up.
-    const to = commit
-      ? { x: anchor.x + (direction === 'next' ? -live.w * 2.1 : live.w * 2.1), y: from.y }
-      : { ...anchor };
-    const duration = commit ? 340 : 260;
+    // Over, or back to where it was picked up.
+    //
+    // 翻过去：被拉起来的那一点落到它关于固定边的镜像上——整张纸折到固定边另一侧，折痕正好停在
+    // 固定边上。原来是一路拉到页面外两倍多页宽的地方、高度还停在手最后的位置：折痕斜着扫过固定
+    // 边，那一边的角也跟着折了起来。
+    const to = commit ? turnedPoint(anchor, spine) : { ...anchor };
+    // 手拿着的，接着手的速度走；按钮翻的（没人拿着），给它一个起步的速度，不从静止慢慢起。
+    const hand = live.samples?.length ? pointVelocity(live.samples, clock()) : null;
+    let state = {
+      x: from.x,
+      y: from.y,
+      vx: hand ? hand.vx * 1000 : Math.sign(to.x - from.x) * live.w * 2.4,
+      vy: hand ? hand.vy * 1000 : 0,
+    };
 
     let raf = 0;
+    let done = false;
+    let safety = 0;
     const drop = () => {
-      if (raf) cancelAnimationFrame(raf);
+      if (done) return;
+      done = true;
+      if (raf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(raf);
       raf = 0;
+      clearTimeout(safety);
       leaf.remove();
     };
 
@@ -1059,24 +1120,26 @@ export class PdfPane {
     // uncovering — the next page arrived shaded, as though the sheet leaving
     // cast something onto it. A page being turned to is just there.
 
-    const started = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    let last = clock();
     const step = () => {
-      const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-      const t = Math.min(1, (now - started) / duration);
-      const eased = 1 - Math.pow(1 - t, 3);
-      const live2 = { ...live, anchor };
-      this._paintTurn(live2, {
-        x: from.x + (to.x - from.x) * eased,
-        y: from.y + (to.y - from.y) * eased,
-      });
-      if (t < 1) { raf = requestAnimationFrame(step); return; }
-      drop();
+      raf = 0;
+      const now = clock();
+      const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+      last = now;
+      state = stepFold(state, to, dt, anchor, spine, live.h);
+      const p = { x: state.x, y: state.y };
+      this._paintTurn({ ...live, anchor }, p);
+      const settled = Math.hypot(p.x - to.x, p.y - to.y) < 0.75
+        && Math.hypot(state.vx, state.vy) < 30;
+      // 翻过去的：折痕到了固定边上就是翻完了——再往后只剩贴着固定边的一线，看不出来。
+      const over = commit && foldProgress(anchor, p, live.w) > 0.995;
+      if (settled || over) { drop(); return; }
+      raf = requestAnimationFrame(step);
     };
 
+    safety = setTimeout(drop, TURN_DROP_MAX);
     if (typeof requestAnimationFrame === 'function') raf = requestAnimationFrame(step);
     else drop();
-
-    setTimeout(drop, duration + 500);
   }
 
   /** Is a finger currently carrying a sheet? */

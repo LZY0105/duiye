@@ -962,8 +962,9 @@ check('nothing is a circle inside a square', () => {
   // 收起后工具栏只剩一枚圆形令牌，外壳却仍是 8px 圆角的方块，一个圆被裹在方里。
   // 形状规则：浮起来单独做一件事的是圆，盛放内容的是圆角方块，两者不叠在同一个
   // 东西上。
-  const css = $read('src/styles/ink-toolbar.css');
-  const docked = css.slice(css.indexOf('[data-skin="minimal"] .ink-toolbar.is-docked'));
+  // 纸的规则都在 paper.css（原来在 ink-toolbar.css 末尾）。
+  const css = $read('src/styles/paper.css');
+  const docked = css.slice(css.indexOf('html[data-skin="minimal"] .ink-toolbar.is-docked,'));
   assert.ok(/background:\s*transparent/.test(docked.slice(0, 260)),
     'the shell steps out of the way when only the round token is left');
   assert.ok(/box-shadow:\s*none/.test(docked.slice(0, 260)),
@@ -1129,12 +1130,13 @@ check('the back of the fold is blank paper, whichever way it goes', () => {
     const t = turnablePane({ page: 5 });
     try {
       t.pane.beginLiveTurn(dir, { x: dir === 'next' ? 290 : 10, y: 200 });
-      t.ctx.calls.length = 0;
       t.pane.dragLiveTurn({ x: dir === 'next' ? 140 : 160, y: 200 });
-      const draws = t.ctx.calls.filter((c) => c[0] === 'drawImage').length;
-      assert.equal(draws, 1, `${dir}: only the page still lying flat is drawn`);
-      assert.ok(t.ctx.calls.some((c) => c[0] === 'stroke'),
-        `${dir}: the crease is a hairline, so the fold has an edge`);
+      const leaf = t.vp.querySelector('.pdf-page-leaf');
+      assert.equal(leaf.querySelectorAll('canvas').length, 1, dir + ': the only printing is the page itself');
+      const back = leaf.querySelector('.pdf-fold-back');
+      assert.ok(back && back.children.length === 0, dir + ': the folded-over part is a blank sheet');
+      assert.equal(leaf.querySelector('.pdf-fold-crease').style.opacity, '1',
+        dir + ': the crease is a hairline, so the fold has an edge');
     } finally { t.restore(); }
   }
 });
@@ -1143,13 +1145,11 @@ check('a backward turn folds in a blank back, not the page being left', () => {
   const t = turnablePane({ page: 5 });
   try {
     t.pane.beginLiveTurn('prev', { x: 10, y: 200 });
-    t.ctx.calls.length = 0;
     t.pane.dragLiveTurn({ x: 160, y: 200 });
-    const draws = t.ctx.calls.filter((c) => c[0] === 'drawImage').length;
-    const fills = t.ctx.calls.filter((c) => c[0] === 'fillRect').length;
-    assert.ok(fills > 0, 'the arriving sheet still has a paper-coloured back');
-    assert.equal(draws, 1,
-      'only the page still lying flat is drawn; the fold carries no borrowed printing');
+    const leaf = t.vp.querySelector('.pdf-page-leaf');
+    const back = leaf.querySelector('.pdf-fold-back');
+    assert.ok(back.style.background, 'the arriving sheet still has a paper-coloured back');
+    assert.equal(back.querySelectorAll('canvas').length, 0, 'the fold carries no borrowed printing');
   } finally { t.restore(); }
 });
 
@@ -1157,15 +1157,15 @@ check('the flap is the page reflected in the crease, not a copy slid sideways', 
   const t = turnablePane({ w: 300, h: 400 });
   try {
     t.pane.beginLiveTurn('next', { x: 290, y: 200 });
-    t.ctx.calls.length = 0;
     // A level pull from a mid-height anchor: the crease is vertical, so the
     // reflection is a plain horizontal mirror — a = -1, d = 1.
     t.pane.dragLiveTurn({ x: 100, y: 200 });
-    const m = t.ctx.calls.find((c) => c[0] === 'transform');
-    assert.ok(m, 'the flap has to be transformed, or it is not folded at all');
-    assert.ok(Math.abs(m[1] + 1) < 1e-6, `expected a horizontal mirror, got a=${m[1]}`);
-    assert.ok(Math.abs(m[4] - 1) < 1e-6, `expected d=1, got ${m[4]}`);
-    assert.ok(Math.abs(m[2]) < 1e-6 && Math.abs(m[3]) < 1e-6, 'and no shear');
+    const m = t.pane._live.fold.reflect;
+    assert.ok(Math.abs(m[0] + 1) < 1e-6, `expected a horizontal mirror, got a=${m[0]}`);
+    assert.ok(Math.abs(m[3] - 1) < 1e-6, `expected d=1, got ${m[3]}`);
+    assert.ok(Math.abs(m[1]) < 1e-6 && Math.abs(m[2]) < 1e-6, 'and no shear');
+    const back = t.vp.querySelector('.pdf-fold-back');
+    assert.match(back.style.transform, /^matrix\(/, 'the blank back is carried over by that reflection');
   } finally { t.restore(); }
 });
 
@@ -1173,12 +1173,26 @@ check('a diagonal pull from a corner gives a diagonal crease', () => {
   const t = turnablePane({ w: 300, h: 400 });
   try {
     t.pane.beginLiveTurn('next', { x: 290, y: 380 });
-    t.ctx.calls.length = 0;
     t.pane.dragLiveTurn({ x: 120, y: 150 });
-    const m = t.ctx.calls.find((c) => c[0] === 'transform');
-    assert.ok(m, 'the flap is transformed');
-    assert.ok(Math.abs(m[2]) > 1e-3,
+    const m = t.pane._live.fold.reflect;
+    assert.ok(Math.abs(m[1]) > 1e-3,
       'a crease that is not vertical must shear the reflection');
+  } finally { t.restore(); }
+});
+
+check('while the hand moves only transforms change: the page is photographed once', () => {
+  // 原来每一帧在一张 canvas 上把整页重画一遍，平板上三分之一的帧掉到 60fps。
+  const t = turnablePane({ w: 300, h: 400 });
+  try {
+    t.pane.beginLiveTurn('next', { x: 290, y: 200 });
+    const draws = () => t.ctx.calls.filter((c) => c[0] === 'drawImage').length;
+    const before = draws();
+    for (const x of [260, 220, 180, 140, 100]) t.pane.dragLiveTurn({ x, y: 210 });
+    assert.equal(draws(), before, 'nothing is redrawn while the sheet follows the hand');
+    const half = t.vp.querySelector('.pdf-fold-half');
+    const photo = t.vp.querySelector('.pdf-fold-photo');
+    assert.match(half.style.transform, /^matrix\(/);
+    assert.match(photo.style.transform, /^matrix\(/);
   } finally { t.restore(); }
 });
 
@@ -1254,8 +1268,67 @@ check('a second finger lays the sheet back down', () => {
 
 check('where the page was first touched is what decides the fold', () => {
   const src = $code('src/pdf/pdf-pane.js');
-  assert.ok(/beginLiveTurn\(direction, \{ x: swipe\.x, y: swipe\.y \}\)/.test(src),
-    'the grab point, not the current point, picks the corner');
+  assert.ok(/beginLiveTurn\(direction, \{\s*x: swipe\.x, y: swipe\.y, from: \{ x: e\.clientX, y: e\.clientY \},?\s*\}\)/.test(src),
+    'the grab point, not the current point, picks the corner — and the current point is where the sheet starts following');
+});
+
+// 人说「应该有一边是固定的」，又说清楚了：从右往左翻（下一页）固定左边，从左往右翻（上一页）
+// 固定右边。原来斜着拉一个角、或者松手以后自己翻完的那一段，折痕会斜着扫过固定的那一边。
+check('the sheet starts following from where the turn was decided: nothing jumps', () => {
+  const t = turnablePane({ w: 300, h: 400 });
+  try {
+    t.pane.beginLiveTurn('next', { x: 150, y: 200, from: { x: 122, y: 200 } });
+    t.pane.dragLiveTurn({ x: 122, y: 200 });
+    assert.deepEqual(t.pane._live.point, { x: 300, y: 200 }, 'still flat where the turn began');
+    t.pane.dragLiveTurn({ x: 72, y: 200 });
+    assert.deepEqual(t.pane._live.point, { x: 250, y: 200 }, 'fifty pixels on, the edge is fifty pixels in');
+  } finally { t.restore(); }
+});
+
+check('going forward the left edge never folds, however the corner is dragged', () => {
+  const t = turnablePane({ w: 300, h: 400 });
+  try {
+    t.pane.beginLiveTurn('next', { x: 290, y: 380 });      // the bottom corner
+    const a = t.pane._live.anchor;
+    for (const [x, y] of [[-400, 380], [-600, -300], [-200, 50], [100, -500]]) {
+      t.pane.dragLiveTurn({ x, y });
+      const p = t.pane._live.point;
+      for (const q of [{ x: 0, y: 0 }, { x: 0, y: 400 }]) {
+        assert.ok(Math.hypot(p.x - q.x, p.y - q.y) <= Math.hypot(a.x - q.x, a.y - q.y) + 1e-6,
+          'dragged to (' + x + ', ' + y + '): the crease would cross the left edge at y=' + q.y);
+      }
+    }
+  } finally { t.restore(); }
+});
+
+check('going back the right edge is the fixed one', () => {
+  const t = turnablePane({ w: 300, h: 400 });
+  try {
+    t.pane.beginLiveTurn('prev', { x: 10, y: 20 });        // the top corner of the left edge
+    const a = t.pane._live.anchor;
+    t.pane.dragLiveTurn({ x: 900, y: 500 });
+    const p = t.pane._live.point;
+    for (const q of [{ x: 300, y: 0 }, { x: 300, y: 400 }]) {
+      assert.ok(Math.hypot(p.x - q.x, p.y - q.y) <= Math.hypot(a.x - q.x, a.y - q.y) + 1e-6,
+        'the crease would cross the right edge at y=' + q.y);
+    }
+  } finally { t.restore(); }
+});
+
+check('letting go is decided by the throw first, then by how far it went', () => {
+  const src = $code('src/pdf/pdf-pane.js');
+  const end = src.slice(src.indexOf('const endTouch'), src.indexOf('const endPointer'));
+  assert.ok(/releaseCommits\(live\.direction, live\.progress,\s*pointVelocity\(live\.samples, clock\(\)\)\.vx, TURN_COMMIT\)/.test(end),
+    'a flick back cancels even a turn most of the way over; a flick on turns one barely started');
+});
+
+check('finishing the turn lands the fold on the fixed edge, not past it', () => {
+  const src = $code('src/pdf/pdf-pane.js');
+  const end = src.slice(src.indexOf('  endLiveTurn(commit) {'), src.indexOf('get isTurning'));
+  assert.ok(/turnedPoint\(anchor, spine\)/.test(end), 'the target is the anchor mirrored in the fixed edge');
+  assert.ok(!/live\.w \* 2\.1/.test(end), 'not two page-widths off the far side at the height the hand left it');
+  assert.ok(/stepFold\(state, to, dt, anchor, spine, live\.h\)/.test(end),
+    'and every frame on the way there stays inside the constraint');
 });
 
 check('the pen still never turns a page', () => {
@@ -1352,7 +1425,8 @@ function sizedBar(naturalLength) {
   };
   bar.root = stub;
   bar.cardLayer = { style: { setProperty: () => {} } };
-  bar.state = { edge: 'left' };
+  // 只有展开着的横杠才算大小——收成球、拖在手里的时候量到的是那颗球，见 _applyFit。
+  bar.state = { edge: 'left', phase: 'expanded' };
   bar._scale = 1;
   bar._safe = { top: 0, bottom: 0 };
   bar._clampIntoHost = () => {};
@@ -1395,6 +1469,104 @@ check('it never shrinks past what a finger can hit', () => {
   assert.ok(bar.scale() >= 0.72, 'below 32px the honest answer is fewer tools, not smaller ones');
 });
 
+
+/**
+ * 一条长度随缩放变、但两头有一截不变的横杠——真的那条就是这样：内边距、分隔线、
+ * 描边都是写死的像素。
+ */
+function realisticBar({ fixed = 32, scaled = 551, edge = 'left', phase = 'expanded', hostWidth = 1190 } = {}) {
+  const bar = Object.create(InkToolbar.prototype);
+  const props = new Map();
+  const length = () => fixed + scaled * Number(props.get('--ink-scale') ?? 1);
+  const vertical = edge === 'left' || edge === 'right';
+  bar.root = {
+    style: { setProperty: (k, v) => props.set(k, v) },
+    get offsetHeight() { return vertical ? length() : 44; },
+    get offsetWidth() { return vertical ? 46 : length(); },
+  };
+  bar.cardLayer = { style: { setProperty: () => {} } };
+  bar.host = { clientWidth: hostWidth };
+  bar.state = { edge, phase };
+  bar._scale = 1;
+  bar._safe = { top: 0, bottom: 0 };
+  bar._clampIntoHost = () => {};
+  bar.scale = () => Number(props.get('--ink-scale') ?? 1);
+  bar.length = length;
+  return bar;
+}
+
+check('the same inputs give the same size, however many times it is asked', () => {
+  // 真机上报的：收起来再展开，换个工具，工具栏大小变了、跳一下。原来的算法是
+  // 「量出来的长度 ÷ 当前缩放」，可两头那一截不跟着缩，每算一次都偏一点——
+  // 工作区在每一次换工具之后都会再问一遍，于是每换一次工具它就再缩一点。
+  const bar = realisticBar();
+  bar.fitTo({ height: 560, column: 2000 });
+  const first = bar.scale();
+  assert.ok(first < 1, 'it must give ground');
+  for (let i = 0; i < 5; i++) bar.fitTo({ height: 560, column: 2000 });
+  assert.equal(bar.scale(), first, '问多少遍都是同一个答案');
+  assert.ok(bar.length() <= 560 - 24 + 0.5, `and it actually fits: ${bar.length()}`);
+});
+
+check('a folded-away bar is not measured — the puck is not the bar', () => {
+  // 收成球的时候量到的是那颗球。原来那一下把缩放放回了 1，展开之后横杠按满尺
+  // 寸画出来，下一次换工具再量又缩回去——人看到的就是它跳了一下。
+  for (const phase of ['docked', 'dragging']) {
+    const bar = realisticBar({ phase });
+    bar._scale = 0.84;
+    bar.fitTo({ height: 560, column: 2000 });
+    assert.equal(bar._scale, 0.84, `${phase}: the size it had stays the size it has`);
+  }
+});
+
+check('a bar lying along the bottom is budgeted by the width, not the height', () => {
+  // 贴底边的那一条是横着的。原来一律拿长度和高度比：菜单栏一升起来，可用高度
+  // 少了 86px，它就被缩了一圈——而它只该往上让，不该变短。
+  const bar = realisticBar({ edge: 'bottom', hostWidth: 1190 });
+  bar._safe = { top: 92, bottom: 86 };
+  bar.fitTo({ height: 670, column: 2000 });
+  assert.equal(bar.scale(), 1, 'the menu bar rising makes it move, not shrink');
+
+  // 520 宽：缩到 0.84 左右，还在 0.72 那条下限之上（再窄就停在下限，见下一组）。
+  const narrow = realisticBar({ edge: 'bottom', hostWidth: 520 });
+  narrow.fitTo({ height: 900, column: 2000 });
+  assert.ok(narrow.scale() < 1, 'a workspace narrower than the bar still makes it give ground');
+  assert.ok(narrow.length() <= 520 - 24 + 0.5, `and it fits the width: ${narrow.length()}`);
+});
+
+check('where the bar is, for layout decisions, ignores the animation it is playing', () => {
+  // 刚展开、刚落边的头几百毫秒，横杠是从球的位置、按球的大小飞过来的。拿那一帧
+  // 去判「底下的菜单栏挡没挡住它」，判的是那颗球。
+  const host = {
+    getBoundingClientRect: () => ({ left: 5, top: 64, width: 1190, height: 670 }),
+    clientLeft: 0,
+    clientTop: 0,
+  };
+  const bar = Object.create(InkToolbar.prototype);
+  bar.host = host;
+  bar.state = { phase: 'expanded', edge: 'left' };
+  bar.root = {
+    offsetParent: host,
+    offsetLeft: 10,
+    offsetTop: 403,
+    offsetWidth: 46,
+    offsetHeight: 517,
+    // 这一帧还是那颗球。
+    getBoundingClientRect: () => ({ left: 1140, top: 690, width: 58, height: 58 }),
+  };
+  const r = bar.rect();
+  assert.equal(r.left, 15);
+  assert.equal(r.width, 46);
+  assert.equal(r.top, 64 + 403 - 517 / 2, 'the resting position: centred on its offset, not mid-flight');
+  assert.equal(r.bottom - r.top, 517);
+
+  bar.state = { phase: 'expanded', edge: 'bottom' };
+  bar.root.offsetLeft = 600;
+  bar.root.offsetWidth = 495;
+  bar.root.offsetHeight = 44;
+  const h = bar.rect();
+  assert.equal(h.left, 5 + 600 - 495 / 2, 'a horizontal bar is centred on its left offset');
+});
 // The acceptance run on the tablet found the bar sized against the wrong pane:
 // it floated over a 312px column while the 856px one was active, and kept the
 // size the wide pane had earned it.
@@ -1402,7 +1574,8 @@ function workspaceOver(barLeft, barWidth, { swapped = false, active = SLOTS.PRIM
   const ws = Object.create(PdfWorkspace.prototype);
   ws.activeSlot = active;
   ws.state = { swapped };
-  ws.toolbar = { root: { getBoundingClientRect: () => ({ left: barLeft, width: barWidth }) } };
+  // 问的是 rect()——横杠停稳之后在哪儿，不是这一帧画在哪儿（刚展开时它还在从球的位置飞过来）。
+  ws.toolbar = { rect: () => ({ left: barLeft, width: barWidth }) };
   return ws;
 }
 const ROOT_RECT = { left: 0, width: 1200 };
@@ -1428,6 +1601,31 @@ check('swapping the panes does not swap which column the bar is measured by', ()
     Math.round(1200 * 0.74),
     'the left-hand column is whichever slot is drawn there',
   );
+});
+
+check('the Agent button steps aside for a toolbar on the right edge', () => {
+  // 那颗按钮钉在右边正中，工具栏贴右边时也在那儿——按钮压在它中间两格上，层级
+  // 还更高，那两格就点不到了。
+  const props = new Map();
+  const layer = { style: { setProperty: (k, v) => props.set(k, v) } };
+  const rect = { left: 5, top: 64, right: 1195, bottom: 734, width: 1190, height: 670 };
+  const ws = Object.create(PdfWorkspace.prototype);
+  ws.root = { querySelector: (sel) => (sel === '.pdf-agent-layer' ? layer : null) };
+  const place = (state, bar) => {
+    ws.toolbar = { state, rect: () => bar };
+    ws._syncAgentFab(rect);
+    return props.get('--agent-fab-right');
+  };
+  const tall = { left: 1139, right: 1185, top: 150, bottom: 667, width: 46, height: 517 };
+
+  assert.equal(place({ phase: 'expanded', edge: 'right' }, tall), `${1195 - 1139 + 8}px`,
+    'it moves to the left of the bar, 8px clear');
+  assert.equal(place({ phase: 'expanded', edge: 'left' }, { ...tall, left: 15, right: 61 }), '14px',
+    'a bar on the other side leaves it where it lives');
+  assert.equal(place({ phase: 'docked', edge: 'right' }, { left: 1127, right: 1185, top: 666, bottom: 724, width: 58, height: 58 }), '14px',
+    'a puck in the corner is nowhere near it');
+  assert.equal(place({ phase: 'expanded', edge: 'right' }, { ...tall, top: 80, bottom: 300, height: 220 }), '14px',
+    'a short bar parked high on the edge does not reach the middle');
 });
 
 check('a bar with no box yet falls back to the active pane', () => {
@@ -1502,47 +1700,25 @@ check('回来先看见书架，但只在桌上是空的时候', () => {
     '关掉最后一份之后，书架自己回来');
 });
 
-check('横向不挡路的菜单栏，不该把工具栏顶起来', () => {
-  // 真机上量到的：那条菜单栏是居中的一颗胶囊，横跨 360–840；而工具栏靠在最左边
-  // 的 10–63。两者横向根本不相交，可安全区原来是按整条底边算的——菜单栏一升起来
-  // 工具栏就被顶上去、还缩短了一截，而它从头到尾没被挡住过一个像素。
+check('底边再没有东西压着工作区：工具栏的安全区底边是 0', () => {
+  // 原来底下有一条 fixed 的悬浮菜单栏压在工作区上，菜单栏一升起来，贴底边的工具
+  // 栏就被顶上去（还得判横向相不相交，免得靠边的工具栏被白顶一截）。它挪到了顶上
+  // 那一排的正中，在工作区外面——底边再没有东西要让。
   const ws = Object.create(PdfWorkspace.prototype);
   ws.elSlots = { [SLOTS.PRIMARY]: null, [SLOTS.SECONDARY]: null };
   const host = { left: 0, right: 1200, top: 64, bottom: 736, width: 1200, height: 672 };
-
-  const withDockAndBar = (dock, bar) => {
-    const realQuery = globalThis.document.querySelector;
-    globalThis.document.querySelector = (sel) => (sel === '.bottom-nav'
-      ? { getBoundingClientRect: () => dock } : realQuery.call(globalThis.document, sel));
+  for (const bar of [{ left: 10, right: 63 }, { left: 400, right: 460 }, { left: 300, right: 900 }]) {
     ws.toolbar = { rect: () => bar };
-    try { return ws._toolbarSafeArea(host); } finally {
-      globalThis.document.querySelector = realQuery;
-    }
-  };
-
-  // 菜单栏升起来，盖住工作区底下 78px
-  const dockOut = { left: 360, right: 840, top: 658, bottom: 830, height: 172 };
-
-  const aside = withDockAndBar(dockOut, { left: 10, right: 63 });
-  assert.equal(aside.bottom, 0, '在最左边的工具栏，居中的菜单栏碰不到它');
-
-  const over = withDockAndBar(dockOut, { left: 400, right: 460 });
-  assert.equal(Math.round(over.bottom), 78, '横着压在它上面的才算数');
-
-  // 挨着边界的两种：擦过和差一点
-  assert.ok(withDockAndBar(dockOut, { left: 300, right: 370 }).bottom > 0, '压住一点也是压住');
-  assert.equal(withDockAndBar(dockOut, { left: 300, right: 360 }).bottom, 0, '刚好挨上不算');
+    assert.equal(ws._toolbarSafeArea(host).bottom, 0, `工具栏在 ${bar.left}–${bar.right}`);
+  }
 });
 
-check('判的是横向，不是纵向——否则会来回摆', () => {
-  // 被顶上去之后纵向就不相交了。拿纵向去判的话：顶上去 → 不冲突了 → 落回来 →
-  // 又冲突，一帧一个样。横向不随这个动作改变。
+check('安全区不再去量底栏', () => {
   const src = $code('src/pdf/pdf-workspace.js');
   const fn = src.slice(src.indexOf('_toolbarSafeArea(rect) {'));
   const body = fn.slice(0, fn.indexOf('syncToolbarSafeArea()'));
-  assert.ok(/box\.right > bar\.left && box\.left < bar\.right/.test(body),
-    '横向相交');
-  assert.ok(!/box\.bottom > bar\.top/.test(body), '不能拿纵向去判');
+  assert.ok(!/bottom-nav|app-nav/.test(body), '顶上那两个标签在工作区外面，不是工具栏要让的东西');
+  assert.ok(/return \{ top, bottom: 0 \}/.test(body));
 });
 
 check('a layout change asks again whether the bar is in the way', () => {
@@ -1930,6 +2106,33 @@ check('换一本书不报——那不是一次缩放，是一次打开', () => {
   assert.ok(shown(badge), '换过去之后再缩放，照报');
 });
 
+check('牌子挂在栏头底下、横着居中，白色、小一号（原来是页面正中一大块深色的，压在字上）', () => {
+  // 人说「那个页面之间显示百分比的提示调去文件菜单栏下面，变成白色，再缩小一点」。
+  document.body.innerHTML =
+    '<div class="pdf-ws-slot"><div class="pdf-slot-pane" hidden></div>'
+    + '<div class="pdf-slot-pane"></div><div data-role="zoom-badge"></div></div>';
+  const el = document.querySelector('.pdf-ws-slot');
+  const [hiddenPane, livePane] = el.querySelectorAll('.pdf-slot-pane');
+  Object.defineProperty(hiddenPane, 'offsetTop', { get: () => 20 });
+  Object.defineProperty(livePane, 'offsetTop', { get: () => 78 });
+  const ws = Object.create(PdfWorkspace.prototype);
+  ws.elSlots = { [SLOTS.PRIMARY]: el };
+  const badge = el.querySelector('[data-role="zoom-badge"]');
+  ws._flashZoom(SLOTS.PRIMARY, 100, 'e1');
+  ws._flashZoom(SLOTS.PRIMARY, 122, 'e1');
+  assert.equal(badge.style.top, '86px', '露着的那一块内容（栏头底下）的上沿往下 8px');
+
+  const css = $read('src/styles/pdf.css');
+  const at = css.indexOf('.pdf-zoom-badge {');
+  const rule = css.slice(at, css.indexOf('}', at));
+  assert.ok(!/top:\s*50%/.test(rule), '不在页面正中');
+  assert.ok(/background: rgba\(255, 255, 255, 0\.9\d\);/.test(rule), '白色');
+  assert.ok(/font-size: 12px;/.test(rule) && /padding: 3px 10px;/.test(rule), '小一号');
+  assert.ok(!/backdrop-filter/.test(rule), '压在正文上，不磨砂');
+  const vis = css.slice(css.indexOf('.pdf-zoom-badge.is-visible {'));
+  assert.ok(/transform: translate\(-50%, 0\) scale\(1\);/.test(vis.slice(0, 120)), '按上沿挂，不按中心');
+});
+
 check('两栏各报各的', () => {
   document.body.innerHTML =
     '<div class="a"><div data-role="zoom-badge"></div></div>'
@@ -2043,34 +2246,42 @@ check('the notices file no longer credits what was deleted', () => {
   assert.ok(/LaTeXSnipper Mobile base/.test(md), 'the base project is still credited');
 });
 
-// ── the two bars, put away and brought back ─────────────────────────────────
+// ── the top row, put away and brought back ──────────────────────────────────
 
-group('12. Hiding the bars, and getting them back');
+group('12. Hiding the top row, and getting it back');
 
 /**
- * The page as initChromeHiding finds it, with both bars where they really sit.
+ * The page as initChromeHiding finds it, with the row where it really sits.
  *
  * JSDOM has no layout, so every box is 0x0 and every hit test would miss. The
- * rectangles are stated instead — taken from the tablet, at the sizes the
- * gesture actually has to cope with.
+ * rectangles are stated instead — the tablet's, 1200x736.
+ *
+ * 两个标签（练习 / 设置）在那一排的正中：原来它们是底边一枚能单独收起来的胶囊，
+ * 挪上来之后跟着那一排走，底边整条还给了纸。
  */
-function chromePage({ topHidden = false, bottomHidden = false } = {}) {
+function chromePage({ topHidden = false, page = null, opts = {} } = {}) {
   document.body.className = '';
+  delete document.body.dataset.page;
+  if (page) document.body.dataset.page = page;
   // initChromeHiding restores what was hidden last time, and localStorage is
   // one object for the whole run — without this a scenario starts wherever the
-  // previous one left the bars, and a check on where they ended up is really a
+  // previous one left the row, and a check on where it ended up is really a
   // check on what ran before it.
   try { localStorage.clear(); } catch (_) { /* not available */ }
   document.body.innerHTML = [
-    '<div class="bar-peek" data-role="bar-peek"></div>',
-    '<div class="dock-peek" data-role="dock-peek"></div>',
-    '<div class="page" id="page-pdf">',
-    '  <div class="pdf-page-bar"></div>',
-    '</div>',
-    '<nav class="bottom-nav">',
-    '  <button class="active" data-page="pdf"><svg></svg><span>课本</span></button>',
+    '<nav class="app-nav">',
+    '  <button class="active" data-page="pdf"><svg></svg><span>练习</span></button>',
     '  <button data-page="settings"><svg></svg><span>设置</span></button>',
     '</nav>',
+    '<div class="page" id="page-pdf">',
+    '  <div class="pdf-page-bar"></div>',
+    // 一栏：栏头（按钮、页码框）、切换条、书页。那一排收起来以后，它们就在屏幕顶上那一截里。
+    '  <div class="pdf-workspace-host"><div class="pdf-workspace"><div class="pdf-ws-slot">',
+    '    <div class="pdf-slot-toolbar"><button class="pdf-slot-btn">适合宽度</button><input class="pdf-slot-page"></div>',
+    '    <div class="deck-strip"><button class="deck-title">草稿纸 01</button></div>',
+    '    <div class="pdf-pane-viewport"><canvas class="pdf-ink-canvas"></canvas></div>',
+    '  </div></div></div>',
+    '</div>',
   ].join('\n');
 
   const root = document.getElementById('page-pdf');
@@ -2080,25 +2291,18 @@ function chromePage({ topHidden = false, bottomHidden = false } = {}) {
     width: r[2] - r[0], height: r[3] - r[1], x: r[0], y: r[1],
   }); };
 
-  box(q('.pdf-page-bar'), topHidden ? [0, -44, 1200, 0] : [0, 8, 1200, 52]);
-  box(q('.bar-peek'), topHidden ? [0, 0, 1148, 64] : [0, 0, 0, 0]);
-  box(q('.bottom-nav'), bottomHidden ? [0, 700, 1200, 766] : [0, 634, 1200, 700]);
-  // 200px, centred on a 1200px viewport — the handle the dock is called back
-  // from. It used to run 200-1000, and everything it covered stopped being page.
-  box(q('[data-role="dock-peek"]'), bottomHidden ? [500, 620, 700, 700] : [0, 0, 0, 0]);
-  // Measured off the tablet: the capsules fill the bar but for five pixels
-  // either side, which is the whole reason the bar is not a grab any more.
-  box(q('[data-page="pdf"]'), [365, 640, 600, 696]);
-  box(q('[data-page="settings"]'), [600, 640, 835, 696]);
+  box(q('.pdf-page-bar'), topHidden ? [10, -88, 1190, -44] : [10, 10, 1190, 54]);
+  box(q('.app-nav'), topHidden ? [514, -88, 686, -44] : [514, 10, 686, 54]);
+  box(q('[data-page="pdf"]'), [518, 14, 599, 50]);
+  box(q('[data-page="settings"]'), [601, 14, 682, 50]);
 
   if (topHidden) document.body.classList.add('is-top-hidden');
-  if (bottomHidden) document.body.classList.add('is-bottom-hidden');
   // The last scenario's listeners come off first. Left on, they would handle
   // every gesture twice — which is exactly the fault initChromeHiding's
   // teardown exists to prevent in the app, so the tests would be papering over
   // the thing they are meant to catch.
   chromeOff?.();
-  chromeOff = initChromeHiding(root);
+  chromeOff = initChromeHiding(root, opts);
   return root;
 }
 let chromeOff = null;
@@ -2107,7 +2311,7 @@ let chromeOff = null;
  * A finger going down at (x,y), travelling `dy`, and lifting.
  *
  * `on` is what it comes down on, which is half of what the handler decides
- * from: a press on a capsule and a press on the glass beside it are the same
+ * from: a press on a tab and a press on the glass beside it are the same
  * coordinates as far as a box test goes, and must not be the same gesture.
  */
 function swipe(x, y, dy, { steps = 8, on = null, pointerType = 'touch' } = {}) {
@@ -2121,81 +2325,211 @@ function swipe(x, y, dy, { steps = 8, on = null, pointerType = 'touch' } = {}) {
   fire('pointerup', y + dy);
 }
 
-const capsule = (page) => document.querySelector(`[data-page="${page}"]`);
+const tab = (page) => document.querySelector(`[data-page="${page}"]`);
 
-const hidden = (which) => document.body.classList.contains('is-' + which + '-hidden');
+const hidden = () => document.body.classList.contains('is-top-hidden');
 
 check('dragging the import row up puts it away', () => {
   chromePage();
-  swipe(600, 30, -60);
-  assert.ok(hidden('top'), 'a deliberate upward drag on the row is how it goes');
-  assert.ok(!hidden('bottom'), 'and it does not take the dock with it');
+  swipe(200, 30, -60);
+  assert.ok(hidden(), 'a deliberate upward drag on the row is how it goes');
+});
+
+check('改排版之前先说一声（beforeChromeMove）：收起传 true、拉回传 false，说的那一刻那一排还是原来的样子', () => {
+  const seen = [];
+  chromePage({ opts: {
+    beforeChromeMove: (h) => seen.push(['before', h, hidden()]),
+    onChromeMove: () => seen.push(['moved', hidden()]),
+  } });
+  swipe(200, 30, -60);
+  assert.deepEqual(seen, [['before', true, false], ['moved', true]]);
+  seen.length = 0;
+  swipe(600, 30, 80);
+  assert.deepEqual(seen, [['before', false, true], ['moved', false]]);
 });
 
 check('dragging down from the top brings the import row back', () => {
   chromePage({ topHidden: true });
   swipe(600, 30, 80);
-  assert.ok(!hidden('top'), 'the strip above the pane toolbar is what catches this');
+  assert.ok(!hidden(), 'the top edge is what catches this');
 });
 
-check('the row comes back from a press anywhere along the strip', () => {
+check('the row comes back from a press anywhere along the top edge', () => {
   for (const x of [40, 600, 1100]) {
     chromePage({ topHidden: true });
     swipe(x, 30, 80);
-    assert.ok(!hidden('top'), 'a press at x=' + x + ' should reach it too');
+    assert.ok(!hidden(), 'a press at x=' + x + ' should reach it too');
   }
 });
 
-check('dragging the dock down puts it away, and a swipe up brings it back', () => {
-  chromePage();
-  swipe(600, 600, 70);
-  assert.ok(hidden('bottom'), 'the dock goes down');
-  assert.ok(!hidden('top'), 'and the row above stays');
-
-  chromePage({ bottomHidden: true });
-  swipe(600, 670, -70);
-  assert.ok(!hidden('bottom'), 'and comes back up');
-});
-
-check('a wandering tap on the dock is not a drag', () => {
-  chromePage();
-  swipe(600, 600, 9, { steps: 3 });
-  assert.ok(!hidden('bottom'),
-    'a finger resting on 课本 moves a few pixels before it lifts — that is a press');
-});
-
-check('a sideways swipe along the dock is not a drag either', () => {
-  chromePage();
-  const fire = (type, x, y) => document.dispatchEvent(new window.PointerEvent(type, {
-    clientX: x, clientY: y, pointerId: 1, pointerType: 'touch', isPrimary: true,
-    bubbles: true, cancelable: true,
-  }));
-  fire('pointerdown', 400, 660);
-  for (let i = 1; i <= 8; i++) fire('pointermove', 400 + i * 25, 660 + i * 2);
-  fire('pointerup', 600, 676);
-  assert.ok(!hidden('bottom'), 'a thumb sliding across the dock is not reaching for it');
-});
-
-check('a drag that changes its mind leaves the bar where it was', () => {
+check('a drag that changes its mind leaves the row where it was', () => {
   chromePage();
   const fire = (type, y) => document.dispatchEvent(new window.PointerEvent(type, {
-    clientX: 600, clientY: y, pointerId: 1, pointerType: 'touch', isPrimary: true,
+    clientX: 300, clientY: y, pointerId: 1, pointerType: 'touch', isPrimary: true,
     bubbles: true, cancelable: true,
   }));
   fire('pointerdown', 30);
   for (const y of [22, 14, 8, 16, 24, 30]) fire('pointermove', y);
   fire('pointerup', 30);
-  assert.ok(!hidden('top'), 'pulled a little way and put back is not putting it away');
+  assert.ok(!hidden(), 'pulled a little way and put back is not putting it away');
 });
 
-check('the drag that moved a bar does not also press the button under it', () => {
+check('a wandering tap on the row is not a drag', () => {
+  chromePage();
+  swipe(300, 30, -9, { steps: 3 });
+  assert.ok(!hidden(), 'a finger resting on the glass moves a few pixels before it lifts — that is a press');
+});
+
+check('a sideways swipe along the row is not a drag either', () => {
+  chromePage();
+  const fire = (type, x, y) => document.dispatchEvent(new window.PointerEvent(type, {
+    clientX: x, clientY: y, pointerId: 1, pointerType: 'touch', isPrimary: true,
+    bubbles: true, cancelable: true,
+  }));
+  fire('pointerdown', 200, 40);
+  for (let i = 1; i <= 8; i++) fire('pointermove', 200 + i * 25, 40 - i * 2);
+  fire('pointerup', 400, 24);
+  assert.ok(!hidden(), 'a thumb sliding along the row is not reaching for it');
+});
+
+// ── 两个标签：在那一排的正中，跟着它走 ────────────────────────────────────────
+
+check('按在一个标签上竖着往上拉，收起的是整排；那一下点击被吞掉，不会顺手换页', () => {
+  // 原来按在任何按钮上都不算：胶囊里全是按钮，能按住往上拉的只剩胶囊之间那几像素
+  // 空白，人说「向上收起判定太严」。现在看方向：竖着走的归收起。
   chromePage();
   let pressed = 0;
-  capsule('pdf').addEventListener('click', () => { pressed++; });
-  swipe(120, 600, 70);
-  assert.ok(hidden('bottom'), 'the dock went away');
-  capsule('pdf').dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
+  tab('settings').addEventListener('click', () => { pressed++; });
+  swipe(640, 30, -60, { on: tab('settings').querySelector('span') });
+  assert.ok(hidden(), '标签上竖着拉，也是在拉那一排');
+  tab('settings').dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
+  assert.equal(pressed, 0, '拉完那一下点击被吞掉');
+});
+
+check('按在标签上先横着走过门槛，就归标签（划着挑），后面怎么拐都不算收起', () => {
+  chromePage();
+  const fire = (type, x, y) => tab('pdf').dispatchEvent(new window.PointerEvent(type, {
+    clientX: x, clientY: y, pointerId: 1, pointerType: 'touch', isPrimary: true,
+    bubbles: true, cancelable: true,
+  }));
+  fire('pointerdown', 560, 30);
+  fire('pointermove', 572, 29);
+  for (let i = 1; i <= 8; i++) fire('pointermove', 572 + i * 4, 29 - i * 8);
+  fire('pointerup', 604, -35);
+  assert.ok(!hidden());
+});
+
+check('按在两个标签之间那几像素玻璃上往上拉，收起的是整排', () => {
+  // 那枚胶囊不在横杠的盒子里（它 fixed 在页面外），可看上去它就是这一排的一部分。
+  chromePage();
+  swipe(600, 12, -60, { on: document.querySelector('.app-nav') });
+  assert.ok(hidden());
+});
+
+check('拉完那一下点击，不会顺手换了页', () => {
+  chromePage();
+  let pressed = 0;
+  tab('settings').addEventListener('click', () => { pressed++; });
+  swipe(300, 40, -60);
+  assert.ok(hidden(), '那一排收起来了');
+  tab('settings').dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
   assert.equal(pressed, 0, 'the click the drag ends on is swallowed, once');
+  tab('settings').dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
+  assert.equal(pressed, 1, 'and the tap after it is not');
+});
+
+check('设置页上没有那一排：按顶上、往下拉，什么都不动', () => {
+  // 设置页上两个标签一直在，那里没有可以拉的横杠。原来顶边那 96px 在哪一页都会
+  // 接这一下。
+  chromePage({ topHidden: true, page: 'settings' });
+  swipe(600, 30, 80);
+  assert.ok(hidden(), '收起的状态是练习页的，设置页上不该有人去改它');
+});
+
+check('底边整条是纸：往上划、往下拉，什么都不收、什么都不叫回', () => {
+  // 原来底边正中有一根叫回菜单栏的把手，它上面还有一条 76px 的抓取带，笔写到那
+  // 里就变成了拉菜单栏。
+  for (const pointerType of ['touch', 'pen']) {
+    chromePage();
+    swipe(600, 640, 70, { pointerType });
+    assert.ok(!hidden(), `${pointerType}：往下拉`);
+    chromePage();
+    swipe(600, 700, -70, { pointerType });
+    assert.ok(!hidden(), `${pointerType}：往上划`);
+    swipe(600, 662, 0, { steps: 1, pointerType });
+    assert.ok(!hidden(), `${pointerType}：点一下`);
+  }
+});
+
+check('底部菜单栏那一整套都拆干净了', () => {
+  const html = $read('index.html');
+  assert.ok(!/dock-peek|bottom-nav/.test(html), '标记里没有底栏，也没有叫回它的把手');
+  assert.ok(/<nav class="app-nav">/.test(html));
+  assert.ok(html.indexOf('<nav class="app-nav">') < html.indexOf('<div id="app">'),
+    '标签在页面前面：读屏和键盘先走到它');
+  const ui = $read('src/pdf/pdf-workspace-ui.js');
+  assert.ok(!/is-bottom-hidden|is-bottom-moving|dockGrip|dockSummonBox|onInkBar/.test(ui),
+    '收起底栏的手势一条不剩');
+  const css = ['src/styles/pdf.css', 'src/styles/base.css', 'src/styles/liquid.css',
+    'src/styles/material.css', 'src/styles/mobile.css', 'src/styles/deck.css'].map($read).join('\n');
+  assert.ok(!/\.bottom-nav|\.dock-peek|is-bottom-hidden|--bottom-drag|--dock-peek-lift/.test(css),
+    '样式表里也一条不剩');
+  assert.ok(!/_syncDockPeek|dock-peek/.test($read('src/pdf/pdf-workspace.js')));
+});
+
+check('上一版记下的「底栏收着」被清掉，不会留成一条读不到的记录', () => {
+  try { localStorage.setItem('ls_chrome_bottom', '1'); } catch (_) { return; }
+  chromeOff?.();
+  chromeOff = initChromeHiding(document.getElementById('page-pdf'));
+  assert.equal(localStorage.getItem('ls_chrome_bottom'), null);
+});
+
+check('两个标签跟着那一排收起来——只在练习页上', () => {
+  const css = $read('src/styles/pdf.css');
+  assert.ok(/body\[data-page="pdf"\] \.app-nav \{ --drag: var\(--top-drag, 0\); \}/.test(css),
+    '练习页上跟着那一排的进度走');
+  assert.ok(/body\[data-page="pdf"\]\.is-top-hidden \.app-nav \{ pointer-events: none; \}/.test(css),
+    '收起来之后点不到');
+  const nav = css.slice(css.indexOf('.app-nav {'), css.indexOf('.app-nav button {'));
+  assert.ok(/--drag: 0;/.test(nav), '别的页上它不动：设置页上收起来就回不去了');
+  assert.ok(/position: fixed;/.test(nav) && /margin-inline: auto;/.test(nav), '顶上正中');
+  assert.ok(/top: calc\(var\(--app-bar-top\)/.test(nav), '和那一排同一个上沿');
+});
+
+check('那一排给两个标签留了正中那一格，两边等宽', () => {
+  const css = $read('src/styles/pdf.css');
+  assert.ok(/grid-template-columns: minmax\(0, 1fr\) var\(--app-nav-w\) minmax\(0, 1fr\);/.test(css),
+    '两边按剩下的宽度平分（不按内容撑），正中才是真的正中');
+  const html = $read('index.html');
+  const bar = html.slice(html.indexOf('<div class="pdf-page-bar">'));
+  assert.ok(bar.indexOf('pdf-bar-nav-slot') > 0
+    && bar.indexOf('pdf-bar-nav-slot') < bar.indexOf('data-role="close-all"'),
+    '空位在左边那枚胶囊和「全部关闭」之间');
+});
+
+check('收起的时候，横杠占的地方一起还回去', () => {
+  // 液态玻璃皮肤原来把横杠的上边距写死了（margin: 6px 12px），盖掉了按收起进度
+  // 算的那条算式：横杠滑走了，它占的那一截却还空着。
+  const css = $read('src/styles/pdf.css');
+  // 那一排不在文档流里，它让出来的那一截是工作区自己的上边距；收起时这一截变成 --app-bar-gap。
+  assert.ok(/#page-pdf > \.pdf-workspace-host \{\s*margin-top: calc\(var\(--app-bar-top\) \+ var\(--pdf-bar-h\) \+ var\(--app-bar-gap\)\);/.test(css));
+  assert.ok(/body\.is-top-hidden #page-pdf > \.pdf-workspace-host \{\s*margin-top: var\(--app-bar-gap\);/.test(css));
+  const barAt = css.search(/\.pdf-page-bar \{\s*--drag/);
+  const barBody = css.slice(barAt, css.indexOf('}', barAt));
+  assert.ok(/position: absolute;/.test(barBody), '那一排只靠 transform 进出，不碰排版');
+  assert.ok(!/transition:[^;]*margin/.test(barBody), '边距不过渡：每一帧改工作区的高度就是掉帧的根');
+  assert.ok(/transform 0\.32s/.test(barBody) && /opacity 0\.26s/.test(barBody));
+  const laterAt = css.search(/\.pdf-page-bar \{\s*column-gap/);
+  assert.ok(!/transition:/.test(css.slice(laterAt, css.indexOf('}', laterAt))),
+    '后面那条不能再写 transition，写了就把上面那条盖掉');
+  const liquidRule = css.slice(css.indexOf('[data-skin="liquid-math"] .pdf-page-bar {'));
+  const noComments = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '');
+  const body = noComments(liquidRule.slice(0, liquidRule.indexOf('}')));
+  assert.ok(!/margin:\s/.test(body) && !/margin-top/.test(body), `pdf.css 里的液态玻璃规则：${body}`);
+  const liquid = $read('src/styles/liquid.css');
+  const own = liquid.slice(liquid.indexOf('html[data-skin="liquid-math"] .pdf-page-bar {'));
+  const ownBody = noComments(own.slice(0, own.indexOf('}')));
+  assert.ok(!/margin:\s/.test(ownBody) && !/margin-top/.test(ownBody), `liquid.css：${ownBody}`);
 });
 
 check('the gesture is the only way, and there is no button left to press', () => {
@@ -2203,7 +2537,7 @@ check('the gesture is the only way, and there is no button left to press', () =>
   // page it was making room for, and was the one control on this screen that
   // was not about reading. Removing it means the swipe has to be right — which
   // is what the rest of this group is for.
-  const root = chromePage({ topHidden: true, bottomHidden: true });
+  const root = chromePage({ topHidden: true });
   assert.equal(root.querySelector('[data-role="chrome-toggle"]'), null,
     'no button in the markup');
   assert.ok(!/chrome-toggle/.test($read('index.html')), 'nor in the page');
@@ -2212,176 +2546,174 @@ check('the gesture is the only way, and there is no button left to press', () =>
     'and nothing left listening for it');
 
   swipe(600, 40, 70);
-  assert.ok(!hidden('top'), 'the top edge brings the row back');
+  assert.ok(!hidden(), 'the top edge brings the row back');
 });
 
-check('the strip that wakes the row has the whole width of the edge', () => {
-  const css = $read('src/styles/pdf.css');
-  const rule = css.slice(css.indexOf('.bar-peek {'), css.indexOf('body.is-top-hidden .bar-peek'));
-  assert.ok(/right:\s*0;/.test(rule),
-    'it stopped 52px short to clear the collapse button, which is gone');
+check('no strip covers the pane headers once the row is away (收起后栏头不是禁用区)', () => {
+  // 原来是一条盖在屏幕顶上的透明条（.bar-peek，64px、z-index 999）专门接往下拉。收起后两栏顶上去，
+  // 栏头正好落在它底下，整排按钮点不动。
+  const css = $read('src/styles/pdf.css').replace(/\r\n/g, '\n').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.ok(!/bar-peek/.test($read('index.html')), 'no strip in the page');
+  assert.ok(!/bar-peek/.test(css), 'nor in the stylesheet');
+  assert.ok(!/bar-peek|barPeek/.test($read('src/pdf/pdf-workspace-ui.js')), 'nor anything asking where it is');
+  // 竖着的拖动不交给 WebView：写在栏头和它里面每一个元素上（栏头自己会横着滚，滚动容器的子元素会
+  // 被重新放开上下拖动），不写在整页、整栏上（里面有会上下滚的列表）。
+  assert.ok(/body\.is-top-hidden \.pdf-slot-toolbar,\nbody\.is-top-hidden \.pdf-slot-toolbar \* \{ touch-action: pan-x; \}/.test(css));
+  assert.ok(!/is-top-hidden (#page-pdf|\.pdf-ws-slot|\.pdf-workspace)[^{]*\{[^}]*touch-action/.test(css),
+    'the page and the pane keep their own touch-action: the lists in them still scroll');
 });
 
-check('a drag that starts on a capsule leaves the dock alone', () => {
-  chromePage();
-  swipe(500, 660, 70, { on: capsule('pdf') });
-  assert.ok(!hidden('bottom'), 'a finger on 课本 is reaching for 课本, not for the dock');
-  chromePage();
-  swipe(700, 660, 70, { on: capsule('settings').querySelector('span') });
-  assert.ok(!hidden('bottom'), 'and the label inside it counts as the capsule');
+check('a tap on a pane header button lands while the row is away; a pull down from it brings the row back', () => {
+  chromePage({ topHidden: true });
+  const btn = document.querySelector('.pdf-slot-toolbar .pdf-slot-btn');
+  let pressed = 0;
+  btn.addEventListener('click', () => { pressed++; });
+  // 一下点：按下、手指晃了几像素、抬起，浏览器补一下点击。
+  swipe(530, 30, 4, { on: btn, steps: 2 });
+  btn.dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
+  assert.equal(pressed, 1, 'the tap reaches the button');
+  assert.ok(hidden(), 'and a tap does not bring the row back');
+  // 从同一颗按钮往下拉：那一排回来，拉完补来的那一下点击吞掉，按钮不被顺手按下。
+  swipe(530, 30, 70, { on: btn });
+  assert.ok(!hidden(), 'pulling down from the header brings the row back');
+  btn.dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
+  assert.equal(pressed, 1, 'the click the pull ends in is swallowed');
+  btn.dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
+  assert.equal(pressed, 2, 'and the tap after it is not');
 });
 
-check('nothing inside the dock takes hold of it, not even the glass', () => {
-  // Five pixels of bar either side of the capsules is not something to defend:
-  // a finger there is on the capsule as far as the eye goes, and both firing at
-  // once is what made the boundary unusable.
-  for (const [x, label] of [[365, 'the sliver at the left end'],
-                            [500, 'over 课本'],
-                            [835, 'the sliver at the right end']]) {
-    chromePage();
-    swipe(x, 668, 70);
-    assert.ok(!hidden('bottom'), label);
+check('a sideways drag on the header is neither a pull nor a press', () => {
+  chromePage({ topHidden: true });
+  const fire = (type, x, y, target) => target.dispatchEvent(new window.PointerEvent(type, {
+    clientX: x, clientY: y, pointerId: 1, pointerType: 'touch', isPrimary: true, bubbles: true, cancelable: true,
+  }));
+  const btn = document.querySelector('.pdf-slot-btn');
+  fire('pointerdown', 530, 30, btn);
+  fire('pointermove', 560, 36, btn);
+  fire('pointermove', 600, 40, btn);
+  fire('pointerup', 600, 40, btn);
+  assert.ok(hidden());
+});
+
+check('the switching strip, the page and the page-number box keep their own gestures up there', () => {
+  // 切换条上下划是换这一摞里的上一本 / 下一本；书页上是拖着走、写字；页码框里是打字。它们都在收起后
+  // 屏幕顶上那一截里，从它们上面往下划不许顺手把那一排也拉下来。
+  const places = [
+    ['.deck-strip .deck-title', 530, 70],
+    ['.pdf-pane-viewport', 530, 90],
+    ['.pdf-ink-canvas', 300, 90],
+    ['.pdf-slot-page', 620, 30],
+  ];
+  for (const [sel, x, y] of places) {
+    chromePage({ topHidden: true });
+    swipe(x, y, 70, { on: document.querySelector(sel) });
+    assert.ok(hidden(), `a drag down from ${sel} is its own, not a pull on the row`);
   }
 });
 
-check('the band above the dock is what moves it', () => {
+check('the bare edge beside the header: the WebView takes the drag after a few pixels, and a start downward still brings the row back', () => {
+  const fire = (type, x, y, target) => target.dispatchEvent(new window.PointerEvent(type, {
+    clientX: x, clientY: y, pointerId: 1, pointerType: 'touch', isPrimary: true, bubbles: true, cancelable: true,
+  }));
+  const slot = () => document.querySelector('.pdf-ws-slot');
+  // 往下走了 6px，WebView 把手势收走（pointercancel 带的坐标是 0，不作数）：放那一排下来。
+  chromePage({ topHidden: true });
+  fire('pointerdown', 100, 20, slot());
+  fire('pointermove', 101, 23, slot());
+  fire('pointermove', 101, 26, slot());
+  fire('pointercancel', 0, 0, slot());
+  assert.ok(!hidden(), 'a pull that the WebView took away still counts');
+  // 平板上（WebView 138）实测的那一串：+6、+11 两下 pointermove（第二下已经过了 10px 的门槛，那一排
+  // 跟上了手），然后才 pointercancel。一样放下来，不退回去。
+  chromePage({ topHidden: true });
+  fire('pointerdown', 1160, 35, slot());
+  fire('pointermove', 1160, 41, slot());
+  fire('pointermove', 1160, 46, slot());
+  fire('pointercancel', 0, 0, slot());
+  assert.ok(!hidden(), 'taken away after it had already started to follow: still a pull');
+  // 横着走的、几乎没走的：不算。
+  for (const [dx, dy] of [[9, 3], [1, 2], [0, -6]]) {
+    chromePage({ topHidden: true });
+    fire('pointerdown', 100, 20, slot());
+    fire('pointermove', 100 + dx, 20 + dy, slot());
+    fire('pointercancel', 0, 0, slot());
+    assert.ok(hidden(), `a cancel after (${dx}, ${dy}) is not a pull`);
+  }
+  // 那一排露着的时候，被收走的手势什么都不做。
   chromePage();
-  swipe(500, 600, 70);
-  assert.ok(hidden('bottom'), 'and it reaches 76px up, so it is worth aiming at');
+  fire('pointerdown', 100, 30, document);
+  fire('pointermove', 100, 36, document);
+  fire('pointercancel', 0, 0, document);
+  assert.ok(!hidden());
 });
 
-check('a drag that starts above the dock still moves it', () => {
-  chromePage();
-  swipe(500, 610, 70);
-  assert.ok(hidden('bottom'), 'the reach above the dock is over the page, not over a capsule');
-});
-
-/*
- * The way back to the dock, and the writing it used to eat.
- *
- * The peek strip is z-index 999 and takes pointer events while the dock is
- * away, so everything it covers stops being page: a press there lands on the
- * strip and never reaches the ink canvas. It ran 200-1000 across the bottom of
- * a 1200px workspace, which is why a line of working along the foot of a page
- * could not be written, and why trying kept pulling the dock back out from
- * under the hand. It is now a 200px handle in the middle — over the divider
- * and its gutter in a split workspace, which costs neither page any room.
- */
-check('a stylus writing along the bottom does not summon the dock', () => {
-  chromePage({ bottomHidden: true });
-  swipe(250, 660, -70, { pointerType: 'pen' });
-  assert.ok(hidden('bottom'), 'left of the handle, the pen is writing and nothing else');
-
-  chromePage({ bottomHidden: true });
-  swipe(950, 660, -70, { pointerType: 'pen' });
-  assert.ok(hidden('bottom'), 'and the same to the right of it');
-});
-
-check('a stylus calls the dock back from the middle', () => {
-  chromePage({ bottomHidden: true });
-  swipe(600, 660, -70, { pointerType: 'pen' });
-  assert.ok(!hidden('bottom'), 'the centre is the handle, and the pen still reaches it');
-});
-
-check('the hand uses the same handle, and nothing beyond it', () => {
-  chromePage({ bottomHidden: true });
-  swipe(600, 660, -70);
-  assert.ok(!hidden('bottom'), 'a finger on the handle brings it back');
-
-  // The other end of the old strip is page again, for the hand as well. This
-  // is the deliberate narrowing: what the strip covers, nobody can write on.
-  chromePage({ bottomHidden: true });
-  swipe(250, 660, -70);
-  assert.ok(hidden('bottom'), 'and away from the handle it no longer answers');
-});
-
-check('putting the dock away is unchanged, for the pen as much as the hand', () => {
-  // The narrowing is on the way BACK only. Hiding keeps the whole 76px band
-  // above the dock, so a deliberate downward drag still works from anywhere.
-  chromePage();
-  swipe(500, 600, 70, { pointerType: 'pen' });
-  assert.ok(hidden('bottom'), 'a pen drag down still puts it away');
-
-  chromePage();
-  swipe(250, 600, 70, { pointerType: 'pen' });
-  assert.ok(hidden('bottom'), 'from off to one side as much as from the middle');
-
-  chromePage();
-  swipe(250, 600, 70);
-  assert.ok(hidden('bottom'), 'and the hand is untouched');
-});
-
-check('a press on an import button does not move the row', () => {
+check('a tap on an import button is a tap; an upward drag from it puts the row away', () => {
   chromePage();
   const btn = document.createElement('button');
   btn.textContent = '导入练习册';
   document.querySelector('.pdf-page-bar').appendChild(btn);
+  let pressed = 0;
+  btn.addEventListener('click', () => { pressed++; });
+  swipe(120, 30, -6, { on: btn, steps: 2 });
+  btn.dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
+  assert.ok(!hidden(), 'a finger resting on a button wanders a little — that is still a press');
+  assert.equal(pressed, 1, 'and the press goes through');
   swipe(120, 30, -60, { on: btn });
-  assert.ok(!hidden('top'), 'the same rule, at the other end of the screen');
+  assert.ok(hidden(), 'a real upward drag is reaching for the row, wherever it starts');
 });
 
-await checkAsync('the dock is marked as moving while it travels, and only while', async () => {
+check('the toolbar and an open menu are not the row: dragging on them leaves it alone', () => {
+  chromePage();
+  const tb = document.createElement('div');
+  tb.className = 'ink-toolbar';
+  const menu = document.createElement('div');
+  menu.className = 'pdf-bar-menu';
+  document.querySelector('.pdf-page-bar').append(tb, menu);
+  swipe(700, 30, -60, { on: tb });
+  assert.ok(!hidden(), 'the toolbar has its own drag');
+  swipe(200, 30, -60, { on: menu });
+  assert.ok(!hidden(), 'a list is for choosing from');
+});
+
+await checkAsync('the row is marked as moving while it travels, and only while', async () => {
   chromePage();
   const during = [];
-  // The grab is the band above the dock, which is the page — so the reading is
-  // taken from the document, where the gesture actually travels.
-  const watch = () => during.push(document.body.classList.contains('is-bottom-moving'));
+  const watch = () => during.push(document.body.classList.contains('is-top-moving'));
   document.addEventListener('pointermove', watch);
-  swipe(120, 600, 70);
+  swipe(300, 40, -60);
   document.removeEventListener('pointermove', watch);
   assert.ok(during.slice(-1)[0], 'it is marked from the moment it starts travelling');
-  assert.ok(document.body.classList.contains('is-bottom-moving'),
+  assert.ok(document.body.classList.contains('is-top-moving'),
     'and still on its way when the finger lets go');
-  assert.ok(!document.body.classList.contains('is-top-moving'),
-    'the row at the other end is standing still, so it stays usable');
   await wait(500);
-  assert.ok(!document.body.classList.contains('is-bottom-moving'),
-    'once it has arrived the capsules come back');
+  assert.ok(!document.body.classList.contains('is-top-moving'),
+    'once it has arrived the buttons come back');
 });
 
-check('a bar sent away is marked moving whichever edge it left by', () => {
-  chromePage();
-  swipe(600, 600, 70);
-  assert.ok(document.body.classList.contains('is-bottom-moving'), 'the dock');
-  chromePage();
-  swipe(600, 40, -70);
-  assert.ok(document.body.classList.contains('is-top-moving'), 'and the row');
-});
-
-check('a bar in motion has nothing on it that can be pressed', () => {
+check('a row in motion has nothing on it that can be pressed', () => {
   const css = $read('src/styles/pdf.css');
-  assert.ok(/body\.is-bottom-moving \.bottom-nav > button[\s\S]{0,160}?pointer-events:\s*none/.test(css),
-    'a capsule arriving under a thumb must not register as a press');
-  assert.ok(/body\.is-top-moving \.pdf-page-bar button/.test(css), 'and the same for the row');
-  const moving = css.slice(css.indexOf('body.is-bottom-moving'));
-  assert.ok(!/^body\.is-bottom-moving \.bottom-nav\s*\{/m.test(moving),
-    'the bar itself keeps its events — it has to answer the finger carrying it');
+  assert.ok(/body\.is-top-moving \.app-nav > button/.test(css),
+    'a tab arriving under a thumb must not register as a press');
+  assert.ok(/body\.is-top-moving \.pdf-page-bar button/.test(css), 'nor a button on the row');
+  const moving = css.slice(css.indexOf('body.is-top-moving'));
+  assert.ok(!/^body\.is-top-moving \.app-nav\s*\{/m.test(moving),
+    'the capsule itself keeps its events — it has to answer the finger carrying it');
 });
 
 check('building the workspace twice does not handle every gesture twice', () => {
   chromePage();
   // A second set of listeners, left on, would arm two swallows per drag — and
   // the second one eats the user's next real tap. This is the fault behind
-  // capsules that work, then do not, then do.
+  // buttons that work, then do not, then do.
   const off = initChromeHiding(document.getElementById('page-pdf'));
   let pressed = 0;
-  capsule('pdf').addEventListener('click', () => { pressed++; });
+  tab('pdf').addEventListener('click', () => { pressed++; });
   off();
-  swipe(120, 600, 70);
-  capsule('pdf').dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
+  swipe(300, 40, -60);
+  tab('pdf').dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
   assert.equal(pressed, 0, 'the drag it ends on is still swallowed once');
-  capsule('pdf').dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
+  tab('pdf').dispatchEvent(new window.Event('click', { bubbles: true, cancelable: true }));
   assert.equal(pressed, 1, 'and the tap after it is not');
-});
-
-check('the strip is inert while the row is showing', () => {
-  const css = $read('src/styles/pdf.css');
-  const block = css.slice(css.indexOf('.bar-peek {'), css.indexOf('body.is-top-hidden .bar-peek'));
-  assert.ok(/pointer-events:\s*none/.test(block),
-    'it must not sit over the page when there is nothing to bring back');
-  assert.ok(/body\.is-top-hidden \.bar-peek \{ pointer-events: auto/.test(css));
-  assert.ok(/touch-action:\s*none/.test(block),
-    'and it has to refuse the gesture to the WebView, which is the whole point');
 });
 
 check('a panel that floats over a document does not let the document through', () => {

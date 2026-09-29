@@ -41,15 +41,22 @@
   --transition-normal: 0.28s cubic-bezier(0.32, 0.72, 0, 1);
 }
 
+/* 换皮肤的那一下什么都不过渡（settings.js 的 applySkin 挂上、两帧后摘掉）。颜色、圆角、
+   影子本来就该一下子换过去；要紧的是位置和大小——哪一样带着过渡，它就会在两套皮肤之间
+   滑一段，看上去是按钮「挪了一下」。 */
+html.is-reskinning *,
+html.is-reskinning *::before,
+html.is-reskinning *::after { transition: none !important; }
+
 /* Default Skin: Apple Liquid Glass */
-[data-skin="default"] .bottom-nav button.active,
-:root:not([data-skin]) .bottom-nav button.active,
-:root[data-skin="default"] .bottom-nav button.active {
+[data-skin="default"] .app-nav button.active,
+:root:not([data-skin]) .app-nav button.active,
+:root[data-skin="default"] .app-nav button.active {
   color: var(--accent);
 }
-[data-skin="default"] .bottom-nav button.active::after,
-:root:not([data-skin]) .bottom-nav button.active::after,
-:root[data-skin="default"] .bottom-nav button.active::after {
+[data-skin="default"] .app-nav button.active::after,
+:root:not([data-skin]) .app-nav button.active::after,
+:root[data-skin="default"] .app-nav button.active::after {
   content: ''; position: absolute; bottom: 3px;
   width: 24px; height: 3px; border-radius: 3px;
   background: var(--accent);
@@ -61,70 +68,20 @@
 :root[data-skin="default"] .action-btn {
   font-weight: 500; letter-spacing: -0.01em;
 }
-/* ═══════════════════════════════════════════
-   Skin: Minimal — 对页 · 纸
-   白 · 超轻阴影 · 窄圆角 · 干净 · 空气感
-   ═══════════════════════════════════════════ */
 /* ══════════════════════════════════════════════════════════════
-   皮肤：对页 · 纸
+   皮肤：纸
    ══════════════════════════════════════════════════════════════
 
-   和液态玻璃是同一套表面、同一份用心，材质不同。
-
-   玻璃靠透光与折射把层次分开：底下的东西透上来，边缘因菲涅耳效应亮起，投影里
-   带着穿过玻璃的那点颜色。纸没有这些。纸靠的是两件事——明度差，和一条切边。
-   整套皮肤都是从这一句推出来的：
-
-   一、底与纸。工作区的底必须比纸暗一档，白页才落得下去。上一版这里是 #fdfdfd
-       的底配 #ffffff 的纸，差 2/255，等于没有差——所有东西都浮在同一层上，谁
-       也没压住谁。现在底是 #f1f2f4，纸是纯白，这一档就替代了玻璃那层模糊。
-
-   二、边。玻璃画的是一圈随光转的渐变环；纸只有一条切边，粗细不变、明暗不变。
-       它得是墨色的低透明度，而不是灰——这块屏幕上其余一切都是墨，一条中性灰线
-       会读成印刷线，而不是纸的边缘。
-
-   三、影。玻璃投四层（接触、环境、远环境，以及透过玻璃染了色的那一汪）。一张
-       平放在桌上的纸几乎不投影，所以这里只有真正悬空的东西才有影子，而且只有
-       一层、很紧：浮动笔迹栏、展开的卡片、底部胶囊栏。分栏得到的是边，不是影。
-       上一版把影子一律去掉，连悬空的工具栏也没了——于是它没有任何东西说明自己
-       是浮着的。这是这次改动里最要紧的一处。
-
-   四、色。内容是一本黑白的数学书，界面的颜色一旦响亮就会和正文抢。所以颜色只
-       留给"状态"，其余全部让位：选中的工具用黑白反转，不用色；当前分栏用墨色
-       边线对灰色边线，两档之差已经足够。
-
-   五、圆角。上一版胶囊栏是 0 圆角而别处是 4px，两种语言混在一起。现在是一个
-       有理由的梯度：面板 8、按钮 5、握柄 2；圆形只留给本来就该是圆的东西
-       （颜色小样）。 */
+   纸的一切（纸与桌、墨、钢笔、荧光笔、线、宋体标题、圆角）在 paper.css，最后加载。
+   这里只把玻璃独有的几样效果——磨砂、菲涅耳环、高光——在变量上关掉：base.css 和
+   material.css 里读它们的地方有几十处，关在变量上最省事。 */
 [data-skin="minimal"] {
-  /* 墨与纸 */
-  --accent: #111418;
-  --accent-hover: #000000;
-  --accent-light: rgba(17, 20, 24, 0.06);
-  --bg: #f1f2f4;                    /* 桌面：比纸暗一档 */
-  --fg: #111418;
-  --muted: #6b7280;
-  --border-color: rgba(15, 23, 42, 0.12);
-  --card-bg: #ffffff;
-  --hdr-bg: rgba(255, 255, 255, 0.96);
-
-  /* 玻璃那一组令牌在这里全部改写成纸。读它们的表面有几十个，
-     改这一处就够，不必逐个去追。 */
-  --glass-bg: #ffffff;
-  --glass-bg-subtle: #f7f8f9;
   --glass-blur: none;
   --card-blur: none;
   --nav-blur: none;
-  --glass-border: 1px solid var(--border-color);
-  --glass-border-subtle: 1px solid rgba(15, 23, 42, 0.07);
   --nav-border: 1px solid var(--border-color);
-
-  /* 一层，很紧。只给真正悬空的东西。 */
-  --glass-cast: 0 1px 2px rgba(15, 23, 42, 0.06), 0 6px 16px -10px rgba(15, 23, 42, 0.14);
   --glass-bevel: none;
   --glass-inner-glow: none;
-  --glass-shadow: var(--glass-cast);
-  --card-shadow: var(--glass-cast);
   --btn-shadow: none;
 
   /* 菲涅耳环与高光靠颜色关掉，不靠把宽度归零：零宽的遮罩带在不同引擎里
@@ -136,24 +93,11 @@
   --glass-glint-size: 0px;
   --glass-glint-core: transparent;
 
-  /* 一个有理由的梯度，不是随手的 4px */
-  --btn-radius: 5px;
-  --btn-radius-lg: 8px;
-  --card-radius: 8px;
-  --nav-radius: 12px;
-  --tab-radius: 5px;
-  --pill-radius: 999px;
-
-  /* 系统字优先。Inter 并没有随包分发，把它排在最前只会让每台机器都退到下一项；
-     而中文要先找到这台设备真正装了的那一款。 */
-  --font-stack: -apple-system, "Segoe UI", Roboto, "HarmonyOS Sans SC",
-                "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC",
-                "Microsoft YaHei", sans-serif;
   --spacing-unit: 1rem;
 
-  /* 数学里的强调色。玻璃皮肤用蓝、紫、青、金分区；这里换成同一梯度的墨色，
-     因为正文本身就是黑白的数学——再上四种颜色，抢的是公式而不是界面。
-     它们仍然要定义，而不是留空：不定义就会落回玻璃皮肤的蓝，那才是真正的走样。 */
+  /* 数学里的强调色。玻璃皮肤用蓝、紫、青、金分区；纸上换成同一梯度的墨色——正文本身
+     就是黑白的数学，再上四种颜色，抢的是公式而不是界面。它们仍然要定义：不定义就会落回
+     玻璃的蓝。 */
   --accent-gradient: var(--accent);
   --math-violet: #3f3f46;
   --math-cyan: #52525b;
@@ -163,36 +107,6 @@
   --font-math: "KaTeX_Math", "Latin Modern Math", "STIX Two Math", serif;
 }
 
-/* 纸这套皮肤靠明度差和一条切边分层，不靠透光。所以按钮是一条墨线加一片空白，
-   没有底色可言——而那条线得是墨的低透明度，不能是灰：这块屏幕上其余一切都是
-   墨，一条中性灰会被读成印刷线而不是控件。 */
-[data-skin="minimal"] .action-btn {
-  border: 1px solid rgba(28, 28, 30, 0.55);
-  background: transparent;
-  color: var(--fg);
-  font-size: 0.84rem;
-  font-weight: 450;
-}
-/* 按下去是反白，不是变淡：纸上没有「压暗」这回事，翻面才是。 */
-[data-skin="minimal"] .action-btn:active {
-  background: var(--fg);
-  color: #fff;
-}
-[data-skin="minimal"] .action-btn.secondary {
-  border-color: rgba(28, 28, 30, 0.22);
-  color: var(--muted);
-}
-[data-skin="minimal"] .bottom-nav {
-  border-top: 1px solid rgba(28, 28, 30, 0.14);
-}
-/* 选中靠墨色和字重，不靠底色：给一格加底色，那一格就变成了一枚贴纸。 */
-[data-skin="minimal"] .bottom-nav button.active {
-  color: var(--fg);
-  font-weight: 650;
-}
-[data-skin="minimal"] .bottom-nav button {
-  font-size: 0.68rem;
-}
 /* :focus-visible，不是 :focus。用手指点过之后 :focus 会一直留在那颗按钮上，于是
    两个下拉框一深一浅——看起来像其中一个坏了。键盘走到它上面时仍然要有这圈边。 */
 [data-skin="minimal"] .set-select-btn:focus-visible {
@@ -383,67 +297,6 @@
   isolation: isolate;
 }
 
-/* ── Floating Island Navigation Dock (Anchored Dead Center) ── */
-.bottom-nav,
-[data-skin="liquid-math"] .bottom-nav {
-  position: fixed !important;
-  bottom: 12px !important;
-  /* Centred by margin, not by `translateX(-50%)`.
-     A transform used for layout is a transform nothing else can touch. The
-     individual `scale` property composes AFTER the `transform` property, about
-     the same origin, so a press effect of scale(0.972) on a 480px dock
-     multiplied the -240px centring offset too and slid the whole bar 13px
-     sideways on every tap. Taking the transform out of the centring leaves
-     `scale` free to do what it says. */
-  left: 0 !important;
-  right: 0 !important;
-  margin-inline: auto;
-  width: calc(100% - 32px);
-  max-width: 480px;
-  border-radius: var(--nav-radius);
-  border: 0;
-  background: var(--glass-bg);
-  /* 不磨砂——理由见下面 .bottom-nav 那条规则上的注释。
-     这一条才是真正生效的那个：`[data-skin="liquid-math"] .bottom-nav` 的
-     特异性高过底下那条光秃秃的 `.bottom-nav`，只改那边不起作用。 */
-  box-shadow: var(--glass-shadow);
-  padding: 6px 10px;
-  padding-bottom: max(6px, var(--safe-b));
-  user-select: none;
-  /* The dock owns its own vertical gestures — see pdf.css, where this is set to
-     none for both the dock and its buttons. It was pan-y so that a swipe
-     starting on the dock could still scroll the page behind it; nothing behind
-     it scrolls that way any more, and a downward swipe here now means "put this
-     away", which the browser cannot be allowed to take for a scroll. */
-  touch-action: none;
-  z-index: 1000;
-  isolation: isolate;
-}
-
-/* The dock wears the same rim as every other glass surface, rather than the
-   flat 1px white outline it had. */
-.bottom-nav::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  padding: var(--glass-rim-width, 1.25px);
-  background:
-    conic-gradient(from calc(var(--glass-angle, 135deg) - 100deg),
-      var(--glass-rim-bright)  0deg,
-      var(--glass-rim-mid)    58deg,
-      var(--glass-rim-dim)   126deg,
-      var(--glass-rim-dim)   190deg,
-      var(--glass-rim-mid)   258deg,
-      var(--glass-rim-bright) 330deg,
-      var(--glass-rim-bright) 360deg);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-          mask-composite: exclude;
-  pointer-events: none;
-  z-index: 2;
-}
 
 /* ══════════════════════════════════════════════════════════════
    Sliding lenses — the dock pill and the segmented-control pill
@@ -591,12 +444,12 @@
    the rounded lens — visible in dark mode as a square shadow behind the pill,
    and briefly as a square flash while the lens was still travelling. The
    button now contributes colour and weight only. */
-[data-skin="liquid-math"] .bottom-nav button,
-[data-skin="liquid-math"] .bottom-nav button.active {
+[data-skin="liquid-math"] .app-nav button,
+[data-skin="liquid-math"] .app-nav button.active {
   background: transparent;
   border-color: transparent;
   box-shadow: none;
-}[data-skin="liquid-math"] .bottom-nav button.active{
+}[data-skin="liquid-math"] .app-nav button.active{
   color: var(--accent);
   font-weight: 600;
 }
@@ -690,12 +543,10 @@
 @supports not ((mask-composite: exclude) or (-webkit-mask-composite: xor)) {
   [data-skin="liquid-math"] .ink-toolbar::after,
   [data-skin="liquid-math"] .ink-card::after,
-  .bottom-nav::after,
   .nav-glass-lens::before,
   .segmented-glass-lens::before { display: none !important; }
   [data-skin="liquid-math"] .ink-toolbar,
   [data-skin="liquid-math"] .ink-card,
-  .bottom-nav,
   .nav-glass-lens,
   .segmented-glass-lens {
     border: 1px solid var(--glass-rim-mid, rgba(255, 255, 255, 0.4)) !important;
@@ -763,11 +614,14 @@ a:hover { color: var(--accent-hover); }
 }/* ── 页面骨架：一屏一页，同时只有一页在场 ───────────────────────── */
 #app { max-width: var(--max-w); margin: 0 auto; }
 /* Top and bottom are set against what is actually there, rather than a round
-   number: 12px of air above the import row, and below, just enough to clear the
-   floating dock — it is 66px tall and sits 12px off the bottom — plus the same
-   12px again. The old 6.5rem left the workspace stopping well short of the
-   dock with nothing in between, and the 1.5rem on top compounded the spacer. */
-.page { display: none; padding: 0.75rem 1.25rem calc(5.6rem + var(--safe-b)); }
+   number. At the top: the two tabs (练习 / 设置) float at the top centre of
+   every page, so a page's own content starts below them. At the bottom there is
+   nothing any more — the floating dock that used to need 5.6rem of clearance
+   moved up into that row — so only the system's gesture inset and a margin. */
+.page {
+  display: none;
+  padding: calc(var(--app-bar-top, 8px) + var(--app-nav-h, 44px) + 0.75rem) 1.25rem calc(2rem + var(--safe-b));
+}
 .page.active { display: block; animation: pageFadeIn 0.22s var(--spring-ease); }
 
 @keyframes pageFadeIn {
@@ -775,11 +629,53 @@ a:hover { color: var(--accent-hover); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ── 底部标签栏：半透，但不磨砂 ──
+/* 走掉的那一页也有动作，不是当场消失（bootstrap.js 的 showPage）。
+
+   一页凭空没了、另一页慢慢浮上来，两半不对称，看着就是闪了一下。现在两页交叉
+   着换：来的那页从下面浮上来（pageFadeIn），走的那页往上淡出一点点——方向相反，
+   人分得出谁来谁走。
+
+   走的那一页挂着 is-leaving 的这 0.2 秒里：钉在它原来的位置上（fixed，滚过的距离
+   由 --leave-top 补上），不占文档流，所以来的那页一开始就在自己该在的地方；什么
+   都点不到。练习页平时是 flex（pdf.css 里带 !important），这里也得给它留着，不
+   然它会在淡出的第一帧就散架。 */
+.page.is-leaving {
+  display: block;
+  position: fixed;
+  top: var(--leave-top, 0px);
+  left: 0;
+  right: 0;
+  z-index: 0;
+  pointer-events: none;
+  /* 退场的曲线见 pdf.css 里 --exit-ease 那条注释：弹簧那条前 50ms 就走掉六成，看着像
+     当场消失。这里写死同一条，是因为 base.css 先于 pdf.css 加载、这一条不认得那个变量
+     的时候也得是对的。 */
+  animation: pageFadeOut 0.26s var(--exit-ease, cubic-bezier(0.4, 0, 0.2, 1)) forwards;
+}
+#page-pdf.is-leaving {
+  display: flex !important;
+  position: fixed;
+  top: var(--leave-top, 0px);
+  left: 0;
+  right: 0;
+}
+
+@keyframes pageFadeOut {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-4px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page.is-leaving { animation: none; display: none; }
+  #page-pdf.is-leaving { display: none !important; }
+}
+
+/* ── 顶上两个标签：半透，但不磨砂 ──
  *
  * 别处的玻璃留着——页码条、栏工具条、缩放牌都浮在自己那一栏的边缘，糊掉的是
- * 页边空白。底栏不一样：它横跨屏幕最底下一条，而那里正是正在读的那几行字。
- * 磨砂一加，底下那行手写就认不出来了。
+ * 页边空白。标签栏不一样：它原来横在屏幕最底下一条，而那里正是正在读的那几
+ * 行字——磨砂一加，底下那行手写就认不出来了。现在它挪到了顶上那一排的正中
+ * （pdf.css 的 .app-nav），道理照旧：它和顶上那一排一样浮在正文上，一样不磨砂。
  *
  * 这是在真机上看出来的。此前 lightningcss 把无前缀的 backdrop-filter 丢掉了
  * （见 test_ink_toolbar_theme.js 里那条断言），玻璃从来没生效，底栏一直是纯
@@ -788,34 +684,6 @@ a:hover { color: var(--accent-hover); }
  *
  * 所以这里**故意**不要 blur，不是又坏了一次。一个看手写内容的软件，清楚比
  * 好看要紧。半透的底色、描边和阴影都留着，它照样读得出是一层浮起来的东西。 */
-.bottom-nav {
-  position: fixed; bottom: 0; left: 0; right: 0; z-index: 100;
-  background: var(--hdr-bg);
-  border-radius: var(--nav-radius) var(--nav-radius) 0 0;
-  border-top: var(--nav-border);
-  box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.6);
-  display: flex; justify-content: space-around;
-  padding-bottom: var(--safe-b);
-  transition: background 0.3s, border-color 0.3s;
-}
-.bottom-nav button {
-  flex: 1; background: none; border: none;
-  color: var(--muted); cursor: pointer; position: relative;
-  padding: 8px 4px 6px;
-  display: flex; flex-direction: column; align-items: center; gap: 3px;
-  font-size: 0.72rem; font-weight: 500; font-family: inherit;
-  transition: all var(--transition-fast); -webkit-tap-highlight-color: transparent;
-}
-.bottom-nav button:active { transform: scale(0.92); }
-.bottom-nav button.active { color: var(--accent); font-weight: 600; }
-.bottom-nav button svg {
-  width: 22px; height: 22px;
-  transition: transform var(--transition-fast), filter var(--transition-fast);
-}
-.bottom-nav button.active svg {
-  transform: translateY(-1px);
-  filter: drop-shadow(0 2px 6px rgba(0, 122, 255, 0.4));
-}
 
 /* ── Ambient particle/mesh background ── */
 #mathBg { position: fixed; inset: 0; z-index: -2; pointer-events: none; opacity: 0.65; }
@@ -838,7 +706,9 @@ a:hover { color: var(--accent-hover); }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
 /* ── Settings page (Apple Inset Grouped) ── */
-#page-settings { padding: 1.25rem 1.25rem; padding-bottom: calc(6.5rem + var(--safe-b)); }
+#page-settings {
+  padding: calc(var(--app-bar-top, 8px) + var(--app-nav-h, 44px) + 0.75rem) 1.25rem calc(2.5rem + var(--safe-b));
+}
 #page-settings .settings-body { max-width: 580px; padding: 0; margin: 0 auto; }
 .settings-tabs {
   display: flex; gap: 4px; margin-bottom: 1.25rem; padding: 4px;
@@ -910,13 +780,31 @@ a:hover { color: var(--accent-hover); }
   backdrop-filter: blur(30px) saturate(180%);
   border-radius: 12px; overflow: hidden; display: none;
   box-shadow: 0 12px 32px -8px rgba(15, 23, 42, 0.22), var(--glass-shadow);
-  animation: dropdownIn 0.18s var(--spring-ease);
+  /* 收起时淡出，不是当场消失。
+
+     开着「皮肤」去点「语言」，前一张原来一下子就没了、后一张慢慢落下来——一半有
+     动作一半没有，看着像闪了一下。display 从 block 到 none 的那一下由
+     allow-discrete 推迟到淡出结束；JS（custom-select.js）照旧当场去掉 .show，状态
+     不用等动画。淡出的这一小段里它点不到。 */
+  opacity: 0;
+  translate: 0 -4px;
+  pointer-events: none;
+  transition-property: opacity, translate, display;
+  transition-duration: 0.16s, 0.2s, 0.2s;
+  transition-timing-function: ease, var(--spring-ease), linear;
+  transition-behavior: allow-discrete;
 }
 @keyframes dropdownIn {
   from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-.set-select-dropdown.show { display: block; }
+.set-select-dropdown.show {
+  display: block;
+  opacity: 1;
+  translate: 0 0;
+  pointer-events: auto;
+  animation: dropdownIn 0.18s var(--spring-ease);
+}
 .set-option {
   padding: 0.65rem 0.9rem; font-size: 0.88rem; color: var(--fg);
   cursor: pointer; transition: background var(--transition-fast);
@@ -928,8 +816,12 @@ a:hover { color: var(--accent-hover); }
 /* ── Settings page groups: Apple Inset Grouped ── */
 
 /* A card holding an open list is lifted above its neighbours. Each card is its
-   own stacking context, so this is the only place the lift can be applied. */
-.set-group:has(.set-select-dropdown.show) { z-index: 60; }
+   own stacking context, so this is the only place the lift can be applied.
+
+   放下来要慢一拍：列表淡出的那 0.2 秒里它还画着，这张卡片要是当场落回 1，下一张
+   卡片就会盖在正在淡出的列表上。所以回到 1 推迟到淡出结束；抬起来是立刻的。 */
+.set-group { transition: z-index 0s linear 0.2s; }
+.set-group:has(.set-select-dropdown.show) { z-index: 60; transition-delay: 0s; }
 
 .set-group {
   position: relative; z-index: 1;

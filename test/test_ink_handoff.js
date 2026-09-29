@@ -101,12 +101,12 @@ function wire(panes) {
         else other.surface.clearDragGhost();
       }
     };
-    pane.surface.handlers.onDragDrop = ({ strokes, clientX, clientY, scale }) => {
+    pane.surface.handlers.onDragDrop = ({ strokes, clientX, clientY, scale, origin }) => {
       const hit = panes.find(p => p !== pane
         && clientX >= p.rect.left && clientX <= p.rect.left + p.rect.width
         && clientY >= p.rect.top && clientY <= p.rect.top + p.rect.height);
       if (!hit) return null;
-      return hit.surface.adoptStrokes(strokes, clientX, clientY, scale);
+      return hit.surface.adoptStrokes(strokes, clientX, clientY, scale, origin);
     };
   }
 }
@@ -142,7 +142,7 @@ function selectRect(surface, ids, x0, y0, x1, y1) {
 const heads = (surface) => surface.layer.getAll()
   .map(s => [Math.round(s.points[0].x), Math.round(s.points[0].y)]);
 
-/** 层里所有点的中心。落点比的是这个——adoptStrokes 把整片放到手指底下居中。 */
+/** 层里所有点的中心。只有没带来处（origin）的老调用才按它落。 */
 function centre(surface) {
   const pts = surface.layer.getAll().flatMap(s => s.points);
   const xs = pts.map(p => p.x);
@@ -185,12 +185,14 @@ await test('左边空了，右边接住了', async () => {
   assert.equal(right.surface.layer.length, 1, '右边没接住的话这一片就凭空消失了');
 });
 
-await test('落在松手的地方，不是落在原来的坐标上', async () => {
+await test('按着哪一点拖过去，松手时那一点还在指尖下', async () => {
   const { right } = dragAcross();
-  // 右边那块画布从屏幕 400 开始，手在屏幕 600 松开 —— 也就是它自己的 200。
-  const [x, y] = centre(right.surface);
-  assert.equal(x, 200, '横向没落在手指底下');
-  assert.equal(y, 300, '纵向没落在手指底下');
+  // 按在 (140,215)，线头在 (100,200)：指尖在线头右下 (40,15)。右边那块画布从屏幕
+  // 400 开始，手在屏幕 600 松开 —— 它自己的 200。线头该在 (200-40, 300-15)。
+  //
+  // 以前落的是「整片的中心在指尖下」，也就是 (190..210, 300)：按着一角拖过来的那
+  // 一片，松手那一下跳了半个身位。
+  assert.deepEqual(heads(right.surface), [[160, 285]], '松手那一下不该跳');
 });
 
 await test('落下来就是选中的', async () => {
@@ -415,6 +417,104 @@ await test('两栏缩放不同时，落地不改屏幕上的大小', async () =>
 });
 
 // ═══════════════════════════════════════════════════════════════
+group('7b. 落在预览最后停着的地方');
+
+// 真机上报的：拖过去之后，落下来的那一片不在松手的地方。预览一路是跟着指尖、保持
+// 着按下去时的相对位置走的；松手那一下却改成「整片的中心摆到指尖下」——除非正好
+// 按着正中间拖，否则一定跳。
+
+const near = (a, b, eps = 1e-6) => Math.abs(a - b) < eps;
+
+await test('落下来的每个点，就是预览最后画它的地方', async () => {
+  dom.window.document.body.innerHTML = '';
+  const left = mount({ left: 0, top: 0, width: 400, height: 600 });
+  const right = mount({ left: 400, top: 0, width: 400, height: 600 });
+  wire([left, right]);
+
+  const a = line(left.surface, 100, 200, 60);
+  selectRect(left.surface, [a.id], 60, 150, 220, 280);
+  left.canvas.dispatchEvent(pen('pointerdown', 110, 205));
+  left.canvas.dispatchEvent(pen('pointermove', 300, 260));
+  left.canvas.dispatchEvent(pen('pointermove', 520, 330));
+  const ghost = right.surface._ghost.map(st => st.points.map(p => ({ x: p.x, y: p.y })));
+  left.canvas.dispatchEvent(pen('pointerup', 520, 330));
+
+  const got = right.surface.layer.getAll().map(st => st.points.map(p => ({ x: p.x, y: p.y })));
+  assert.equal(got.length, ghost.length);
+  got.forEach((pts, i) => pts.forEach((p, j) => {
+    assert.ok(near(p.x, ghost[i][j].x) && near(p.y, ghost[i][j].y),
+      `第 ${i + 1} 笔第 ${j + 1} 点：预览在 (${ghost[i][j].x}, ${ghost[i][j].y})，` +
+      `落在 (${p.x}, ${p.y})`);
+  }));
+});
+
+await test('松手的坐标和最后一次移动不一样时，以松手为准', async () => {
+  dom.window.document.body.innerHTML = '';
+  const left = mount({ left: 0, top: 0, width: 400, height: 600 });
+  const right = mount({ left: 400, top: 0, width: 400, height: 600 });
+  wire([left, right]);
+
+  const a = line(left.surface, 100, 200);
+  selectRect(left.surface, [a.id], 60, 150, 220, 280);
+  left.canvas.dispatchEvent(pen('pointerdown', 140, 215));
+  left.canvas.dispatchEvent(pen('pointermove', 600, 300));
+  // 甩得快的时候，抬笔那一下还会再走一截。
+  left.canvas.dispatchEvent(pen('pointerup', 610, 305));
+  assert.deepEqual(heads(right.surface), [[170, 290]],
+    '指尖在线头右下 (40,15)，抬笔在右边的 (210,305)：线头该在 (170,290)');
+});
+
+await test('两栏缩放、平移都不一样，抓着的那一点照样在指尖下', async () => {
+  dom.window.document.body.innerHTML = '';
+  const left = mount({ left: 0, top: 0, width: 400, height: 600 });
+  const right = mount({ left: 400, top: 0, width: 400, height: 600 });
+  left.surface.setTransform(0.5, 30, -40);
+  right.surface.setTransform(1.5, 10, 20);
+  wire([left, right]);
+
+  // 线头 (100,200) 在左边屏幕上是 ((100-30)*0.5, (200+40)*0.5) = (35,120)。
+  const a = line(left.surface, 100, 200, 40);
+  selectRect(left.surface, [a.id], 60, 150, 220, 280);
+  left.canvas.dispatchEvent(pen('pointerdown', 40, 125));   // 指尖在线头右下 (5,5)
+  left.canvas.dispatchEvent(pen('pointermove', 300, 200));
+  left.canvas.dispatchEvent(pen('pointermove', 600, 300));
+  left.canvas.dispatchEvent(pen('pointerup', 600, 300));
+
+  const got = right.surface.layer.getAll()[0];
+  assert.ok(got, '先得落过去');
+  // 线头该在屏幕 (595,295)，也就是右边画布的 (195,295)，换成右边的文档坐标。
+  const head = got.points[0];
+  assert.ok(near(head.x, 195 / 1.5 + 10) && near(head.y, 295 / 1.5 + 20),
+    `线头落在 (${head.x.toFixed(2)}, ${head.y.toFixed(2)})，` +
+    `该在 (${(195 / 1.5 + 10).toFixed(2)}, ${(295 / 1.5 + 20).toFixed(2)})`);
+  // 屏幕上 20 宽（左边 40 × 0.5），右边 scale 1.5 → 文档里 13.33。
+  const tail = got.points[got.points.length - 1];
+  assert.ok(near((tail.x - head.x) * 1.5, 20), '屏幕上的长短也不该变');
+  assert.ok(near(got.width, 2 * 0.5 / 1.5), '粗细按两边的缩放折算');
+});
+
+await test('落下来的选框框着落下来的那一片', async () => {
+  const { right } = dragAcross();
+  const loop = right.surface.selectionLoop;
+  const xs = loop.map(p => p.x);
+  const ys = loop.map(p => p.y);
+  // 线在 (160..180, 285)，框四边各让出 6。
+  assert.deepEqual([Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)],
+    [154, 186, 279, 291]);
+});
+
+await test('没带来处的老调用，退回「整片的中心摆到指尖下」', async () => {
+  dom.window.document.body.innerHTML = '';
+  const { surface } = mount({ left: 400, top: 0, width: 400, height: 600 });
+  const src = createStroke({ tool: INK_TOOLS.PEN, color: '#000', width: 2 });
+  appendPoint(src, 0, 0, 0.5, 0);
+  appendPoint(src, 20, 10, 0.5, 0);
+  const { serializeStroke } = await import('../src/ink/stroke.js');
+  assert.ok(surface.adoptStrokes([serializeStroke(src)], 600, 300, 1));
+  assert.deepEqual(centre(surface), [200, 300]);
+});
+
+// ═══════════════════════════════════════════════════════════════
 group('8. 两块面板把把手原样传出去');
 
 // 上面那些测试是直接把两块画布接在一起的，绕过了 PdfPane / ScratchPane。真机上
@@ -442,6 +542,8 @@ await test('工作区回的是把手，不是布尔', async () => {
     '_dropInkIntoOtherSlot 要把 adoptStrokes 给的那组把手交回去');
   assert.ok(!ws.includes('adoptStrokes(strokes, clientX, clientY) === true'),
     '同样不能折成布尔');
+  assert.ok(ws.includes('adoptStrokes(strokes, clientX, clientY, scale, origin)'),
+    '来处（origin）要交过去，不然落下来的那一片会跳到「中心在指尖下」');
 });
 
 console.log('\n═══════════════════════════════════════════════════════════════');

@@ -57,6 +57,22 @@ export const CORNERS = Object.freeze({
 });
 
 /**
+ * 顶上那一排（和「练习 / 设置」两个标签同一行）里，工具栏能停的两处空当：两个
+ * 标签左边那一处、右边那一处。
+ *
+ * 停在那儿的时候它有两种样子，用的还是这里原有的两个阶段：
+ *   · DOCKED：收成一颗球，塞在那处空当里；
+ *   · EXPANDED：点开，整条横着躺在这一排里，把两边的胶囊挤开。
+ * 怎么量空当、怎么挤，是页面那一层的事（src/pdf/top-row-dock.js）；这里只记它停
+ * 在哪一处（perch：标签的哪一侧），和停在那一侧的哪儿（perchX：球心在这一排里的比
+ * 例，0 在左头、1 在右头；没有就是那处空当的正中）。
+ */
+export const PERCHES = Object.freeze({
+  LEFT: 'left',
+  RIGHT: 'right',
+});
+
+/**
  * Corner snap zone, in CSS pixels.
  *
  * The spec leaves the dimension to implementation. 96px is two 48dp touch
@@ -197,11 +213,24 @@ export function createToolbarState(initial = {}) {
     // ── placement ──
     edge: Object.values(EDGES).includes(initial.edge) ? initial.edge : EDGES.LEFT,
     offset: clamp01(initial.offset ?? 0.35),
+    /**
+     * 停在顶上那一排的哪一处空当，没停在那儿就是 null。见 PERCHES。
+     *
+     * 开机时停在那儿的，一律是收着的那颗球：点开的那一条会把两边的胶囊挤开，一
+     * 开机就挤着，人还没伸手，顶上那一排先乱了。
+     */
+    perch: Object.values(PERCHES).includes(initial.perch) ? initial.perch : null,
+    /** 球停在那一排里的哪儿（球心在这一排里的比例）。人放在哪儿就是哪儿，不再一律摆到空当正中。 */
+    perchX: Object.values(PERCHES).includes(initial.perch) && Number.isFinite(initial.perchX)
+      ? clamp01(initial.perchX) : null,
     /** Corner-docked state is restorable, so the phase comes from `initial`. */
-    phase: initial.corner && Object.values(CORNERS).includes(initial.corner)
+    phase: (Object.values(PERCHES).includes(initial.perch)
+      || (initial.corner && Object.values(CORNERS).includes(initial.corner)))
       ? TOOLBAR_PHASE.DOCKED
       : TOOLBAR_PHASE.EXPANDED,
-    corner: Object.values(CORNERS).includes(initial.corner) ? initial.corner : null,
+    corner: Object.values(PERCHES).includes(initial.perch)
+      ? null
+      : (Object.values(CORNERS).includes(initial.corner) ? initial.corner : null),
     /** Transient token position while dragging, in viewport pixels. */
     dragPoint: null,
     /**
@@ -210,6 +239,11 @@ export function createToolbarState(initial = {}) {
      * reader never asked for cannot become the placement they are left with.
      */
     yielded: null,
+    /**
+     * 顶上那一排收起来的时候，停在那一排里的工具栏借住在工作区左边（见 stepOffRow）。
+     * 这里记着它在那一排里的位置，那一排拉回来就还回去；存盘写的也是这一份。
+     */
+    offRow: null,
 
     // ── ink tool state (must survive placement changes) ──
     tool,
@@ -261,7 +295,16 @@ export function startDrag(state, point) {
     openCard: CARDS.NONE,
     // Picking the puck up leaves the corner; where it lands decides the rest.
     corner: null,
+    // 从顶上那一排拿起来也一样：拿在手里的时候它不在任何一处。
+    perch: null,
+    perchX: null,
     dragPoint: point ? { x: point.x, y: point.y } : null,
+    // 人把它拿在手里了：接下来落在哪儿是他定的，不再欠谁一个位置。留着那笔账
+    // 的话，挡着它的面板一关，它会跳回拖动之前的地方——人刚放下的位置被当成了
+    // 借来的；存盘时写下去的也是那个旧位置。
+    yielded: null,
+    // 顶上那一排收着时借住在左边的也一样：亲手挪过，那一排拉回来就不再把它送回去。
+    offRow: null,
   });
 }
 
@@ -291,17 +334,31 @@ export function moveDrag(state, point) {
  * untouched, which is the acceptance requirement that selections survive
  * movement and reorientation.
  */
-export function endDrag(state, point, viewport) {
+export function endDrag(state, point, viewport, { perch = null, perchX = null } = {}) {
   if (state.phase !== TOOLBAR_PHASE.DRAGGING) return state;
+  // 松在顶上那一排里：收成一颗球，停在松手的那个地方。落在哪一侧、哪儿由页面那一层判
+  // （它才知道那几枚胶囊在哪），这里只照办。edge / offset 不动——那是它在工作区里的
+  // 家，之后从这一排拖回工作区时，落点会重新定它。
+  if (Object.values(PERCHES).includes(perch)) {
+    return next(state, {
+      phase: TOOLBAR_PHASE.DOCKED,
+      corner: null,
+      perch,
+      perchX: Number.isFinite(perchX) ? clamp01(perchX) : null,
+      dragPoint: null,
+    });
+  }
   const release = point || state.dragPoint;
   if (!release || !viewport) {
-    return next(state, { phase: TOOLBAR_PHASE.EXPANDED, dragPoint: null });
+    return next(state, { phase: TOOLBAR_PHASE.EXPANDED, perch: null, perchX: null, dragPoint: null });
   }
   const { edge, offset } = nearestEdge(release, viewport);
   const corner = cornerOf(release, viewport);
   return next(state, {
     phase: corner ? TOOLBAR_PHASE.DOCKED : TOOLBAR_PHASE.EXPANDED,
     corner,
+    perch: null,
+    perchX: null,
     edge,
     offset,
     dragPoint: null,
@@ -317,7 +374,9 @@ export function endDrag(state, point, viewport) {
  */
 export function undock(state) {
   if (state.phase !== TOOLBAR_PHASE.DOCKED) return state;
-  return next(state, { phase: TOOLBAR_PHASE.EXPANDED, corner: null });
+  // 点开也是人自己要它回来。让位时欠下的账就此结清：还留着的话，它以为自己
+  // 还在让着，之后再开什么面板都不让了——横杠直接压在单子上。
+  return next(state, { phase: TOOLBAR_PHASE.EXPANDED, corner: null, yielded: null });
 }
 
 /**
@@ -338,7 +397,122 @@ export function dockToCorner(state, corner) {
   if (!Object.values(CORNERS).includes(corner)) return state;
   if (state.phase !== TOOLBAR_PHASE.EXPANDED) return state;
   if (state.yielded) return state;
+  // 停在顶上那一排里的，收回那一排里那颗球（foldToPerch），不飞到工作区的角上去。
+  if (state.perch) return state;
   return next(state, { phase: TOOLBAR_PHASE.DOCKED, corner, openCard: CARDS.NONE });
+}
+
+/**
+ * 顶上那一排里点开的那一条 → 收回同一处空当里的那颗球。
+ *
+ * 人点它的把手收起来、或者开着「自动收起」时一落笔，都走这一步。卡片跟着关：它挂
+ * 在横杠底下，横杠收了它就没处挂。
+ */
+export function foldToPerch(state) {
+  if (!state.perch || state.phase !== TOOLBAR_PHASE.EXPANDED) return state;
+  return next(state, { phase: TOOLBAR_PHASE.DOCKED, corner: null, openCard: CARDS.NONE });
+}
+
+/**
+ * 顶上那一排此刻停不下它（专注模式把那一排收掉了、那两处空当都窄得放不下一颗
+ * 球）：离开那一排，收成工作区角上的一颗球。
+ *
+ * 记成人自己停的那种（不是让位）：那一排什么时候回来说不准，回来了也不该替人把
+ * 它搬回去。
+ */
+export function leavePerch(state, corner = CORNERS.TOP_RIGHT) {
+  if (!state.perch) return state;
+  return next(state, {
+    phase: TOOLBAR_PHASE.DOCKED,
+    corner: Object.values(CORNERS).includes(corner) ? corner : CORNERS.TOP_RIGHT,
+    perch: null,
+    perchX: null,
+    openCard: CARDS.NONE,
+  });
+}
+
+/**
+ * 回到顶上那一排的那一处空当，收着。
+ *
+ * 只给「那一排暂时停不了、它被请到角上去」之后的那一步用：那一排回来了，它原样回去。
+ * 人在这中间亲手挪过它的话，就不再回去——那时它在哪儿是人定的。
+ */
+export function perchAt(state, perch, perchX = null) {
+  if (!Object.values(PERCHES).includes(perch)) return state;
+  if (state.phase === TOOLBAR_PHASE.DRAGGING) return state;
+  return next(state, {
+    phase: TOOLBAR_PHASE.DOCKED,
+    corner: null,
+    perch,
+    perchX: Number.isFinite(perchX) ? clamp01(perchX) : null,
+    openCard: CARDS.NONE,
+    yielded: null,
+    offRow: null,
+  });
+}
+
+/**
+ * 顶上那一排被收起来了（往上一拉）：停在里面的工具栏不跟着一起消失，改借住在工作区左边——
+ * 人说「工具栏位于上方时，如果收起上方菜单栏，则工具栏会从左边重新出现」。
+ *
+ *   · 点开着的那一条：贴左边竖着，上下停在它在工作区里的老地方（原来就贴左边的话用它的
+ *     offset，别的边就居中）；
+ *   · 收着的那颗球：停在左上角（它在左边的老地方偏下半截就停左下角）。
+ *
+ * 借的，不是搬家：它在那一排里的位置记在 offRow 里，那一排拉回来就还回去（backToRow），
+ * 存盘写的也是那一排里的位置。人中间亲手拖过它就不再还（startDrag 清掉这笔账）。
+ * 在左边点开、收起都照常，还回去时按那一刻是开着还是收着。
+ */
+export function stepOffRow(state) {
+  if (!state.perch || state.phase === TOOLBAR_PHASE.DRAGGING) return state;
+  const expanded = state.phase === TOOLBAR_PHASE.EXPANDED;
+  const onLeft = state.edge === EDGES.LEFT;
+  const offset = onLeft ? state.offset : 0.5;
+  return next(state, {
+    offRow: Object.freeze({
+      perch: state.perch,
+      perchX: state.perchX,
+      edge: state.edge,
+      offset: state.offset,
+    }),
+    perch: null,
+    perchX: null,
+    phase: expanded ? TOOLBAR_PHASE.EXPANDED : TOOLBAR_PHASE.DOCKED,
+    corner: expanded ? null : (offset > 0.5 ? CORNERS.BOTTOM_LEFT : CORNERS.TOP_LEFT),
+    edge: EDGES.LEFT,
+    offset,
+    openCard: CARDS.NONE,
+  });
+}
+
+/**
+ * 顶上那一排拉回来了：借住在左边的回那一排里原来的地方，开着的还开着、收着的还收着。
+ * 让位那笔账一起结清——停在那一排里的不压着任何面板。
+ */
+export function backToRow(state) {
+  const owed = state.offRow;
+  if (!owed || state.phase === TOOLBAR_PHASE.DRAGGING) return state;
+  return next(state, {
+    perch: owed.perch,
+    perchX: owed.perchX,
+    edge: owed.edge,
+    offset: owed.offset,
+    phase: state.phase === TOOLBAR_PHASE.EXPANDED ? TOOLBAR_PHASE.EXPANDED : TOOLBAR_PHASE.DOCKED,
+    corner: null,
+    openCard: CARDS.NONE,
+    yielded: null,
+    offRow: null,
+  });
+}
+
+/** 顶上那一排收着、它借住在左边。 */
+export function isOffRow(state) {
+  return !!state.offRow;
+}
+
+/** 停在顶上那一排里（球也好、点开的那一条也好）。 */
+export function isPerched(state) {
+  return !!state.perch;
 }
 
 /**
@@ -359,6 +533,8 @@ export function dockToCorner(state, corner) {
 export function yieldToCorner(state, corner) {
   if (!Object.values(CORNERS).includes(corner)) return state;
   if (state.phase === TOOLBAR_PHASE.DRAGGING) return state;
+  // 停在顶上那一排里的，不在工作区上，压不着任何面板，也就没什么可让的。
+  if (state.perch) return state;
   // Already stepped aside: only the corner may still change, and the debt
   // recorded the first time is the one that stands.
   if (state.yielded) {
@@ -616,11 +792,17 @@ export function serializeToolbarState(state) {
   // A yield is on loan. Writing the borrowed corner would let a list that
   // happened to be open at the last save decide where the bar lives next
   // launch — so what goes to disk is always the placement it is owed.
-  const placed = state.yielded || state;
+  // 顶上那一排收着时借住在左边的也是：写那一排里的位置（下次开机那一排还收着的话，
+  // 它会再借住到左边去）。
+  const placed = state.offRow
+    ? { ...state.offRow, corner: null }
+    : (state.yielded || state);
   return {
     edge: placed.edge,
     offset: placed.offset,
     corner: placed.corner,
+    perch: placed.perch || null,
+    perchX: placed.perch && Number.isFinite(placed.perchX) ? placed.perchX : null,
     tool: state.tool,
     color: state.color,
     width: state.width,

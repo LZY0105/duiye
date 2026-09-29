@@ -1,0 +1,718 @@
+/* paper.css — 对页 · 纸。
+ *
+ * 不是玻璃换了一身白。玻璃靠的是「浮」：一枚枚半透的胶囊浮在渐变上，选中是一颗更亮的
+ * 泡。纸靠的是另一套东西——一本做过笔记的教科书：
+ *
+ *   · 纸与桌：纸是暖白（#fdfcf8），桌面是暖灰；纸平放在桌上，只有一条切边和贴着桌面的
+ *     一丝影子，不浮。叠在上面的纸条（菜单、对话框）才有一层叠纸的影子。
+ *   · 墨：字和线是暖黑，不是冷的蓝灰。
+ *   · 笔：整套只有一种颜色——蓝黑钢笔水（#264b86），像在书上写字的那支笔。它落在三处：
+ *       - 选中的标签（练习 / 设置、目录 / 缩略图 / 书签）：钢笔划的一道下划线，字也是钢笔色；
+ *       - 开着的、拿在手上的（开着的单子、栏头里开着的按钮、工具栏里选中的笔）：一层很淡的
+ *         钢笔水，图标是钢笔色；
+ *       - 主要的动作：对话框里的「打开」、空桌面的「导入」、「保存设置」是一块钢笔色的章；
+ *         栏头里的「对答案」是钢笔线框出来的一格。
+ *     原来「选中」是一道黄色的荧光笔，人说黄色的搭配太丑——拿掉了，颜色只留这一支笔。
+ *   · 线：分隔靠细线——顶栏下沿一道、每一栏内容的上沿一道（信笺的抬头线）、菜单里行与
+ *     行之间一道。
+ *   · 字：大标题用宋体（文档库、设置、使用说明、对话框），像印出来的书。
+ *
+ * 结构上的几处不同：
+ *   · 顶上那一排是一整条纸带（下沿一道线），不是三枚浮着的胶囊；两个标签坐在纸带上；
+ *   · 栏头那一组不另起底，直接写在纸上；
+ *   · 菜单、对话框是一张张纸条：方角、切边、下面一层叠纸的影子；
+ *   · 按钮是细线框出来的方块；输入框只有一道下划线，像表格上要填的那一栏。
+ *
+ * 尺寸和位置和玻璃一样（liquid.css 挂在 html[data-skin] 下两套共用）：换皮肤时按钮不
+ * 挪。这里只画——颜色、线、影子、圆角、纸带、宋体标题；纸带和信笺线用伪元素或影子画，
+ * 不占地方。笔迹工具栏的纸也在这里（原来在 ink-toolbar.css 末尾，另一套颜色）。
+ */
+
+/* ── tokens ─────────────────────────────────────────────────────────────── */
+
+html[data-skin="minimal"] {
+  --p-desk: #e9e6df;
+  --p-paper: #fdfcf8;
+  --p-paper-2: #f4f1e9;
+  --p-ink: #25231f;
+  --p-ink-2: #625e56;
+  --p-ink-3: #9a958b;
+  --p-rule: rgba(37, 35, 31, 0.13);
+  --p-rule-2: rgba(37, 35, 31, 0.26);
+  --p-pen: #264b86;
+  --p-pen-press: #1b3868;
+  /* 一层很淡的钢笔水：开着的、拿在手上的。 */
+  --p-pen-wash: rgba(38, 75, 134, 0.1);
+  --p-pen-line: rgba(38, 75, 134, 0.42);
+  /* 钢笔划的一道下划线：画在标签（它那块会滑的底）的下沿，两头各收进 10px。 */
+  --p-underline: linear-gradient(var(--p-pen), var(--p-pen)) 50% 100% / calc(100% - 20px) 2px no-repeat;
+  --p-red: #b3402f;
+  /* 平放在桌上的一张纸：一条切边，底下贴着一丝影子。 */
+  --p-sheet: 0 0 0 1px rgba(37, 35, 31, 0.1), 0 1px 0 rgba(37, 35, 31, 0.06);
+  /* 叠在上面的一张纸条（菜单、对话框、提示条、浮着的工具栏）：切边，底下一层叠纸的影子。 */
+  --p-slip: 0 0 0 1px rgba(37, 35, 31, 0.12), 0 2px 0 rgba(37, 35, 31, 0.04), 0 14px 30px -16px rgba(37, 35, 31, 0.34);
+  --p-serif: "Duiye Serif", "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", serif;
+
+  /* 同一套名字（liquid.css 读的那些），纸的值。 */
+  --lg-label: var(--p-ink);
+  --lg-label-2: var(--p-ink-2);
+  --lg-label-3: var(--p-ink-3);
+  --lg-separator: var(--p-rule);
+  --lg-fill: rgba(37, 35, 31, 0.05);
+  --lg-fill-2: rgba(37, 35, 31, 0.09);
+  --lg-fill-soft: transparent;
+  --lg-field: var(--p-paper);
+  --lg-hover: rgba(37, 35, 31, 0.05);
+
+  --lg-tint: var(--p-pen);
+  --lg-tint-press: var(--p-pen-press);
+  --lg-tint-soft: var(--p-pen-wash);
+  --lg-tint-softer: rgba(38, 75, 134, 0.06);
+  --lg-red: var(--p-red);
+  --lg-red-soft: rgba(179, 64, 47, 0.08);
+  --lg-green: var(--p-pen);
+
+  --lg-glass: var(--p-paper);
+  --lg-glass-thin: var(--p-paper);
+  --lg-glass-thick: var(--p-paper);
+  --lg-blur: none;
+  --lg-chrome-blur: none;
+  --lg-rim: 0 0 #0000;
+  --lg-edge: 0 0 0 1px var(--p-rule);
+  --lg-float: 0 1px 0 rgba(37, 35, 31, 0.05);
+  --lg-lift: 0 2px 0 rgba(37, 35, 31, 0.04), 0 14px 30px -16px rgba(37, 35, 31, 0.34);
+
+  /* 「泡」换成一层钢笔水；「主要动作」是一块钢笔色的章；分段控件的那块底是一道下划线。 */
+  --lg-bubble: var(--p-pen-wash);
+  --lg-bubble-press: rgba(38, 75, 134, 0.16);
+  --lg-bubble-shadow: 0 0 #0000;
+  --lg-primary: var(--p-pen);
+  --lg-primary-press: var(--p-pen-press);
+  --lg-primary-text: var(--p-paper);
+  --lg-primary-shadow: 0 0 #0000;
+  --lg-save-bg: var(--p-pen);
+  --lg-save-press: var(--p-pen-press);
+  --lg-save-text: var(--p-paper);
+  --lg-save-shadow: 0 0 #0000;
+  --lg-seg-thumb: var(--p-underline);
+  --lg-seg-thumb-shadow: 0 0 #0000;
+
+  /* 老的那一套变量（base / material / pdf / deck / scratch / ink-toolbar 里还在读）。 */
+  --bg: var(--p-desk);
+  --fg: var(--p-ink);
+  --text: var(--p-ink);
+  --muted: var(--p-ink-2);
+  --accent: var(--p-pen);
+  --accent-hover: var(--p-pen-press);
+  --accent-light: var(--p-pen-wash);
+  --border-color: var(--p-rule);
+  --card-bg: var(--p-paper);
+  --hdr-bg: var(--p-paper);
+  --glass-bg: var(--p-paper);
+  --glass-bg-subtle: var(--p-paper-2);
+  --glass-border: 1px solid var(--p-rule);
+  --glass-border-subtle: 1px solid var(--p-rule);
+  --glass-cast: var(--p-slip);
+  --glass-shadow: var(--p-sheet);
+  --card-shadow: var(--p-sheet);
+  /* 圆角：纸是方的，只磨掉一点角。纸张 4，按钮 3。圆只留给本来就圆的东西：收起来的那颗
+     球和从它长出来的那条工具栏（见「笔迹工具栏」）、颜色小样、编号圈。 */
+  --btn-radius: 4px;
+  --btn-radius-lg: 4px;
+  --card-radius: 4px;
+  --nav-radius: 4px;
+  --tab-radius: 3px;
+  --pill-radius: 999px;
+}
+
+/* 大标题的宋体。安卓的字体表里没有「Noto Serif CJK SC」这个名字（它只是 serif 的回退），
+   按名字写在 font-family 里找不到；回退的时候 WebView 又落回了系统的黑体（平板上是 HONOR
+   Sans）。local() 按字体文件自己的名字找，找得到系统里那份 NotoSerifCJK。它只有常规一档，
+   标题的粗是合成的（机上看过，比常规字重更像书名）。 */
+@font-face {
+  font-family: "Duiye Serif";
+  src: local("Noto Serif CJK SC"), local("NotoSerifCJKsc-Regular"),
+    local("Source Han Serif SC"), local("SourceHanSerifSC-Regular"),
+    local("Songti SC"), local("STSong"), local("SimSun");
+  font-display: swap;
+}
+
+/* 桌面。 */
+html[data-skin="minimal"] body { background: var(--p-desk); }
+
+/* ── 顶上那一排：一整条纸带 ─────────────────────────────────────────────────── */
+
+/* 纸带画在横杠的伪元素上：横杠自己不在文档流里、只靠 transform 进出（pdf.css），纸带
+   跟着它一起上去、一起淡掉。左右伸到屏幕边，上面伸到屏幕上沿，下沿一道线，比两栏的
+   上沿高出半道缝。 */
+html[data-skin="minimal"] .pdf-page-bar::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  top: calc(-1 * var(--app-bar-top));
+  bottom: calc(-0.5 * var(--app-bar-gap));
+  left: calc(-1 * var(--lg-gutter));
+  right: calc(-1 * var(--lg-gutter));
+  background: var(--p-paper);
+  box-shadow: 0 1px 0 var(--p-rule);
+  pointer-events: none;
+}
+/* 切页时纸带和两边的按钮一起走、一起回来（两个标签留着，见 pdf.css「切页时，顶上那一排」）。 */
+html[data-skin="minimal"] #page-pdf.active .pdf-page-bar::before {
+  animation: pageFadeInFlat 0.22s var(--spring-ease);
+}
+html[data-skin="minimal"] #page-pdf.is-leaving .pdf-page-bar::before {
+  animation: pageFadeOutFlat 0.26s var(--exit-ease) forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-skin="minimal"] #page-pdf .pdf-page-bar::before { animation: none; }
+}
+
+/* 胶囊不要了：按钮直接写在纸带上。按钮身上那层 saturate 的磨砂（material.css 给控件的）
+   在纸上什么都不做，只多占一层合成，也拿掉。 */
+html[data-skin="minimal"] .pdf-bar-group {
+  background: transparent !important;
+  box-shadow: none;
+  border-radius: 4px;
+}
+html[data-skin="minimal"] .pdf-page-bar .pdf-bar-btn {
+  border-radius: 3px;
+  backdrop-filter: none;
+}
+/* 按下去是纸被按下去的那一点灰；单子开着是一层钢笔水、钢笔色的字——「现在开着的是它」。 */
+html[data-skin="minimal"] .pdf-page-bar .pdf-bar-btn:active {
+  background: var(--lg-fill-2);
+  box-shadow: none;
+}
+html[data-skin="minimal"] .pdf-page-bar .pdf-bar-btn[aria-expanded="true"] {
+  background: var(--p-pen-wash);
+  color: var(--p-pen);
+  box-shadow: none;
+}
+/* 两个标签：在纸带上的时候不另起底，当前那一格底下钢笔划一道线、字是钢笔色。纸带不在
+   的时候（设置页、书架或说明书盖着）它们自己是一小张纸。 */
+html[data-skin="minimal"] .app-nav {
+  border-radius: 4px;
+  background: var(--p-paper);
+  box-shadow: var(--p-sheet);
+}
+html[data-skin="minimal"] body[data-page="pdf"]:not(.is-library-open):not(:has(.pdf-guide)) .app-nav {
+  background: transparent;
+  box-shadow: none;
+}
+html[data-skin="minimal"] .app-nav button { border-radius: 3px; }
+/* 那块会滑的底（liquid-glass.js 挂的透镜）就是这道线：换页签的时候它从一格滑到另一格。 */
+html[data-skin="minimal"] .app-nav .nav-glass-lens {
+  border-radius: 0 !important;
+  background: var(--p-underline) !important;
+}
+
+/* 停进这一排里的工具栏：点开的那一条是纸带上的一格托盘（比纸带深一档、一条切边），收着
+   的那颗球是一枚圆纸片。托盘两头是圆的——它是那颗球长出来的（见「笔迹工具栏」）。 */
+html[data-skin="minimal"] .ink-toolbar.is-perched:not(.is-docked) {
+  background: var(--p-paper-2);
+  box-shadow: 0 0 0 1px var(--p-rule);
+}
+html[data-skin="minimal"] .ink-toolbar.is-perched .ink-token {
+  background: var(--p-paper);
+  box-shadow: 0 0 0 1px var(--p-rule-2), 0 1px 0 rgba(37, 35, 31, 0.08);
+}
+html[data-skin="minimal"] .top-row-perch-hint {
+  background: var(--p-pen-wash);
+  box-shadow: inset 0 0 0 1px var(--p-pen-line);
+}
+
+/* ── 单子：一张张纸条 ───────────────────────────────────────────────────────── */
+
+html[data-skin="minimal"] .pdf-bar-menu,
+html[data-skin="minimal"] .pdf-slot-menu,
+html[data-skin="minimal"] .deck-list,
+html[data-skin="minimal"] .set-select-dropdown {
+  border-radius: 4px;
+  background: var(--p-paper);
+  box-shadow: var(--p-slip);
+}
+html[data-skin="minimal"] .pdf-bar-menu-item,
+html[data-skin="minimal"] .pdf-slot-menu-item { border-radius: 2px; }
+html[data-skin="minimal"] .pdf-bar-menu-item:active,
+html[data-skin="minimal"] .pdf-slot-menu-item:active { background: var(--lg-fill-2); }
+html[data-skin="minimal"] .pdf-bar-menu-icon { color: var(--p-pen); }
+/* 设置页下拉里的选项：选中的那一项是钢笔色的字、一层钢笔水（base.css 按 --accent 画的）。 */
+html[data-skin="minimal"] .set-option:hover { background: var(--lg-fill); }
+html[data-skin="minimal"] .set-option:active { background: var(--lg-fill-2); color: var(--p-ink); }
+
+/* ── 两栏：平放的纸 ─────────────────────────────────────────────────────────── */
+
+html[data-skin="minimal"] .pdf-ws-slot {
+  border-radius: 4px;
+  background: var(--p-paper);
+  box-shadow: var(--p-sheet);
+}
+/* 当前那一栏：切边深一档。 */
+html[data-skin="minimal"] .pdf-ws-slot.is-active {
+  box-shadow: 0 0 0 1px var(--p-rule-2), 0 1px 0 rgba(37, 35, 31, 0.06);
+}
+/* 内容那一块的下角跟着纸的角走（material.css 给它的是玻璃卡片那种 29px 的大圆角，放大
+   了的书页会在下角被削掉一块）。 */
+html[data-skin="minimal"] .pdf-ws-slot .pdf-pane,
+html[data-skin="minimal"] .pdf-ws-slot .pdf-pane-viewport { border-radius: 0 0 4px 4px; }
+
+/* 栏头那一组直接写在纸上（没有底色），按钮是细线图标；开着的那一颗是一层钢笔水、钢笔色
+   的图标（liquid.css 按 tokens 画的）。 */
+html[data-skin="minimal"] .pdf-slot-toolbar { border-radius: 4px; }
+html[data-skin="minimal"] .pdf-slot-btn,
+html[data-skin="minimal"] .pdf-slot-toolbar .scratch-save { border-radius: 3px; }
+/* 页码框：表格上要填的那一格——一道下划线。 */
+html[data-skin="minimal"] .pdf-slot-page {
+  border-radius: 0;
+  background: transparent;
+  box-shadow: inset 0 -1px 0 var(--p-rule-2);
+}
+html[data-skin="minimal"] .pdf-slot-page:focus { box-shadow: inset 0 -1.5px 0 var(--p-pen); }
+/* 「对答案」：这一栏里最主要的那个动作——钢笔线框出来的一格，钢笔色的字。不是一块墨：
+   一整块实心的东西压在一排细线图标中间，人说难看。 */
+html[data-skin="minimal"] .pdf-slot-btn.is-answer-action {
+  border-radius: 3px;
+  background: transparent;
+  color: var(--p-pen);
+  box-shadow: inset 0 0 0 1px var(--p-pen-line);
+}
+@media (hover: hover) and (pointer: fine) {
+  html[data-skin="minimal"] .pdf-slot-btn.is-answer-action:hover:not(:disabled) {
+    background: var(--p-pen-wash);
+    color: var(--p-pen);
+  }
+}
+html[data-skin="minimal"] .pdf-slot-btn.is-answer-action:active:not(:disabled) {
+  background: var(--p-pen-wash);
+  color: var(--p-pen);
+  box-shadow: inset 0 0 0 1px var(--p-pen);
+}
+
+/* 切换条：「PDF」「草稿纸」是一枚小印章（细线框、没有底），其余照旧。 */
+html[data-skin="minimal"] .deck-arrow,
+html[data-skin="minimal"] .deck-title { border-radius: 3px; }
+html[data-skin="minimal"] .deck-kind {
+  border-radius: 2px;
+  background: transparent;
+  color: var(--p-ink-2);
+  box-shadow: inset 0 0 0 1px var(--p-rule-2);
+}
+
+/* 每一栏内容的上沿一道细线：信笺的抬头线。画成内容那一块往上投的一道影子（两头各收进
+   14px），不占地方，也不会被滚上来的书页盖住；纸面是同一张纸的白，页面四周不另铺灰。 */
+html[data-skin="minimal"] .pdf-ws-slot .pdf-slot-pane {
+  box-shadow: 0 -15px 0 -14px var(--p-rule-2);
+}
+html[data-skin="minimal"] .pdf-pane-viewport { background: var(--p-paper); }
+/* 书页本身是另一张纸，一条切边把它和栏分开。 */
+html[data-skin="minimal"] .pdf-pane-canvas {
+  border-radius: 0;
+  box-shadow: 0 0 0 1px var(--p-rule), 0 1px 2px rgba(37, 35, 31, 0.06);
+}
+/* 缩放时浮出来的比例：栏头底下一张白色的小纸条（位置、大小在 pdf.css）。 */
+html[data-skin="minimal"] .pdf-zoom-badge {
+  border-radius: 3px;
+  border-color: transparent;
+  background: var(--p-paper);
+  color: var(--p-ink);
+  box-shadow: var(--p-slip);
+}
+
+/* 找页面板：一张纸条；上面那三页是一排索引，选中的那一页底下钢笔划一道线、字是钢笔色
+   （那道线是会滑的透镜，tokens 里的 --lg-seg-thumb）。 */
+html[data-skin="minimal"] .pdf-outline-panel {
+  border-radius: 0 0 4px 4px;
+  background: var(--p-paper);
+  box-shadow: var(--p-slip);
+}
+html[data-skin="minimal"] .pdf-panel-tabs {
+  border-radius: 0;
+  background: transparent;
+}
+html[data-skin="minimal"] .pdf-panel-tab { border-radius: 2px; color: var(--p-ink-2); }
+/* 透镜还没挂上的那一下（面板刚造出来），选中的那一页自己先画这道线；挂上以后 liquid.css
+   让它让给透镜。 */
+html[data-skin="minimal"] .pdf-panel-tab.is-selected {
+  color: var(--p-pen);
+  background: var(--p-underline);
+  box-shadow: none;
+}
+html[data-skin="minimal"] .pdf-panel-tabs .segmented-glass-lens { border-radius: 0 !important; }
+
+/* ── 分隔条 ─────────────────────────────────────────────────────────────────── */
+
+/* 握柄是一小条纸，交换按钮是一枚圆纸片；捏住、要交换的时候浸上一层钢笔水、描一道钢笔线。
+   纸上不刻 φ（pdf.css）。捏着的时候 material.css 还给握柄加了一层玻璃的折射模糊（和拖动中
+   的工具栏同一条），纸里拿掉。 */
+html[data-skin="minimal"] .pdf-ws-divider-grip {
+  background: var(--p-paper);
+  border-color: var(--p-rule-2);
+  border-radius: 2px;
+  box-shadow: 0 1px 0 rgba(37, 35, 31, 0.08);
+  backdrop-filter: none;
+}
+html[data-skin="minimal"] .pdf-ws-swap {
+  background: var(--p-paper);
+  border-color: var(--p-rule-2);
+  color: var(--p-ink-2);
+  box-shadow: 0 1px 0 rgba(37, 35, 31, 0.08);
+}
+html[data-skin="minimal"] .pdf-ws-divider:hover .pdf-ws-divider-grip,
+html[data-skin="minimal"] .pdf-ws-divider.is-dragging .pdf-ws-divider-grip,
+html[data-skin="minimal"] .pdf-workspace.is-swap-armed .pdf-ws-divider-grip {
+  background: var(--p-pen-wash);
+  border-color: var(--p-pen-line);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+html[data-skin="minimal"] .pdf-workspace.is-swap-armed .pdf-ws-swap {
+  background: var(--p-paper);
+  border-color: var(--p-pen);
+  color: var(--p-pen);
+  box-shadow: 0 0 0 3px var(--p-pen-wash);
+}
+/* 比例只在拖着的时候出来：一小块墨。 */
+html[data-skin="minimal"] .pdf-ws-ratio-badge {
+  border-radius: 3px;
+  background: var(--p-ink);
+  color: var(--p-paper);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+/* ── 笔迹工具栏：一条纸片 ───────────────────────────────────────────────────── */
+
+/* 浮在书页上的那一条和它点开的卡片：一张纸条，切边加一层叠纸的影子——它是悬在书页上
+   方的，这层影子是唯一说明它浮着的东西。切边画成影子不用 border：玻璃里这一条没有边，
+   多出来的 1px 会让它在两套皮肤之间胖一圈。 */
+html[data-skin="minimal"] .ink-toolbar,
+html[data-skin="minimal"] .ink-card {
+  border: 0;
+  background: var(--p-paper);
+  box-shadow: var(--p-slip);
+}
+/* 这一条不磨成方角，两头是圆的（ink-toolbar.css 里的 --pill-radius）：它和收起来的那颗
+   球是同一样东西。点开是从球那么大一路长成整条——顶上那一排里是逐帧收放一道两头圆的
+   裁切（top-row-dock.js 的 clip），浮在书页上是从球那么大放大出来；收起再缩回一颗球。
+   原来纸给它 4px 的方角，展开的最后一帧裁切一撤，四个角「啪」地从圆变方（人说「工具栏
+   展开时四角会从圆变方」）。卡片不是从球长出来的，角跟着 tokens 里的 --card-radius。 */
+/* 玻璃那两层（菲涅耳环、高光），纸里没有。 */
+html[data-skin="minimal"] .ink-toolbar::before,
+html[data-skin="minimal"] .ink-toolbar::after,
+html[data-skin="minimal"] .ink-card::before,
+html[data-skin="minimal"] .ink-card::after { display: none; }
+
+/* 拿在手上的那支笔：图标底下一枚钢笔水的圆，图标是钢笔色。 */
+html[data-skin="minimal"] .ink-tool.is-selected {
+  background: transparent;
+  color: var(--p-pen);
+}
+html[data-skin="minimal"] .ink-tool.is-selected::before {
+  background: var(--p-pen-wash);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+/* 划着挑的时候手指底下那一块（它浮在横杠上面，见 ink-toolbar.css）：同一枚钢笔水的圆。钢笔水只有一成，
+   盖在图标上和浸在它底下看不出差别。纸不折射，也不「浮起来」（--scrub-lift）。 */
+html[data-skin="minimal"] .ink-scrub-drop {
+  --scrub-lift: 1;
+  background: var(--p-pen-wash);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+html[data-skin="minimal"] .ink-seg-btn.is-selected {
+  border-radius: 3px;
+  background: var(--p-pen-wash);
+  color: var(--p-pen);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+/* 笔迹样例是一小块纸，要有自己的边，不然白落在白上。 */
+html[data-skin="minimal"] .ink-preview {
+  border-radius: 3px;
+  background: var(--p-paper);
+  box-shadow: inset 0 0 0 1px var(--p-rule);
+}
+/* 颜色小样：选中的那一滴外面空一圈纸、再一圈墨。墨，不是钢笔蓝——蓝会和蓝色那一滴
+   混在一起。 */
+html[data-skin="minimal"] .ink-swatch.is-selected .ink-swatch-fill {
+  box-shadow: inset 0 0 0 1px rgba(37, 35, 31, 0.18), 0 0 0 3px var(--p-paper), 0 0 0 4.5px var(--p-ink);
+}
+html[data-skin="minimal"] .ink-card-swatches .ink-swatch.is-selected,
+html[data-skin="minimal"] .ink-palette-dot.is-selected {
+  box-shadow: inset 0 0 0 1px rgba(37, 35, 31, 0.16), 0 0 0 2px var(--p-paper), 0 0 0 3.5px var(--p-ink);
+}
+html[data-skin="minimal"] .ink-sep { background: var(--p-rule); }
+
+/* 收起来的那颗球：一枚圆纸片，切边加一层影子（它悬在书页上方），图标是钢笔色。被角落
+   吸住的时候外面浸开一圈钢笔水。 */
+html[data-skin="minimal"] .ink-token {
+  border: 0;
+  background: var(--p-paper);
+  color: var(--p-pen);
+  box-shadow: 0 0 0 1px var(--p-rule-2), 0 2px 0 rgba(37, 35, 31, 0.04), 0 8px 18px -8px rgba(37, 35, 31, 0.3);
+}
+html[data-skin="minimal"] .ink-toolbar.is-corner-armed .ink-token {
+  box-shadow: 0 0 0 1px var(--p-pen-line), 0 0 0 5px var(--p-pen-wash), 0 10px 22px -8px rgba(37, 35, 31, 0.32);
+}
+
+/* 收着、拖在手里的时候，外壳整个让开，只剩那枚圆纸片；什么都不磨砂。
+   material.css 给拖动中的外壳和球加了一层折射模糊（那是玻璃的），而纸给外壳的是方角——
+   于是书页上的字在圆球外面被糊出一个方块。纸里没有玻璃，这一层整个拿掉，外壳也是圆的。 */
+html[data-skin="minimal"] .ink-toolbar.is-docked,
+html[data-skin="minimal"] .ink-toolbar.is-dragging {
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: none;
+}
+html[data-skin="minimal"] .ink-toolbar,
+html[data-skin="minimal"] .ink-toolbar.is-dragging,
+html[data-skin="minimal"] .ink-toolbar.is-docked,
+html[data-skin="minimal"] .ink-token,
+html[data-skin="minimal"] .ink-card {
+  backdrop-filter: none !important;
+}
+
+/* ── 大标题：宋体 ───────────────────────────────────────────────────────────── */
+
+html[data-skin="minimal"] .pdf-library-header strong,
+html[data-skin="minimal"] .settings-title,
+html[data-skin="minimal"] .guide-head h2,
+html[data-skin="minimal"] .guide-chapter-title,
+html[data-skin="minimal"] .deck-dialog-title,
+html[data-skin="minimal"] .pdf-empty-title {
+  font-family: var(--p-serif);
+  color: var(--p-ink);
+}
+
+/* ── 文档库 ─────────────────────────────────────────────────────────────────── */
+
+html[data-skin="minimal"] .pdf-library {
+  background: var(--p-desk);
+  backdrop-filter: none;
+}
+html[data-skin="minimal"] .pdf-library-header .pdf-library-btn,
+html[data-skin="minimal"] .pdf-guide-header .pdf-library-btn {
+  border-radius: 4px;
+  background: var(--p-paper);
+  box-shadow: var(--p-sheet);
+}
+/* 书：一本一本立着，书脊那一边方、翻页那一边磨圆一点；切边加一丝影子。 */
+html[data-skin="minimal"] .pdf-book-block {
+  border-radius: 2px 5px 5px 2px;
+  box-shadow: 0 0 0 1px rgba(37, 35, 31, 0.1), 0 1px 0 rgba(37, 35, 31, 0.08), 0 8px 16px -12px rgba(37, 35, 31, 0.3);
+}
+html[data-skin="minimal"] .pdf-book-block.is-note::before {
+  background:
+    radial-gradient(circle at 7px 50%, var(--p-paper) 0 2.2px, transparent 2.6px) 0 8px / 14px 18px repeat-y,
+    linear-gradient(90deg, #dcd6c8 0%, #e9e4d8 70%, rgba(37, 35, 31, 0.08) 100%);
+}
+html[data-skin="minimal"] .pdf-book-more {
+  border-radius: 3px;
+  background: var(--p-paper);
+  box-shadow: 0 0 0 1px var(--p-rule-2), 0 1px 0 rgba(37, 35, 31, 0.08);
+}
+/* 书上的「练习」「答案」小标签：一枚印章。 */
+html[data-skin="minimal"] .pdf-book-tag {
+  border-radius: 2px;
+  background: rgba(37, 35, 31, 0.72);
+  backdrop-filter: none;
+}
+html[data-skin="minimal"] .pdf-book-tag.is-combo { background: var(--p-pen); }
+html[data-skin="minimal"] .pdf-book-block.is-add {
+  border-radius: 4px;
+  border-color: var(--p-rule-2);
+  background: var(--p-paper);
+  color: var(--p-pen);
+}
+
+/* ── 对话框、提示条 ─────────────────────────────────────────────────────────── */
+
+html[data-skin="minimal"] .deck-overlay { background: rgba(37, 35, 31, 0.24); }
+html[data-skin="minimal"] .deck-dialog {
+  border-radius: 6px;
+  background: var(--p-paper);
+  box-shadow: var(--p-slip);
+}
+/* 一列动作：同一张纸上用线隔开的几行。 */
+html[data-skin="minimal"] .deck-actions {
+  border-radius: 3px;
+  background: var(--p-paper);
+  box-shadow: 0 0 0 1px var(--p-rule);
+}
+html[data-skin="minimal"] .deck-action:active { background: var(--lg-fill-2); }
+/* 按钮：细线框出来的方块；主要的那一个是一块钢笔色的章，危险的那一个是一块朱红。 */
+html[data-skin="minimal"] .deck-dialog-btn {
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--p-rule-2);
+}
+@media (hover: hover) and (pointer: fine) {
+  html[data-skin="minimal"] .deck-dialog-btn:not(.is-primary):not(.is-danger):hover:not(:disabled) { background: var(--lg-fill); }
+}
+html[data-skin="minimal"] .deck-dialog-btn:not(.is-primary):not(.is-danger):active:not(:disabled) { background: var(--lg-fill-2); }
+html[data-skin="minimal"] .deck-dialog-btn.is-primary {
+  background: var(--p-pen);
+  color: var(--p-paper);
+  box-shadow: none;
+}
+html[data-skin="minimal"] .deck-dialog-btn.is-danger {
+  background: var(--p-red);
+  color: var(--p-paper);
+  box-shadow: none;
+}
+html[data-skin="minimal"] .deck-dialog-btn.is-danger:active:not(:disabled) { background: #963425; }
+/* 输入框：一道下划线，像表格上要填的那一栏；点进去这道线换成钢笔。 */
+html[data-skin="minimal"] .deck-dialog input[type="text"],
+html[data-skin="minimal"] .deck-dialog input:not([type]),
+html[data-skin="minimal"] .deck-dialog textarea {
+  border-radius: 0;
+  background: transparent;
+  box-shadow: inset 0 -1px 0 var(--p-rule-2);
+}
+html[data-skin="minimal"] .deck-dialog input[type="text"]:focus,
+html[data-skin="minimal"] .deck-dialog input:not([type]):focus,
+html[data-skin="minimal"] .deck-dialog textarea:focus {
+  box-shadow: inset 0 -1.5px 0 var(--p-pen);
+}
+/* 新建草稿纸那张单子里的几排格子（草稿纸还是本子、纸样、纸色、打开在哪一栏）：方角、暖色的
+   细线；选中的那一格描成钢笔线、浸一层钢笔水（deck.css / scratch.css 按 --accent 画的）。 */
+html[data-skin="minimal"] .paper-mode,
+html[data-skin="minimal"] .create-style-tile,
+html[data-skin="minimal"] .style-swatch,
+html[data-skin="minimal"] .deck-destination { border-radius: 4px; }
+html[data-skin="minimal"] .paper-mode:not(.is-selected),
+html[data-skin="minimal"] .create-style-tile:not(.is-selected),
+html[data-skin="minimal"] .deck-destination:not(.is-selected) { border-color: var(--p-rule); }
+html[data-skin="minimal"] .style-swatch:not(.is-selected) { border-color: var(--p-rule-2); }
+/* 导入时问「这份文件是？」的那张：同一种纸条（material.css 给它的是玻璃的折射和一圈
+   7px 的半透带子，全带着 !important）。遮罩也不磨砂。 */
+html[data-skin="minimal"] .pdf-role-overlay {
+  background: rgba(37, 35, 31, 0.24) !important;
+  backdrop-filter: none !important;
+}
+html[data-skin="minimal"] .pdf-role-dialog {
+  border-color: transparent !important;
+  border-radius: 6px !important;
+  background: var(--p-paper) !important;
+  backdrop-filter: none !important;
+  box-shadow: var(--p-slip) !important;
+}
+html[data-skin="minimal"] .pdf-role-options button:not(.is-suggested) {
+  background: transparent !important;
+  border-color: var(--p-rule-2) !important;
+  color: var(--p-ink) !important;
+}
+/* 提示条：一张小纸条，不是一块深色玻璃。 */
+html[data-skin="minimal"] .save-toast {
+  border-radius: 4px;
+  background: var(--p-paper);
+  color: var(--p-ink);
+  backdrop-filter: none;
+  box-shadow: var(--p-slip);
+}
+/* 检查更新弹出来的那张：同一种纸条，「知道了」是一块钢笔色的章。 */
+html[data-skin="minimal"] .toast-popup {
+  border-radius: 6px;
+  background: var(--p-paper);
+  box-shadow: var(--p-slip);
+}
+html[data-skin="minimal"] .toast-popup .toast-close {
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+/* ── 空的工作区 ─────────────────────────────────────────────────────────────── */
+
+html[data-skin="minimal"] .pdf-empty-card {
+  border-radius: 6px;
+  background: var(--p-paper);
+  box-shadow: var(--p-sheet);
+}
+/* 那枚图标是盖在纸上的一枚章：钢笔色的框、钢笔色的图。 */
+html[data-skin="minimal"] .pdf-empty-icon {
+  border-radius: 6px;
+  background: transparent;
+  color: var(--p-pen);
+  box-shadow: inset 0 0 0 1.5px var(--p-pen);
+}
+html[data-skin="minimal"] .pdf-empty-btn { border-radius: 4px; }
+html[data-skin="minimal"] .pdf-empty-btn.secondary {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--p-rule-2);
+}
+
+/* ── 设置 ───────────────────────────────────────────────────────────────────── */
+
+html[data-skin="minimal"] .set-group {
+  border-radius: 4px;
+  background: var(--p-paper);
+  box-shadow: var(--p-sheet);
+}
+/* 下拉按钮：表格上一格带框的空。 */
+html[data-skin="minimal"] .set-select-btn {
+  border-radius: 3px;
+  background: var(--p-paper);
+  box-shadow: inset 0 0 0 1px var(--p-rule-2);
+}
+html[data-skin="minimal"] .action-btn {
+  border: 0;
+  border-radius: 4px;
+}
+/* 「检查更新」和开发者那几颗：细线框、钢笔色的字。「保存设置」是这一页那块章（tokens 里的
+   --lg-save-*）。 */
+html[data-skin="minimal"] .action-btn.secondary {
+  background: transparent;
+  color: var(--p-pen);
+  box-shadow: inset 0 0 0 1px var(--p-rule-2);
+}
+html[data-skin="minimal"] .action-btn.secondary:active { background: var(--lg-fill-2); }
+html[data-skin="minimal"] .set-toggle input:checked + .set-toggle-track { background: var(--p-pen); }
+
+/* ── 使用说明 ───────────────────────────────────────────────────────────────── */
+
+html[data-skin="minimal"] .pdf-guide { background: var(--p-desk); }
+html[data-skin="minimal"] .guide-card {
+  border-radius: 6px;
+  background: var(--p-paper);
+  box-shadow: var(--p-sheet);
+}
+/* 章节标签：一排索引签。编号是钢笔画的一个圈。 */
+html[data-skin="minimal"] .guide-toc-chip {
+  border-radius: 3px;
+  background: var(--p-paper);
+  box-shadow: var(--p-sheet);
+}
+html[data-skin="minimal"] .guide-toc-no,
+html[data-skin="minimal"] .guide-chapter-no {
+  border-radius: 50%;
+  background: transparent;
+  color: var(--p-pen);
+  box-shadow: inset 0 0 0 1.5px var(--p-pen);
+}
+
+/* ── 问答（右边那颗圆按钮和它拉出来的那一栏） ─────────────────────────────── */
+
+html[data-skin="minimal"] .pdf-agent-fab {
+  border-color: var(--p-rule-2);
+  background: var(--p-paper);
+  color: var(--p-pen);
+  box-shadow: 0 2px 0 rgba(37, 35, 31, 0.04), 0 8px 18px -8px rgba(37, 35, 31, 0.3);
+}
+html[data-skin="minimal"] .pdf-agent-dialog {
+  border-color: var(--p-rule);
+  background: var(--p-paper);
+  box-shadow: -10px 0 24px -14px rgba(37, 35, 31, 0.3);
+}
+html[data-skin="minimal"] .pdf-agent-dialog-header {
+  border-color: var(--p-rule);
+  background: var(--p-paper);
+}
+html[data-skin="minimal"] .pdf-agent-dialog-meta { color: var(--p-ink-2); }
+html[data-skin="minimal"] .pdf-agent-dialog-close {
+  border-color: var(--p-rule-2);
+  border-radius: 3px;
+  background: var(--p-paper);
+  color: var(--p-ink-2);
+}

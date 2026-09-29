@@ -231,6 +231,27 @@ await test('点角上的 ⋯ 不会把书也打开', async () => {
   assert.deepEqual(opened, [], '⋯ 在书里面，但点它不是点书');
 });
 
+await test('角上的 ⋯ 是画出来的三个点，在按钮里几何居中——不是一个按字体中线摆的「⋯」字', async () => {
+  // 人说「三个点与按钮的位置有点别扭，有点偏下」：原来是 textContent = '⋯'，平板上的中文字体中线比字框
+  // 正中低，三个点落在圆按钮中心偏下三个像素。
+  const items = shelfItems([doc('a')], [], []);
+  const { host } = mountShelf(items, { onMenu: () => {} });
+  const more = host.querySelector('.pdf-book-more');
+  assert.equal(more.textContent.trim(), '', '按钮里没有字');
+  const icon = more.querySelector('svg.pdf-book-more-icon');
+  assert.ok(icon, '一枚图标');
+  assert.equal(icon.getAttribute('viewBox'), '0 0 24 24');
+  assert.equal(icon.querySelector('path').getAttribute('d'), 'M5.5 12h.01M12 12h.01M18.5 12h.01', '和栏头那颗 ⋯ 同一种画法');
+  assert.ok(more.getAttribute('aria-label'), '读屏念的名字还在');
+  const css = $read('src/styles/pdf.css').replace(/\r\n/g, '\n');
+  const at = css.indexOf('.pdf-book-more {');
+  const rule = css.slice(at, css.indexOf('}', at));
+  assert.match(rule, /display: flex;/);
+  assert.match(rule, /align-items: center;/);
+  assert.match(rule, /justify-content: center;/);
+  assert.ok(!/font-size|line-height/.test(rule.replace(/\/\*[\s\S]*?\*\//g, '')), '不再按字体摆');
+});
+
 await test('册别印在封面上，没有册别就不印', async () => {
   // 比的是 t() 的结果，不是「练习」两个字：这一架书是给五种语言的人看的，而角标
   // 是这一格上唯一一处说「它是什么」的地方。写死字面量的话，翻译一做这条就会挡路。
@@ -297,6 +318,22 @@ await test('撤掉书架时排队没轮到的封面一起撤，挂上去的地�
   }
 });
 
+await test('组合借的书收在文件夹里，书架照样认得它的名字', async () => {
+  // 组合摆在外面、那两本书收进了文件夹：它们不在这一屏上，没有格子。翻开组合时
+  // 飞出去的是那两本的封面和名字——原来查的是格子，查不到就飞两张没字的白纸。
+  document.body.innerHTML = '<div class="pdf-shelf"></div>';
+  const host = document.querySelector('.pdf-shelf');
+  const shelf = new BookShelf(host, {});
+  const [inFolder] = shelfItems([doc('b', { name: '答案册' })], [], []);
+  shelf.setItems(shelfItems([doc('a', { name: '高等代数' })], [], []), { companions: [inFolder] });
+  assert.equal(shelf.nameOf('a'), '高等代数', '摆着的照旧从格子上读');
+  assert.equal(shelf.nameOf('b'), '答案册', '没摆出来的也认得');
+  assert.equal(host.querySelector('.pdf-book[data-id="b"]'), null, '认得，但不摆出来');
+  assert.equal(shelf.coverUrl('b'), '', '封面还没到手时是空的，不是报错');
+  shelf.destroy();
+  assert.equal(shelf.nameOf('b'), '', '撤掉书架时一起忘掉');
+});
+
 await test('量不到那一格就不演——凭空长出来的书比直接切过去更难看', async () => {
   const { shelf } = mountShelf(shelfItems([doc('a')], [], []));
   assert.equal(shelf.tileRect('不存在的'), null);
@@ -340,7 +377,10 @@ await test('导入的进度说给看得见的那一处', async () => {
 
 await test('「＋」接到的是真的导入，不是一个空壳', async () => {
   const code = $read('src/pdf/pdf-workspace-ui.js');
-  assert.ok(code.includes('onAdd: () => pickAndImport(DOC_ROLES.EXERCISE)'),
+  // 进了文件夹之后，「＋」先问一句「从本机导一份，还是从已有的里面挑」——但「从
+  // 本机导」那一支走的还是 pickAndImport。一个入口两种去处，不是两套导入，所以
+  // 这里认的是「它通到 pickAndImport」，不是那一行当初的写法。
+  assert.ok(/onAdd: \(\) => .*pickAndImport\(DOC_ROLES\.EXERCISE\)/.test(code),
     '「＋」得真的走到导入');
   assert.ok(/handleImport\(Array\.from\(e\.target\.files/.test(code),
     '选完文件得真的走到导入');
@@ -355,7 +395,11 @@ await test('应用里每一个「导入」都走同一条路', async () => {
 
   assert.ok(ui.includes('export async function pickAndImport('),
     '有一个共用的入口');
-  assert.ok(ui.includes('onAdd: () => pickAndImport('), '书架的「＋」走它');
+  assert.ok(/onAdd: \(\) => .*pickAndImport\(/.test(ui), '书架的「＋」走它');
+  // 第五个入口：文件夹里那颗「放东西进来」。它也必须落到同一条路上——不然「在文
+  // 件夹里导入」就会长成第二套导入，而两套迟早走岔。
+  assert.ok(/async function addIntoFolder\([\s\S]*?pickAndImport\(/.test(ui),
+    '文件夹里那颗「放东西进来」也走它');
   assert.ok(ui.includes('pickAndImport(role)'), '横杠单子那两项走它');
   assert.ok(ui.includes('workspace.onImport = (role) => pickAndImport(role)'),
     '空工作区那两颗也接到它身上');

@@ -231,6 +231,7 @@ export class InkSurface {
       else if (action === SELECTION_ACTIONS.DELETE) this.deleteSelection();
       else if (action === SELECTION_ACTIONS.PASTE) this.pasteClipboard();
       else if (action === SELECTION_ACTIONS.COLOR_PICK) this.recolorSelection(value);
+      else if (action === SELECTION_ACTIONS.FILL_PICK) this.refillSelection(value || null);
     });
 
     // `erasing` and `selecting` are born here, through the same door every
@@ -509,11 +510,46 @@ export class InkSurface {
     // 拿来做这件事会得到一个看不出错的错结果。
     const a = documentToScreen(this.transform, docBox.minX, docBox.minY);
     const b = documentToScreen(this.transform, docBox.maxX, docBox.maxY);
+    const { canFill, current } = this._selectionPaint();
     this._bar.place(
       { minX: a.x, minY: a.y, maxX: b.x, maxY: b.y },
       this._viewport || { width: 0, height: 0 },
-      { mode: 'selection', colors: this._swatches },
+      { mode: 'selection', colors: this._swatches, canFill, current },
     );
+  }
+
+  /**
+   * 这一片里有没有能填色的东西（闭合的形状），以及它眼下是什么色。
+   *
+   * 各笔颜色不一样就说不上来（null）；填充在闭合形状之间不一样、或者根本没有闭合
+   * 形状，也说不上来（undefined）。说得上来的才在色排上标出来。
+   */
+  _selectionPaint() {
+    let canFill = false;
+    let color;
+    let fill;
+    let mixedColor = false;
+    let mixedFill = false;
+    const same = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
+    for (const id of this.selection) {
+      const stroke = this.layer.getById(id);
+      if (!stroke) continue;
+      if (color === undefined) color = stroke.color;
+      else if (!same(color, stroke.color)) mixedColor = true;
+      if (stroke.shape && isClosedShape(stroke.shape)) {
+        const now = stroke.fill || null;
+        if (!canFill) fill = now;
+        else if (!same(fill, now)) mixedFill = true;
+        canFill = true;
+      }
+    }
+    return {
+      canFill,
+      current: {
+        color: mixedColor ? null : (color ?? null),
+        fill: canFill && !mixedFill ? fill : undefined,
+      },
+    };
   }
 
   /**
@@ -633,7 +669,8 @@ export class InkSurface {
   }
 
   /**
-   * 把圈住的这一片改成另一个颜色。
+   * 把圈住的这一片改成另一个颜色——笔画的颜色，形状的边框。填充不归它管，见
+   * refillSelection。
    *
    * 记下每一条原来的颜色，而不是「原来都是黑的」——一片里本来就可能有好几种色，
    * 撤销要把各自的那一种还回去。
@@ -649,6 +686,35 @@ export class InkSurface {
     }
     if (!before.length) return false;
     this.history.recordRestyle(before, color);
+    this.render();
+    this.handlers.onChange?.(this.layer);
+    return true;
+  }
+
+  /**
+   * 把圈住的这一片里闭合形状的填充换掉；fill 为 null 是「不填」。
+   *
+   * 和换色分开：换色改的是边框（以及手写的笔画），这里只改填充。一个红边蓝底的
+   * 三角形，人要的常常只是把底换掉，而原来只有一个颜色可挑、只改得了边——底色一
+   * 旦定下就再也换不掉了。开口的形状（直线、箭头、圆弧）和手写笔画没有「里面」，
+   * 这里不碰它们。没填过色的闭合形状挑了颜色就填上，这也是「能改」的一部分。
+   *
+   * 撤销是自己一步，只还填充，边框不动；各还各的，一片里本来就可能填着好几种色。
+   */
+  refillSelection(fill) {
+    if (!this.selection.length) return false;
+    const next = fill || null;
+    const before = [];
+    for (const id of this.selection) {
+      const stroke = this.layer.getById(id);
+      if (!stroke?.shape || !isClosedShape(stroke.shape)) continue;
+      const was = stroke.fill || null;
+      if (String(was || '').toLowerCase() === String(next || '').toLowerCase()) continue;
+      before.push({ id, fill: was });
+      stroke.fill = next;
+    }
+    if (!before.length) return false;
+    this.history.recordRefill(before, next);
     this.render();
     this.handlers.onChange?.(this.layer);
     return true;
@@ -1383,6 +1449,8 @@ export class InkSurface {
         color: stroke.color,
         width: stroke.width,
         opacity: stroke.opacity,
+        // 填了色的形状，路上也是填着色的——不带的话它一路是个空框，落地才突然填上。
+        fill: stroke.fill || null,
         points,
       });
     }
@@ -1437,6 +1505,10 @@ export class InkSurface {
       && e.clientY >= r.top && e.clientY <= r.bottom;
     if (inside) return false;
 
+    // 松手这一下也算一步。pointerup 的坐标和最后一次 pointermove 常常差几个像素
+    // （甩得快的时候更多），不补上的话，落下去的比指尖差那么一截。
+    if (this._grab?.mode === 'move') this._dragSelection(this._docPoint(e));
+
     const strokes = this.selection
       .map(id => this.layer.getById(id))
       .filter(Boolean);
@@ -1450,6 +1522,9 @@ export class InkSurface {
       // 栏缩放不同时，松手那一刻它会突然涨一圈或缩一圈——前面一路铺垫的「慢慢挪
       // 过去」，全毁在最后那一下。
       scale: this.transform.scale,
+      // 再带上这些点此刻在屏幕上的换算（画布的位置＋这边的变换），让那边把每个
+      // 点放回它松手时在屏幕上的位置——也就是预览最后画它的地方。见 adoptStrokes。
+      origin: { left: r.left, top: r.top, transform: { ...this.transform } },
     });
     if (!landed) return false;
 
@@ -1494,14 +1569,16 @@ export class InkSurface {
    *
    * @param {number} [sourceScale] 源那块画布的缩放。给了就按它折算，让这一片落下
    *   来之后在屏幕上和拖着的时候一样大。
+   * @param {{left: number, top: number, transform: object}} [origin] 源那块画布
+   *   在屏幕上的位置和它的变换。给了就逐点落回松手时的屏幕位置（见下）；没给才退
+   *   回「整片的中心摆到指尖下」。
    * @returns {{ids: string[], remove: function, restore: function}|null}
    *   接住了就回一组把手：源那边把它挂在自己的撤销上，好让「撤销拖走」把两边一起
    *   还原。接不住回 null。
    */
-  adoptStrokes(serialized, clientX, clientY, sourceScale) {
+  adoptStrokes(serialized, clientX, clientY, sourceScale, origin) {
     if (!Array.isArray(serialized) || !serialized.length || !this._viewport) return null;
     const r = this.canvas.getBoundingClientRect();
-    const at = screenToDocument(this.transform, clientX - r.left, clientY - r.top);
 
     // 屏幕上多大就多大。两栏缩放不同时，照搬文档坐标会让它在松手那一刻变个大小
     // ——而人刚刚一路看着它以某个大小挪过来。代价是它在**文档**里的尺寸变了，但
@@ -1521,14 +1598,39 @@ export class InkSurface {
       }
     }
     if (!Number.isFinite(minX)) return null;
-    // 落在手指底下，居中——人松手的地方就是他想放的地方。缩放也绕这个中心做，所
-    // 以变大变小都是朝着指尖，不会把这一片甩到一边去。
-    const cx = (minX + maxX) / 2;
-    const cy = (minY + maxY) / 2;
+
+    // 每个点落回它松手那一刻在屏幕上的位置：源的文档坐标 → 屏幕 → 这边的文档坐
+    // 标，和 showDragGhost 画预览是同一套换算，所以落下来的就是预览最后停着的那
+    // 一片，一个像素都不挪。
+    //
+    // 以前是把整片的中心摆到指尖下。人很少按着正中间拖——按着左上角拖过来，松手
+    // 那一下它就往左上跳半个身位，看着像没放准。
+    const from = origin?.transform;
+    const exact = from && Number.isFinite(origin.left) && Number.isFinite(origin.top)
+      && Number.isFinite(from.scale) && from.scale > 0;
+    let place;
+    if (exact) {
+      place = (pt) => {
+        const on = documentToScreen(from, pt.x, pt.y);
+        return screenToDocument(this.transform, origin.left + on.x - r.left, origin.top + on.y - r.top);
+      };
+    } else {
+      // 没带来处：整片的中心摆到指尖下，缩放也绕这个中心做，变大变小都朝着指尖。
+      const at = screenToDocument(this.transform, clientX - r.left, clientY - r.top);
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+      place = (pt) => ({ x: at.x + (pt.x - cx) * k, y: at.y + (pt.y - cy) * k });
+    }
+    minX = Infinity; minY = Infinity; maxX = -Infinity; maxY = -Infinity;
     for (const stroke of strokes) {
       for (const pt of stroke.points) {
-        pt.x = at.x + (pt.x - cx) * k;
-        pt.y = at.y + (pt.y - cy) * k;
+        const to = place(pt);
+        pt.x = to.x;
+        pt.y = to.y;
+        if (pt.x < minX) minX = pt.x;
+        if (pt.y < minY) minY = pt.y;
+        if (pt.x > maxX) maxX = pt.x;
+        if (pt.y > maxY) maxY = pt.y;
       }
       stroke.width *= k;
       recomputeBounds(stroke);
@@ -1549,10 +1651,10 @@ export class InkSurface {
     // 落下来就是选中的：人接着多半要再挪一下，而那需要它是被选中的那一个。
     this.selection = strokes.map(s => s.id);
     const pad = 6;
-    const left = at.x + (minX - cx) * k - pad;
-    const right = at.x + (maxX - cx) * k + pad;
-    const top = at.y + (minY - cy) * k - pad;
-    const bottom = at.y + (maxY - cy) * k + pad;
+    const left = minX - pad;
+    const right = maxX + pad;
+    const top = minY - pad;
+    const bottom = maxY + pad;
     this.selectionLoop = [
       { x: left, y: top },
       { x: right, y: top },
