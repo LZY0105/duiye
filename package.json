@@ -1,7 +1,7 @@
 {
   "name": "duiye",
   "private": true,
-  "version": "1.6.0",
+  "version": "1.7.0",
   "license": "MIT",
   "description": "对页 — handwriting annotation for textbooks, with automatic answer matching",
   "type": "module",
