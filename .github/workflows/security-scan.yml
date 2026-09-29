@@ -72,13 +72,16 @@ jobs:
       # 「依赖尽量少」在 SECURITY.md 里是写进设计约束的一条，但写在文档里的约束
       # 会慢慢失效。定一个数，越过了就停下来说一句 —— 不是禁止加依赖，是不许
       # 无声地加。
+      #
+      # 现在是 9 个：三个 Capacitor 插件、idb、pdfjs-dist（读和渲染），pdf-lib
+      # （导出时写一份新的 PDF），markdown-it、katex、dompurify（Agent 的回答）。
       - name: 依赖预算
         run: |
           set -euo pipefail
           COUNT=$(node -p 'Object.keys(require("./package.json").dependencies || {}).length')
           echo "运行时依赖 $COUNT 个"
-          if [ "$COUNT" -gt 8 ]; then
-            echo "::error::运行时依赖涨到 $COUNT 个了（上限 8）。要么去掉一个，要么改掉这里的上限并在提交信息里说明为什么。"
+          if [ "$COUNT" -gt 9 ]; then
+            echo "::error::运行时依赖涨到 $COUNT 个了（上限 9）。要么去掉一个，要么改掉这里的上限并在提交信息里说明为什么。"
             exit 1
           fi
 
