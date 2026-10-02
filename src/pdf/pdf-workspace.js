@@ -224,6 +224,14 @@ function describeUnusable(index, what) {
   }
 }
 
+/**
+ * 取助手名称的插值变量，而不是拼好的一句话。
+ *
+ * 名称出现在句子中间（"关闭页问后…"），成品句子在这里取一次就把语言定死了，
+ * 换语言之后新提示会和旧提示对不上；交给 t() 在出错那一刻代入才对。
+ */
+const agentVars = () => ({ name: t('agent.name') });
+
 export class PdfWorkspace {
   constructor(root, services = {}) {
     this.root = root;
@@ -3782,7 +3790,7 @@ export class PdfWorkspace {
       documentId,
       page,
       sessionKey: createAgentSessionKey(documentId, page),
-      documentName: pane.meta?.name || '当前文档',
+      documentName: pane.meta?.name || '',
     };
 
     this.agentTarget = target;
@@ -3866,9 +3874,8 @@ export class PdfWorkspace {
     if (!target) return;
 
     if (!this._isAgentTargetCurrent(target)) {
-      this.agentPanel?.showNotice(
-        '页面已经切换，请关闭 Agent 后在当前页重新打开。',
-      );
+      // 传词条键而不是成品句子：面板会按当前语言渲染，换语言时还会重画这一句。
+      this.agentPanel?.showNotice('agent.notice.pageChanged');
       return;
     }
 
@@ -3914,7 +3921,7 @@ export class PdfWorkspace {
         this.agentConversations.append(sessionKey, {
           id: `${requestId}:assistant`,
           role: 'assistant',
-          content: '当前页文字无法可靠提取，暂不调用 Agent。',
+          content: t('agent.reply.textUnavailable', agentVars()),
           status: 'error',
         });
         return;
@@ -3942,7 +3949,7 @@ export class PdfWorkspace {
       this.agentConversations.append(sessionKey, {
         id: `${requestId}:assistant`,
         role: 'assistant',
-        content: answer.answer || 'Agent 暂时没有返回结果。',
+        content: answer.answer || t('agent.reply.empty', agentVars()),
         status: answer.ok ? 'done' : 'error',
       });
     } catch (error) {
@@ -3957,7 +3964,7 @@ export class PdfWorkspace {
       this.agentConversations.append(sessionKey, {
         id: `${requestId}:assistant`,
         role: 'assistant',
-        content: 'Agent 处理失败。',
+        content: t('agent.reply.failed', agentVars()),
         status: 'error',
       });
     } finally {

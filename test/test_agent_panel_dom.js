@@ -38,11 +38,31 @@ for (const key of [
 
 const { createAgentPanel } = await import('../src/pdf/agent-panel.js');
 
+// 用真实词表，不用伪翻译：面板文案一旦漏进裸键或没填的占位符，这里就会看见。
+const i18n = await import('../src/core/i18n.js');
+const LANGS = ['zh-CN', 'zh-TW', 'en'];
+const packs = {};
+for (const lang of LANGS) {
+  packs[lang] = (await import(`../src/core/lang/${lang}.js`)).default;
+}
+await i18n.initI18n();
+await i18n.setLang('zh-CN');
+
+/** 期望文案：填上 {{name}} / {{page}}。 */
+function fill(lang, key, vars = {}) {
+  return packs[lang][key].replace(/\{\{(\w+)\}\}/g, (whole, name) => (
+    vars[name] === undefined ? whole : String(vars[name])
+  ));
+}
+
+const assistantName = (lang) => packs[lang]['agent.name'];
+
 function mount() {
   document.body.innerHTML = '<main id="root"></main>';
 
   const submitted = [];
   let closed = 0;
+  let cleared = 0;
   let panel;
 
   panel = createAgentPanel(document.querySelector('#root'), {
@@ -51,6 +71,7 @@ function mount() {
       page: 3,
     }),
     onSubmit: (question) => submitted.push(question),
+    onClear: () => { cleared += 1; },
     onClose: () => { closed += 1; },
   });
 
@@ -60,12 +81,17 @@ function mount() {
     panel,
     submitted,
     closed: () => closed,
+    cleared: () => cleared,
     fab: document.querySelector('[data-role="agent-fab"]'),
     dialog: document.querySelector('[data-role="agent-dialog"]'),
     content: document.querySelector('[data-role="agent-content"]'),
     form: document.querySelector('[data-role="agent-form"]'),
     input: document.querySelector('[data-role="agent-question"]'),
     submit: document.querySelector('[data-role="agent-submit"]'),
+    clear: document.querySelector('[data-role="agent-clear"]'),
+    closeButton: document.querySelector('[data-role="agent-close"]'),
+    title: document.querySelector('#pdf-agent-dialog-title'),
+    meta: document.querySelector('[data-role="agent-meta"]'),
   };
 }
 
@@ -235,7 +261,7 @@ await test('marks failed assistant messages as errors', () => {
       },
       {
         role: 'assistant',
-        content: 'Agent 处理失败。',
+        content: '页问处理失败。',
         status: 'error',
       },
     ],
@@ -264,6 +290,155 @@ await test('closing clears the question and notifies the owner', () => {
   assert.equal(view.closed(), 1);
 
   view.panel.destroy();
+});
+
+await test('clears the conversation through the owner and refuses while busy', () => {
+  const view = mount();
+  view.fab.click();
+
+  view.panel.showConversation({
+    messages: [{ role: 'assistant', content: '页面给出的答案。' }],
+    pendingRequestId: null,
+  });
+  assert.equal(view.clear.disabled, false);
+
+  view.clear.click();
+  assert.equal(view.cleared(), 1);
+  assert.equal(view.clear.disabled, true);
+  assert.equal(view.content.textContent, packs['zh-CN']['agent.status.empty']);
+
+  view.panel.showConversation({
+    messages: [{ role: 'user', content: '再问一次' }],
+    pendingRequestId: 'request-2',
+  });
+  view.clear.click();
+  assert.equal(view.cleared(), 1, '请求在飞时不该清');
+
+  view.panel.destroy();
+});
+
+await test('localizes the panel and the assistant name in every language', async () => {
+  for (const lang of LANGS) {
+    await i18n.setLang(lang);
+    const view = mount();
+    const name = assistantName(lang);
+
+    assert.equal(view.fab.title, fill(lang, 'agent.fab.open', { name }));
+    assert.equal(
+      view.fab.getAttribute('aria-label'),
+      fill(lang, 'agent.fab.open', { name }),
+    );
+    assert.equal(view.clear.title, fill(lang, 'agent.dialog.clear', { name }));
+    assert.equal(view.clear.textContent, packs[lang]['agent.dialog.clearShort']);
+    assert.equal(view.closeButton.title, fill(lang, 'agent.dialog.close', { name }));
+    assert.equal(view.input.placeholder, packs[lang]['agent.question.placeholder']);
+    assert.equal(view.input.getAttribute('aria-label'), packs[lang]['agent.question.label']);
+
+    view.fab.click();
+
+    assert.equal(view.title.textContent, name);
+    assert.equal(view.submit.textContent, packs[lang]['agent.submit']);
+    assert.equal(view.content.textContent, packs[lang]['agent.status.empty']);
+    assert.equal(
+      view.meta.textContent,
+      `物理练习.pdf · ${fill(lang, 'agent.meta.page', { page: 3 })}`,
+    );
+
+    view.panel.showNotice('agent.notice.pageChanged');
+    assert.equal(
+      view.content.textContent,
+      fill(lang, 'agent.notice.pageChanged', { name }),
+    );
+
+    view.panel.destroy();
+  }
+
+  await i18n.setLang('zh-CN');
+});
+
+await test('re-translates an open panel without a refresh', async () => {
+  await i18n.setLang('zh-CN');
+  const view = mount();
+  view.fab.click();
+
+  view.input.value = '水的沸点是多少？';
+  view.input.dispatchEvent(new Event('input', { bubbles: true }));
+  view.panel.showConversation(
+    {
+      messages: [
+        { role: 'user', content: '解释这一页', status: 'done' },
+        { role: 'assistant', content: '页问处理失败。', status: 'error' },
+      ],
+      pendingRequestId: 'request-1',
+    },
+    { textOrigin: 'LAYER' },
+  );
+
+  const contentNode = view.content;
+  contentNode.scrollTop = 24;
+  assert.match(view.meta.textContent, /PDF 文字层/);
+
+  await i18n.setLang('en');
+
+  assert.equal(view.dialog.hidden, false);
+  assert.equal(view.title.textContent, 'Master Page');
+  assert.equal(view.submit.textContent, 'Working…');
+  assert.equal(view.input.placeholder, packs.en['agent.question.placeholder']);
+  assert.equal(view.meta.textContent, '物理练习.pdf · Page 3 · PDF text layer');
+
+  // 面板没有重建，也没重发请求：内容节点还是同一个，提交记录仍为空。
+  assert.equal(document.querySelector('[data-role="agent-content"]'), contentNode);
+  assert.deepEqual(view.submitted, []);
+
+  // 草稿、滚动位置和忙碌状态都留着。
+  assert.equal(view.input.value, '水的沸点是多少？');
+  assert.equal(contentNode.scrollTop, 24);
+  assert.equal(view.input.disabled, true);
+  assert.equal(view.submit.disabled, true);
+  assert.equal(view.clear.disabled, true);
+
+  const messages = [
+    ...document.querySelectorAll('[data-role="agent-message"]'),
+  ];
+  assert.equal(messages.length, 3);
+  assert.equal(messages[0].textContent, '解释这一页');
+  assert.match(messages[1].textContent, /页问处理失败/);
+  assert.equal(messages[1].classList.contains('is-error'), true);
+  assert.equal(messages[2].textContent, 'Master Page is thinking…');
+
+  // 换语言之后新出现的提示用新语言。
+  view.panel.showNotice('agent.notice.pageChanged');
+  assert.equal(
+    view.content.textContent,
+    packs.en['agent.notice.pageChanged'].replace('{{name}}', 'Master Page'),
+  );
+  assert.equal(view.submit.textContent, 'Send');
+
+  await i18n.setLang('zh-CN');
+  view.panel.destroy();
+});
+
+await test('keeps the draft, the caret and the focus while re-localizing', async () => {
+  await i18n.setLang('zh-CN');
+  const view = mount();
+  view.fab.click();
+
+  view.input.value = '草稿';
+  view.input.dispatchEvent(new Event('input', { bubbles: true }));
+  view.input.focus();
+  view.input.setSelectionRange(1, 1);
+
+  await i18n.setLang('en');
+
+  assert.equal(document.activeElement, view.input);
+  assert.equal(view.input.value, '草稿');
+  assert.equal(view.input.selectionStart, 1);
+  assert.equal(view.input.disabled, false);
+  assert.equal(view.submit.disabled, false);
+  assert.equal(view.submit.textContent, 'Send');
+
+  view.panel.destroy();
+  await i18n.setLang('zh-CN');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
