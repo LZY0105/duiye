@@ -354,6 +354,8 @@ export default {
   "agent.dialog.close": "Close {{name}}",
   "agent.dialog.clear": "Clear this page’s {{name}} conversation",
   "agent.dialog.clearShort": "Clear",
+  "agent.dialog.clearTitle": "Clear this page’s conversation?",
+  "agent.dialog.clearBody": "This will permanently delete the saved {{name}} conversation for this page of the current document. Conversations on other pages and your unsent draft will not be affected.",
   "agent.question.label": "Ask about this page",
   "agent.question.placeholder": "Ask about this page…",
   "agent.submit": "Send",
