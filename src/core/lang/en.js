@@ -348,6 +348,25 @@ export default {
   "ink.selectMode": "Selection mode",
   "ink.lassoTouch": "Touched",
 
+  // ── Agent panel ──
+  "agent.error.connectLocal": "Cannot reach the local Agent proxy. Check that the proxy program is running.",
+  "agent.error.connectRemote": "Cannot reach the Agent service. Check your network connection and try again.",
+  "agent.error.timeoutLocal": "The local Agent proxy timed out. Check that the proxy program is still running, then try again.",
+  "agent.error.timeoutRemote": "The Agent service timed out. Check your network connection and try again.",
+  "agent.error.malformedReply": "The Agent service returned something unusable. Try again.",
+  "agent.error.requestFailed": "The Agent request failed. Try again later.",
+  "agent.error.invalidRequest": "The request is not valid. Check it and try again.",
+  "agent.error.invalidClientToken": "The access token is not valid. Contact whoever maintains this app.",
+  "agent.error.originNotAllowed": "This origin is not authorised. Contact whoever maintains this app.",
+  "agent.error.serviceMisconfigured": "The Agent service is misconfigured. Contact whoever maintains this app.",
+  "agent.error.upstreamTimeout": "The model took too long to reply. Try again later.",
+  "agent.error.upstreamUnreachable": "The Agent service cannot reach the model right now. Try again later.",
+  "agent.error.upstreamRejected": "The model service cannot handle the request right now. Try again later.",
+  "agent.error.invalidUpstreamResponse": "The model returned something unusable. Try again.",
+  "agent.error.historyTooLarge": "This page’s conversation is too long. Clear it and try again.",
+  "agent.error.tooManyRequests": "Too many requests. Try again later.",
+  "agent.error.serviceUnavailable": "The Agent service is temporarily unavailable. Try again later.",
+
   // -- decks, scratchpads and paper styles --
   "deck.pdf": "PDF",
   "deck.scratch": "Scratchpad",

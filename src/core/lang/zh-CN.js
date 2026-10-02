@@ -348,6 +348,25 @@ export default {
   "ink.selectMode": "选中方式",
   "ink.lassoTouch": "接触即选",
 
+  // ── Agent 面板 ──
+  "agent.error.connectLocal": "无法连接本地 Agent 代理，请确认代理程序已启动。",
+  "agent.error.connectRemote": "无法连接 Agent 服务，请检查网络连接，稍后重试。",
+  "agent.error.timeoutLocal": "本地 Agent 代理响应超时，请确认代理程序仍在运行，稍后重试。",
+  "agent.error.timeoutRemote": "Agent 服务响应超时，请检查网络连接，稍后重试。",
+  "agent.error.malformedReply": "Agent 服务返回的内容异常，请重试。",
+  "agent.error.requestFailed": "Agent 请求失败，请稍后重试。",
+  "agent.error.invalidRequest": "请求内容不符合要求，请检查后重试。",
+  "agent.error.invalidClientToken": "访问凭证无效，请联系应用维护者。",
+  "agent.error.originNotAllowed": "当前访问来源未获授权，请联系应用维护者。",
+  "agent.error.serviceMisconfigured": "Agent 服务配置异常，请联系应用维护者。",
+  "agent.error.upstreamTimeout": "模型回复超时，请稍后重试。",
+  "agent.error.upstreamUnreachable": "Agent 服务暂时无法连接模型，请稍后重试。",
+  "agent.error.upstreamRejected": "模型服务暂时无法处理请求，请稍后重试。",
+  "agent.error.invalidUpstreamResponse": "模型返回的内容异常，请重试。",
+  "agent.error.historyTooLarge": "当前页对话过长，请清空当前页对话后重试。",
+  "agent.error.tooManyRequests": "请求过于频繁，请稍后重试。",
+  "agent.error.serviceUnavailable": "Agent 服务暂时不可用，请稍后重试。",
+
   // -- decks, scratchpads and paper styles --
   "deck.pdf": "PDF",
   "deck.scratch": "草稿纸",
