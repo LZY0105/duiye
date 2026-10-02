@@ -7,6 +7,7 @@
 
 import { renderAgentAnswer } from '../agent/answer-renderer.js';
 import { onLangChange, t, translateDOM } from '../core/i18n.js';
+import { confirmDestructive } from './deck-dialogs.js';
 
 /** 助手名字本身也是一个词条：句子里要出现时走插值，别在代码里再抄一份。 */
 const agentVars = () => ({ name: t('agent.name') });
@@ -150,6 +151,8 @@ export function createAgentPanel(
   let hasConversation = false;
   let metadata = {};
   let previousFocus = null;
+  let clearConfirmation = null;
+  let composing = false;
   /**
    * 内容区当前画的是什么。
    *
@@ -165,11 +168,18 @@ export function createAgentPanel(
 
   const syncForm = () => {
     const hasQuestion = Boolean(questionInput.value.trim());
-    questionInput.disabled = busy;
-    submitButton.disabled = busy || !hasQuestion;
+    const blocked = busy || Boolean(clearConfirmation);
+    questionInput.disabled = blocked;
+    submitButton.disabled = blocked || !hasQuestion;
     submitButton.textContent = busy ? t('agent.submitBusy') : t('agent.submit');
     // 正在飞的请求不能一边等回答一边被清掉。
-    clearButton.disabled = busy || !hasConversation;
+    clearButton.disabled = blocked || !hasConversation;
+  };
+
+  const cancelClearConfirmation = () => {
+    const controller = clearConfirmation;
+    clearConfirmation = null;
+    controller?.abort();
   };
 
   const renderMetadata = () => {
@@ -185,6 +195,7 @@ export function createAgentPanel(
   };
 
   const renderConversation = (conversation = {}) => {
+    cancelClearConfirmation();
     const messages = Array.isArray(conversation.messages)
       ? conversation.messages
       : [];
@@ -248,6 +259,9 @@ export function createAgentPanel(
    * 顺手把滚动位置和对焦搅乱。
    */
   const applyLanguage = () => {
+    // A confirmation in the old language is dismissed rather than left misleading.
+    const hadConfirmation = Boolean(clearConfirmation);
+    cancelClearConfirmation();
     translateDOM(layer);
     // 输入框的无障碍名不是悬停提示：data-i18n-title 会给它挂一个 title，不合适。
     questionInput.setAttribute('aria-label', t('agent.question.label'));
@@ -273,10 +287,13 @@ export function createAgentPanel(
     }
 
     syncForm();
+    if (hadConfirmation && opened && !busy) questionInput.focus({ preventScroll: true });
   };
 
   const open = (nextMetadata = {}) => {
     if (!available) return;
+    cancelClearConfirmation();
+    composing = false;
     previousFocus = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
@@ -294,6 +311,8 @@ export function createAgentPanel(
 
   const close = ({ notify = true } = {}) => {
     if (!opened) return;
+    cancelClearConfirmation();
+    composing = false;
     opened = false;
     busy = false;
     hasConversation = false;
@@ -313,21 +332,58 @@ export function createAgentPanel(
   fab.addEventListener('click', () => onOpen?.());
   closeButton.addEventListener('click', () => close());
 
-  clearButton.addEventListener('click', () => {
-    if (busy) return;
+  clearButton.addEventListener('click', async () => {
+    if (!opened || busy || !hasConversation || clearConfirmation) return;
 
-    // 先请 owner 把这一页的会话清掉，再立刻回到空会话——不等 owner 回画。
-    onClear?.();
-    renderConversation({ messages: [], pendingRequestId: null });
+    const controller = new AbortController();
+    clearConfirmation = controller;
+    syncForm();
+    try {
+      const confirmed = await confirmDestructive({
+        title: t('agent.dialog.clearTitle'),
+        body: t('agent.dialog.clearBody', agentVars()),
+        confirmLabel: t('agent.dialog.clearShort'),
+        signal: controller.signal,
+        focusCancel: true,
+      });
+      // Closing, changing pages or receiving a newer state invalidates this consent.
+      if (!confirmed || controller.signal.aborted || clearConfirmation !== controller
+          || !opened || busy || !hasConversation) return;
+
+      clearConfirmation = null;
+      // The owner checks the actual document/page and may refuse a stale target.
+      if (onClear?.() !== false && opened) {
+        renderConversation({ messages: [], pendingRequestId: null });
+      }
+    } finally {
+      if (clearConfirmation === controller) clearConfirmation = null;
+      if (opened && !controller.signal.aborted && !clearConfirmation) {
+        syncForm();
+        if (!busy) questionInput.focus({ preventScroll: true });
+      }
+    }
   });
 
   questionInput.addEventListener('input', syncForm);
+  questionInput.addEventListener('compositionstart', () => { composing = true; });
+  questionInput.addEventListener('compositionend', () => { composing = false; });
+  questionInput.addEventListener('keydown', (event) => {
+    // Enter used to commit an input-method candidate is not a send instruction.
+    if (composing || event.isComposing || event.keyCode === 229) return;
+    if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey)
+        || event.altKey || event.shiftKey) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.repeat || !opened || busy || clearConfirmation
+        || !questionInput.value.trim()) return;
+    form.requestSubmit(submitButton);
+  });
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
 
     const question = questionInput.value.trim();
-    if (!question || busy) return;
+    if (!question || !opened || busy || clearConfirmation || composing) return;
 
     onSubmit?.(question);
     questionInput.value = '';
@@ -359,6 +415,7 @@ export function createAgentPanel(
     },
 
     showLoading(nextMetadata = null) {
+      cancelClearConfirmation();
       busy = true;
       hasConversation = false;
 
@@ -373,6 +430,7 @@ export function createAgentPanel(
     },
 
     showResult(result = {}) {
+      cancelClearConfirmation();
       busy = false;
       hasConversation = false;
 
@@ -396,6 +454,7 @@ export function createAgentPanel(
      *   也能用，只是那样不会跟着语言换。
      */
     showNotice(messageKey, nextMetadata = null) {
+      cancelClearConfirmation();
       busy = false;
       hasConversation = false;
 
@@ -410,6 +469,8 @@ export function createAgentPanel(
     },
 
     destroy() {
+      cancelClearConfirmation();
+      opened = false;
       offLang();
       layer.remove();
     },

@@ -653,6 +653,61 @@ check('storage being unavailable loses the place, not the pane', () => {
   globalThis.localStorage = real;
 });
 
+{
+  const { PdfWorkspace } = await import('../src/pdf/pdf-workspace.js');
+  const { createAgentConversationStore, createAgentSessionKey } = await import(
+    '../src/agent/agent-conversation.js'
+  );
+  const makeAgentWorkspace = () => {
+    const store = createAgentConversationStore({ storage: null });
+    const keys = [
+      createAgentSessionKey('book-agent', 3),
+      createAgentSessionKey('book-agent', 4),
+      createAgentSessionKey('other-book', 3),
+    ];
+    for (const key of keys) {
+      store.append(key, { role: 'user', content: '问题' });
+      store.append(key, { role: 'assistant', content: '历史回答' });
+    }
+    const doc = { id: 'book-agent' };
+    const ws = Object.create(PdfWorkspace.prototype);
+    const drawn = [];
+    Object.assign(ws, {
+      agentConversations: store,
+      agentTarget: { slot: SLOTS.PRIMARY, doc, page: 3, sessionKey: keys[0] },
+      panes: { [SLOTS.PRIMARY]: { doc, state: { pageNumber: 3 } } },
+      agentPanel: { showConversation: (conversation) => drawn.push(conversation) },
+    });
+    return { ws, store, keys, drawn };
+  };
+
+  check('clearing Agent history affects only the active document page', () => {
+    const { ws, store, keys, drawn } = makeAgentWorkspace();
+    const otherPage = store.get(keys[1]);
+    const otherDocument = store.get(keys[2]);
+    assert.equal(ws.clearAgentConversation(), true);
+    assert.deepEqual(store.get(keys[0]).messages, []);
+    assert.deepEqual(store.get(keys[1]), otherPage);
+    assert.deepEqual(store.get(keys[2]), otherDocument);
+    assert.equal(drawn.length, 1);
+    assert.deepEqual(drawn[0].messages, []);
+  });
+
+  check('Agent clearing refuses pending requests and stale page or document targets', () => {
+    for (const mismatch of ['pending', 'page', 'document', 'closed']) {
+      const { ws, store, keys, drawn } = makeAgentWorkspace();
+      if (mismatch === 'pending') store.setPending(keys[0], 'in-flight');
+      else if (mismatch === 'page') ws.panes[SLOTS.PRIMARY].state.pageNumber = 4;
+      else if (mismatch === 'document') ws.panes[SLOTS.PRIMARY].doc = { id: 'other-book' };
+      else ws.agentTarget = null;
+      const before = keys.map((key) => store.get(key));
+      assert.equal(ws.clearAgentConversation(), false, mismatch);
+      assert.deepEqual(keys.map((key) => store.get(key)), before, mismatch);
+      assert.deepEqual(drawn, [], mismatch);
+    }
+  });
+}
+
 const appSource = $read('src/core/app.js');
 ok(appSource.includes('initPdfWorkspace'), 'workspace is initialised from app start');
 const html = $read('index.html');

@@ -3857,16 +3857,17 @@ export class PdfWorkspace {
    */
   clearAgentConversation() {
     const target = this.agentTarget;
-    if (!target) return;
+    if (!target || !this._isAgentTargetCurrent(target)) return false;
 
     if (this.agentConversations.get(target.sessionKey).pendingRequestId) {
-      return;
+      return false;
     }
 
     this.agentConversations.clear(target.sessionKey);
     this.agentPanel?.showConversation(
       this.agentConversations.get(target.sessionKey),
     );
+    return true;
   }
 
   async submitAgentQuestion(userQuestion) {

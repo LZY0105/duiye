@@ -37,8 +37,12 @@ const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => (
  * top thing on screen, so it must consume the key before focus mode or the
  * app's own navigation sees it.
  */
-function modal(build) {
+function modal(build, { signal, focusCancel = false } = {}) {
   return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve(null);
+      return;
+    }
     const overlay = document.createElement('div');
     overlay.className = 'deck-overlay';
     const dialog = document.createElement('div');
@@ -52,6 +56,7 @@ function modal(build) {
       if (settled) return;
       settled = true;
       document.removeEventListener('keydown', onKey, true);
+      signal?.removeEventListener('abort', onAbort);
       overlay.remove();
       resolve(value);
     };
@@ -61,12 +66,16 @@ function modal(build) {
       e.stopPropagation();
       finish(null);
     };
+    // A page-owned confirmation must not outlive the page it would erase.
+    const onAbort = () => finish(null);
+    signal?.addEventListener('abort', onAbort, { once: true });
     document.addEventListener('keydown', onKey, true);
     overlay.addEventListener('pointerdown', (e) => {
       if (e.target === overlay) finish(null);
     });
 
     build(dialog, finish);
+    if (settled) return;
     document.body.appendChild(overlay);
     // Focus the DIALOG, not the first field.
     //
@@ -80,7 +89,10 @@ function modal(build) {
     // The container still takes focus, so a screen reader and the Tab order
     // both land inside rather than behind.
     dialog.tabIndex = -1;
-    dialog.focus({ preventScroll: true });
+    const focusTarget = focusCancel
+      ? dialog.querySelector('[data-role="cancel"]') || dialog
+      : dialog;
+    focusTarget.focus({ preventScroll: true });
   });
 }
 
@@ -552,7 +564,7 @@ export function chooseAction({ title, note = '', actions = [], cancelLabel = '' 
   });
 }
 
-export function confirmDestructive({ title, body, confirmLabel }) {
+export function confirmDestructive({ title, body, confirmLabel, signal, focusCancel = false }) {
   return modal((dialog, finish) => {
     dialog.innerHTML = `
       <div class="deck-dialog-title"></div>
@@ -567,7 +579,7 @@ export function confirmDestructive({ title, body, confirmLabel }) {
     dialog.querySelector('[data-role="confirm"]').textContent = confirmLabel;
     dialog.querySelector('[data-role="cancel"]').addEventListener('click', () => finish(false));
     dialog.querySelector('[data-role="confirm"]').addEventListener('click', () => finish(true));
-  });
+  }, { signal, focusCancel });
 }
 
 /**

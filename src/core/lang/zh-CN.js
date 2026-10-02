@@ -354,6 +354,8 @@ export default {
   "agent.dialog.close": "关闭{{name}}对话框",
   "agent.dialog.clear": "清空当前页的{{name}}对话",
   "agent.dialog.clearShort": "清空",
+  "agent.dialog.clearTitle": "清空当前页对话？",
+  "agent.dialog.clearBody": "这将删除当前文档当前页已保存的{{name}}对话，且无法撤销。其他页面的对话和未发送的草稿不会受影响。",
   "agent.question.label": "输入关于当前页的问题",
   "agent.question.placeholder": "输入关于当前页的问题……",
   "agent.submit": "发送",

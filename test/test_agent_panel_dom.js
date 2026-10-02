@@ -37,6 +37,7 @@ for (const key of [
 }
 
 const { createAgentPanel } = await import('../src/pdf/agent-panel.js');
+const { confirmDestructive } = await import('../src/pdf/deck-dialogs.js');
 
 // 用真实词表，不用伪翻译：面板文案一旦漏进裸键或没填的占位符，这里就会看见。
 const i18n = await import('../src/core/i18n.js');
@@ -57,7 +58,7 @@ function fill(lang, key, vars = {}) {
 
 const assistantName = (lang) => packs[lang]['agent.name'];
 
-function mount() {
+function mount({ clearResult } = {}) {
   document.body.innerHTML = '<main id="root"></main>';
 
   const submitted = [];
@@ -71,7 +72,7 @@ function mount() {
       page: 3,
     }),
     onSubmit: (question) => submitted.push(question),
-    onClear: () => { cleared += 1; },
+    onClear: () => { cleared += 1; return clearResult; },
     onClose: () => { closed += 1; },
   });
 
@@ -292,7 +293,7 @@ await test('closing clears the question and notifies the owner', () => {
   view.panel.destroy();
 });
 
-await test('clears the conversation through the owner and refuses while busy', () => {
+await test('clears the conversation through the owner and refuses while busy', async () => {
   const view = mount();
   view.fab.click();
 
@@ -303,6 +304,9 @@ await test('clears the conversation through the owner and refuses while busy', (
   assert.equal(view.clear.disabled, false);
 
   view.clear.click();
+  assert.equal(view.cleared(), 0, 'opening the confirmation must not erase history');
+  document.querySelector('.deck-dialog [data-role="confirm"]').click();
+  await Promise.resolve();
   assert.equal(view.cleared(), 1);
   assert.equal(view.clear.disabled, true);
   assert.equal(view.content.textContent, packs['zh-CN']['agent.status.empty']);
@@ -313,6 +317,7 @@ await test('clears the conversation through the owner and refuses while busy', (
   });
   view.clear.click();
   assert.equal(view.cleared(), 1, '请求在飞时不该清');
+  assert.equal(document.querySelector('.deck-overlay'), null);
 
   view.panel.destroy();
 });
@@ -439,6 +444,232 @@ await test('keeps the draft, the caret and the focus while re-localizing', async
 
   view.panel.destroy();
   await i18n.setLang('zh-CN');
+});
+
+function savedConversation(view) {
+  view.panel.showConversation({
+    messages: [{ role: 'assistant', content: '保留的历史回答。' }],
+    pendingRequestId: null,
+  });
+  view.input.value = '  未发送的草稿  ';
+  view.input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function pressEnter(view, options = {}) {
+  const event = new dom.window.KeyboardEvent('keydown', {
+    key: 'Enter', bubbles: true, cancelable: true, ...options,
+  });
+  view.input.dispatchEvent(event);
+  return event;
+}
+
+await test('cancel, Escape and backdrop preserve history and the draft', async () => {
+  const view = mount();
+  view.fab.click();
+  savedConversation(view);
+  const message = view.content.firstElementChild;
+  for (const exit of ['cancel', 'escape', 'backdrop']) {
+    view.clear.click();
+    const overlay = document.querySelector('.deck-overlay');
+    const cancel = overlay.querySelector('[data-role="cancel"]');
+    assert.equal(document.activeElement, cancel, 'cancel is the safe initial choice');
+    assert.equal(view.input.disabled, true);
+    pressEnter(view, { ctrlKey: true });
+    assert.deepEqual(view.submitted, [], 'confirmation blocks sending too');
+    if (exit === 'cancel') cancel.click();
+    else if (exit === 'escape') {
+      document.dispatchEvent(new dom.window.KeyboardEvent('keydown', {
+        key: 'Escape', bubbles: true, cancelable: true,
+      }));
+    } else overlay.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    await Promise.resolve();
+    assert.equal(document.querySelector('.deck-overlay'), null);
+    assert.equal(view.cleared(), 0);
+    assert.equal(view.content.firstElementChild, message);
+    assert.equal(view.input.value, '  未发送的草稿  ');
+    assert.equal(view.input.disabled, false);
+    assert.equal(view.submit.disabled, false);
+    assert.equal(document.activeElement, view.input);
+  }
+  view.panel.destroy();
+});
+
+await test('confirm clears once, preserves the draft and respects an owner refusal', async () => {
+  for (const clearResult of [undefined, false]) {
+    const view = mount({ clearResult });
+    view.fab.click();
+    savedConversation(view);
+    view.clear.click();
+    view.clear.dispatchEvent(new Event('click', { bubbles: true }));
+    assert.equal(document.querySelectorAll('.deck-overlay').length, 1);
+    const confirm = document.querySelector('.deck-dialog [data-role="confirm"]');
+    confirm.click();
+    confirm.click();
+    await Promise.resolve();
+    assert.equal(view.cleared(), 1);
+    assert.equal(view.input.value, '  未发送的草稿  ');
+    assert.equal(view.submit.disabled, false);
+    assert.equal(document.activeElement, view.input);
+    assert.equal(view.clear.disabled, clearResult !== false);
+    assert.equal(view.content.textContent.trim(), clearResult === false
+      ? '保留的历史回答。' : packs['zh-CN']['agent.status.empty']);
+    view.panel.destroy();
+  }
+});
+
+await test('empty history cannot open a destructive confirmation', () => {
+  const view = mount();
+  view.fab.click();
+  view.clear.dispatchEvent(new Event('click', { bubbles: true }));
+  assert.equal(document.querySelector('.deck-overlay'), null);
+  assert.equal(view.cleared(), 0);
+  view.panel.destroy();
+});
+
+await test('page changes, close, newer replies and destruction invalidate old consent', async () => {
+  for (const invalidate of ['page', 'document', 'close', 'pending', 'destroy', 'confirmed-page']) {
+    const view = mount();
+    view.fab.click();
+    savedConversation(view);
+    view.clear.click();
+    const oldConfirm = document.querySelector('.deck-dialog [data-role="confirm"]');
+    if (invalidate === 'confirmed-page') oldConfirm.click();
+    if (invalidate === 'page' || invalidate === 'document' || invalidate === 'confirmed-page') {
+      view.panel.close();
+      view.panel.open({ documentName: invalidate === 'page' ? '物理练习.pdf' : '另一本.pdf', page: 4 });
+      view.panel.showConversation({ messages: [{ role: 'assistant', content: '新页面记录' }] });
+    } else if (invalidate === 'close') view.panel.close();
+    else if (invalidate === 'pending') {
+      view.panel.showConversation({
+        messages: [{ role: 'user', content: '正在请求的新问题' }], pendingRequestId: 'new-request',
+      });
+    } else view.panel.destroy();
+    assert.equal(document.querySelector('.deck-overlay'), null);
+    oldConfirm.click();
+    await Promise.resolve();
+    assert.equal(view.cleared(), 0, 'an obsolete confirm control must have no effect');
+    const escape = new dom.window.KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+    document.dispatchEvent(escape);
+    assert.equal(escape.defaultPrevented, false, 'dismissal removes the document listener');
+    if (invalidate === 'page' || invalidate === 'document' || invalidate === 'confirmed-page') {
+      assert.equal(view.content.textContent.trim(), '新页面记录');
+    }
+    if (invalidate === 'pending') assert.equal(view.input.disabled, true);
+    view.panel.destroy();
+  }
+});
+
+await test('the clear confirmation is translated and cancels on a language change', async () => {
+  for (const lang of LANGS) {
+    await i18n.setLang(lang);
+    const view = mount();
+    view.fab.click();
+    savedConversation(view);
+    view.clear.click();
+    const confirmation = document.querySelector('.deck-dialog');
+    assert.equal(confirmation.querySelector('.deck-dialog-title').textContent,
+      packs[lang]['agent.dialog.clearTitle']);
+    assert.equal(confirmation.querySelector('.deck-dialog-note').textContent,
+      fill(lang, 'agent.dialog.clearBody', { name: assistantName(lang) }));
+    assert.equal(confirmation.querySelector('[data-role="cancel"]').textContent,
+      packs[lang]['deck.cancel']);
+    assert.equal(confirmation.querySelector('[data-role="confirm"]').textContent,
+      packs[lang]['agent.dialog.clearShort']);
+    await i18n.setLang(lang === 'en' ? 'zh-CN' : 'en');
+    assert.equal(document.querySelector('.deck-overlay'), null);
+    assert.equal(view.cleared(), 0);
+    assert.equal(view.input.value, '  未发送的草稿  ');
+    assert.equal(view.input.disabled, false);
+    view.panel.destroy();
+  }
+  await i18n.setLang('zh-CN');
+});
+
+await test('Ctrl+Enter and Command+Enter submit through the same form path', () => {
+  const view = mount();
+  view.fab.click();
+  let formSubmissions = 0;
+  view.form.addEventListener('submit', () => { formSubmissions += 1; });
+  for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
+    view.input.value = '  第一行\n第二行  ';
+    view.input.dispatchEvent(new Event('input', { bubbles: true }));
+    assert.equal(pressEnter(view, modifier).defaultPrevented, true);
+    assert.equal(view.input.value, '');
+    assert.equal(view.submit.disabled, true);
+  }
+  assert.equal(formSubmissions, 2);
+  assert.deepEqual(view.submitted, ['第一行\n第二行', '第一行\n第二行']);
+  view.panel.destroy();
+});
+
+await test('plain Enter remains a newline and key repeats cannot resend', () => {
+  const view = mount();
+  view.fab.click();
+  view.input.value = '草稿';
+  view.input.dispatchEvent(new Event('input', { bubbles: true }));
+  assert.equal(pressEnter(view).defaultPrevented, false);
+  assert.equal(pressEnter(view, { shiftKey: true }).defaultPrevented, false);
+  assert.equal(pressEnter(view, { ctrlKey: true, altKey: true }).defaultPrevented, false);
+  pressEnter(view, { ctrlKey: true, repeat: true });
+  assert.equal(view.input.value, '草稿');
+  assert.deepEqual(view.submitted, []);
+  view.panel.destroy();
+});
+
+await test('composition events, isComposing and keyCode 229 never send a candidate', () => {
+  const view = mount();
+  view.fab.click();
+  view.input.value = '拼音候选';
+  view.input.dispatchEvent(new Event('input', { bubbles: true }));
+  view.input.dispatchEvent(new Event('compositionstart', { bubbles: true }));
+  assert.equal(pressEnter(view, { ctrlKey: true }).defaultPrevented, false);
+  view.form.dispatchEvent(new Event('submit', { cancelable: true }));
+  view.input.dispatchEvent(new Event('compositionend', { bubbles: true }));
+  assert.equal(pressEnter(view, { metaKey: true, isComposing: true }).defaultPrevented, false);
+  assert.equal(pressEnter(view, { ctrlKey: true, keyCode: 229 }).defaultPrevented, false);
+  assert.deepEqual(view.submitted, []);
+  assert.equal(view.input.value, '拼音候选');
+  pressEnter(view, { ctrlKey: true });
+  assert.deepEqual(view.submitted, ['拼音候选']);
+  view.panel.destroy();
+});
+
+await test('shortcut submission obeys empty, busy and closed-panel guards', () => {
+  const view = mount();
+  view.fab.click();
+  view.input.value = ' \n ';
+  pressEnter(view, { ctrlKey: true });
+  view.input.value = '等待回答时的草稿';
+  view.input.dispatchEvent(new Event('input', { bubbles: true }));
+  view.panel.showLoading();
+  pressEnter(view, { metaKey: true });
+  assert.equal(view.input.value, '等待回答时的草稿');
+  view.panel.close();
+  view.input.value = '面板关闭后的输入';
+  pressEnter(view, { ctrlKey: true });
+  view.form.dispatchEvent(new Event('submit', { cancelable: true }));
+  assert.deepEqual(view.submitted, []);
+  view.panel.destroy();
+});
+
+await test('shared confirmations retain their default focus and support safe abort cleanup', async () => {
+  document.body.innerHTML = '';
+  const controller = new AbortController();
+  const result = confirmDestructive({
+    title: '测试确认', body: '测试说明', confirmLabel: '确认', signal: controller.signal,
+  });
+  assert.equal(document.activeElement, document.querySelector('.deck-dialog'),
+    'other callers keep the pre-existing dialog focus');
+  controller.abort();
+  assert.equal(await result, null);
+  assert.equal(document.querySelector('.deck-overlay'), null);
+  const escape = new dom.window.KeyboardEvent('keydown', { key: 'Escape', cancelable: true });
+  document.dispatchEvent(escape);
+  assert.equal(escape.defaultPrevented, false);
+  assert.equal(await confirmDestructive({
+    title: '已过期', body: '', confirmLabel: '确认', signal: controller.signal,
+  }), null);
+  assert.equal(document.querySelector('.deck-overlay'), null);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

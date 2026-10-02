@@ -344,6 +344,8 @@ export default {
   "agent.dialog.close": "關閉{{name}}對話框",
   "agent.dialog.clear": "清空本頁的{{name}}對話",
   "agent.dialog.clearShort": "清空",
+  "agent.dialog.clearTitle": "清空本頁對話？",
+  "agent.dialog.clearBody": "這將刪除目前文件本頁已儲存的{{name}}對話，且無法復原。其他頁面的對話及尚未傳送的草稿不會受影響。",
   "agent.question.label": "輸入關於本頁的問題",
   "agent.question.placeholder": "輸入關於本頁的問題……",
   "agent.submit": "傳送",
