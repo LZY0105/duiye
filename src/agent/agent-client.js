@@ -80,6 +80,16 @@ const ERROR_CODE_KEYS = {
   unsupported_content_type: ERROR_KEYS.invalidRequest,
 };
 
+/**
+ * 取一条提示的译文，并把助手名称按当前语言代入。
+ *
+ * 名称会出现在句子中间（"关闭页问后…"），所以不能把名称拼进语言文件的值里；不带
+ * 占位符的键也会走这里，多给的变量被 t() 忽略。
+ */
+function errorMessage(key) {
+  return t(key, { name: t('agent.name') });
+}
+
 function isLocalAddress(baseUrl) {
   try {
     // WHATWG URL 会把 IPv6 主机写成 `[::1]`，方括号要剥掉再比。
@@ -137,15 +147,15 @@ function hasAnswer(payload) {
 function failureMessage(responseOk, status, payload) {
   const code = typeof payload?.error === 'string' ? payload.error : '';
   if (Object.prototype.hasOwnProperty.call(ERROR_CODE_KEYS, code)) {
-    return t(ERROR_CODE_KEYS[code]);
+    return errorMessage(ERROR_CODE_KEYS[code]);
   }
 
-  if (status === 401) return t(ERROR_KEYS.invalidClientToken);
-  if (status === 403) return t(ERROR_KEYS.originNotAllowed);
-  if (status === 429) return t(ERROR_KEYS.tooManyRequests);
-  if (status >= 500) return t(ERROR_KEYS.serviceUnavailable);
-  if (responseOk || (status >= 200 && status < 300)) return t(ERROR_KEYS.malformedReply);
-  return t(ERROR_KEYS.requestFailed);
+  if (status === 401) return errorMessage(ERROR_KEYS.invalidClientToken);
+  if (status === 403) return errorMessage(ERROR_KEYS.originNotAllowed);
+  if (status === 429) return errorMessage(ERROR_KEYS.tooManyRequests);
+  if (status >= 500) return errorMessage(ERROR_KEYS.serviceUnavailable);
+  if (responseOk || (status >= 200 && status < 300)) return errorMessage(ERROR_KEYS.malformedReply);
+  return errorMessage(ERROR_KEYS.requestFailed);
 }
 
 function defaultFetch(url, options) {
@@ -265,16 +275,16 @@ export function createAgentClient({
       }
 
       // 200 不等于成功：缺 answer 的响应一旦放过去，界面会拿 undefined 当回答。
-      if (!hasAnswer(payload)) return failure(t(ERROR_KEYS.malformedReply), payload);
+      if (!hasAnswer(payload)) return failure(errorMessage(ERROR_KEYS.malformedReply), payload);
 
       return payload;
     } catch (error) {
       // 浏览器的连接异常分不出断网、跨域、证书还是服务故障，所以两种提示都不说
       // 死原因，只给出用户能采取的动作。
       if (error?.name === 'AbortError') {
-        return failure(t(local ? ERROR_KEYS.timeoutLocal : ERROR_KEYS.timeoutRemote));
+        return failure(errorMessage(local ? ERROR_KEYS.timeoutLocal : ERROR_KEYS.timeoutRemote));
       }
-      return failure(t(local ? ERROR_KEYS.connectLocal : ERROR_KEYS.connectRemote));
+      return failure(errorMessage(local ? ERROR_KEYS.connectLocal : ERROR_KEYS.connectRemote));
     }
   }
 

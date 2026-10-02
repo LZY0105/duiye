@@ -67,12 +67,18 @@ function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-const LOCAL_CONNECT = '无法连接本地 Agent 代理，请确认代理程序已启动。';
-const REMOTE_CONNECT = '无法连接 Agent 服务，请检查网络连接，稍后重试。';
-const LOCAL_TIMEOUT = '本地 Agent 代理响应超时，请确认代理程序仍在运行，稍后重试。';
-const REMOTE_TIMEOUT = 'Agent 服务响应超时，请检查网络连接，稍后重试。';
-const MALFORMED = 'Agent 服务返回的内容异常，请重试。';
-const SERVICE_UNAVAILABLE = 'Agent 服务暂时不可用，请稍后重试。';
+/**
+ * 成品句子在这里写死，不用词表拼。
+ *
+ * 期望值如果由词表拼出来，词条本身漏了插值或名称写错时，实现和测试会一起错过去。
+ * 三种语言的成品句子另有专条断言（见文件末尾的 FINISHED_SENTENCES）。
+ */
+const LOCAL_CONNECT = '无法连接本地页问代理，请确认代理程序已启动。';
+const REMOTE_CONNECT = '无法连接页问服务，请检查网络连接，稍后重试。';
+const LOCAL_TIMEOUT = '本地页问代理响应超时，请确认代理程序仍在运行，稍后重试。';
+const REMOTE_TIMEOUT = '页问服务响应超时，请检查网络连接，稍后重试。';
+const MALFORMED = '页问服务返回的内容异常，请重试。';
+const SERVICE_UNAVAILABLE = '页问服务暂时不可用，请稍后重试。';
 
 console.log('Agent client');
 
@@ -238,10 +244,10 @@ await check('maps every known server error code to a fixed message', async () =>
   const cases = [
     ['invalid_client_token', 401, '访问凭证无效，请联系应用维护者。'],
     ['origin_not_allowed', 403, '当前访问来源未获授权，请联系应用维护者。'],
-    ['upstream_not_configured', 503, 'Agent 服务配置异常，请联系应用维护者。'],
-    ['invalid_proxy_configuration', 503, 'Agent 服务配置异常，请联系应用维护者。'],
+    ['upstream_not_configured', 503, '页问服务配置异常，请联系应用维护者。'],
+    ['invalid_proxy_configuration', 503, '页问服务配置异常，请联系应用维护者。'],
     ['upstream_timeout', 504, '模型回复超时，请稍后重试。'],
-    ['upstream_unreachable', 502, 'Agent 服务暂时无法连接模型，请稍后重试。'],
+    ['upstream_unreachable', 502, '页问服务暂时无法连接模型，请稍后重试。'],
     ['upstream_rejected', 502, '模型服务暂时无法处理请求，请稍后重试。'],
     ['invalid_upstream_response', 502, '模型返回的内容异常，请重试。'],
     ['history_too_large', 400, '当前页对话过长，请清空当前页对话后重试。'],
@@ -284,7 +290,7 @@ await check('falls back to the response status for unknown error codes', async (
     [500, SERVICE_UNAVAILABLE],
     [502, SERVICE_UNAVAILABLE],
     [503, SERVICE_UNAVAILABLE],
-    [404, 'Agent 请求失败，请稍后重试。'],
+    [404, '页问请求失败，请稍后重试。'],
   ];
 
   for (const [status, expected] of cases) {
@@ -322,7 +328,7 @@ await check('keeps a known configuration error readable without echoing the serv
 
   const result = await client.requestAgent({ page: 1, questionText: 'x', textOrigin: 'LAYER' });
   assert.equal(result.ok, false);
-  assert.equal(result.answer, 'Agent 服务配置异常，请联系应用维护者。');
+  assert.equal(result.answer, '页问服务配置异常，请联系应用维护者。');
   assert.equal(result.source, 'cpp-proxy');
 });
 
@@ -523,6 +529,13 @@ for (const lang of LANGS) {
   packs[lang] = (await import(`../src/core/lang/${lang}.js`)).default;
 }
 
+/** 期望文案：把 {{name}} 换成同一语言里的助手名称。 */
+function fill(lang, key) {
+  return packs[lang][key].replace(/\{\{(\w+)\}\}/g, (whole, name) => (
+    name === 'name' ? packs[lang]['agent.name'] : whole
+  ));
+}
+
 function abortingFetch() {
   return async () => {
     const error = new Error('The operation was aborted');
@@ -531,16 +544,46 @@ function abortingFetch() {
   };
 }
 
-await check('ships the same agent error keys in all three languages', async () => {
-  for (const lang of LANGS) {
-    const keys = Object.keys(packs[lang]).filter((key) => key.startsWith('agent.')).sort();
-    assert.deepEqual(keys, [...AGENT_ERROR_KEYS].sort(), `${lang} 的 agent.* 键集合应与其余语言一致`);
+await check('ships the same agent keys in all three languages', async () => {
+  const keySets = LANGS.map(
+    (lang) => Object.keys(packs[lang]).filter((key) => key.startsWith('agent.')).sort(),
+  );
 
-    for (const key of AGENT_ERROR_KEYS) {
+  // 键要逐条对齐：少一条，换到那种语言就会露出裸键。
+  for (let i = 1; i < LANGS.length; i += 1) {
+    assert.deepEqual(
+      keySets[i],
+      keySets[0],
+      `${LANGS[i]} 的 agent.* 键集合与 ${LANGS[0]} 不一致`,
+    );
+  }
+
+  for (const key of AGENT_ERROR_KEYS) {
+    assert.ok(keySets[0].includes(key), `词表里没有 ${key}`);
+  }
+
+  for (const lang of LANGS) {
+    for (const key of keySets[0]) {
       const text = packs[lang][key];
       assert.equal(typeof text, 'string', `${lang} 的 ${key} 不是字符串`);
       assert.ok(text.trim().length > 0, `${lang} 的 ${key} 是空的`);
-      assert.ok(!text.includes('{{'), `${lang} 的 ${key} 留了没填的占位符`);
+
+      const placeholders = [...text.matchAll(/\{\{(\w+)\}\}/g)].map((match) => match[1]);
+      for (const name of placeholders) {
+        assert.ok(
+          name === 'name' || name === 'page',
+          `${lang} 的 ${key} 用了没约定过的占位符 ${name}`,
+        );
+      }
+    }
+
+    // 名称只能以插值出现。写死品牌名的话，换语言时它会跟着串味。
+    for (const key of keySets[0]) {
+      if (key === 'agent.name') continue;
+      assert.ok(
+        !packs[lang][key].includes(packs[lang]['agent.name']),
+        `${lang} 的 ${key} 里写死了助手名称`,
+      );
     }
   }
 
@@ -584,7 +627,11 @@ await check('translates every classified failure in all three languages', async 
       const result = await bound.requestAgent({ page: 3, questionText: '这一页讲了什么', textOrigin: 'LAYER' });
 
       assert.equal(result.ok, false);
-      assert.equal(result.answer, packs[lang][key], `${lang} 下 ${key} 的提示不对`);
+      assert.equal(result.answer, fill(lang, key), `${lang} 下 ${key} 的提示不对`);
+      assert.ok(
+        !result.answer.includes('{{'),
+        `${lang} 下 ${key} 的提示留了没填的占位符`,
+      );
     }
   }
 });
@@ -603,11 +650,109 @@ await check('re-reads the language on the next failure instead of freezing it at
   await i18n.setLang('zh-TW');
   const traditional = await bound.requestAgent({ page: 1, questionText: 'x', textOrigin: 'LAYER' });
 
-  assert.equal(simplified.answer, packs['zh-CN']['agent.error.connectLocal']);
-  assert.equal(english.answer, packs.en['agent.error.connectLocal']);
-  assert.equal(traditional.answer, packs['zh-TW']['agent.error.connectLocal']);
+  assert.equal(simplified.answer, fill('zh-CN', 'agent.error.connectLocal'));
+  assert.equal(english.answer, fill('en', 'agent.error.connectLocal'));
+  assert.equal(traditional.answer, fill('zh-TW', 'agent.error.connectLocal'));
   assert.notEqual(simplified.answer, english.answer);
   assert.notEqual(english.answer, traditional.answer);
+});
+
+/**
+ * 三种语言的成品句子，逐字写死。
+ *
+ * 上面的分类测试拿真实词表当期望值，覆盖得全，但词条自己写错时它看不出来（两边错的
+ * 是同一份数据）。这里对着人写的句子比，专抓漏插值、名称缺失或品牌叠加。
+ */
+const FINISHED_SENTENCES = {
+  'zh-CN': {
+    connectLocal: '无法连接本地页问代理，请确认代理程序已启动。',
+    connectRemote: '无法连接页问服务，请检查网络连接，稍后重试。',
+    timeoutLocal: '本地页问代理响应超时，请确认代理程序仍在运行，稍后重试。',
+    timeoutRemote: '页问服务响应超时，请检查网络连接，稍后重试。',
+    malformedReply: '页问服务返回的内容异常，请重试。',
+    requestFailed: '页问请求失败，请稍后重试。',
+    serviceMisconfigured: '页问服务配置异常，请联系应用维护者。',
+    upstreamUnreachable: '页问服务暂时无法连接模型，请稍后重试。',
+    serviceUnavailable: '页问服务暂时不可用，请稍后重试。',
+  },
+  'zh-TW': {
+    connectLocal: '無法連線本機頁問代理，請確認代理程式已啟動。',
+    connectRemote: '無法連線頁問服務，請檢查網路連線，稍後重試。',
+    timeoutLocal: '本機頁問代理回應逾時，請確認代理程式仍在執行，稍後重試。',
+    timeoutRemote: '頁問服務回應逾時，請檢查網路連線，稍後重試。',
+    malformedReply: '頁問服務回應的內容異常，請重試。',
+    requestFailed: '頁問要求失敗，請稍後重試。',
+    serviceMisconfigured: '頁問服務設定異常，請聯絡應用程式維護者。',
+    upstreamUnreachable: '頁問服務暫時無法連線模型，請稍後重試。',
+    serviceUnavailable: '頁問服務暫時無法使用，請稍後重試。',
+  },
+  en: {
+    connectLocal: 'Cannot reach the local Master Page proxy. Check that the proxy program is running.',
+    connectRemote: 'Cannot reach the Master Page service. Check your network connection and try again.',
+    timeoutLocal: 'The local Master Page proxy timed out. Check that the proxy program is still running, then try again.',
+    timeoutRemote: 'The Master Page service timed out. Check your network connection and try again.',
+    malformedReply: 'The Master Page service returned something unusable. Try again.',
+    requestFailed: 'The Master Page request failed. Try again later.',
+    serviceMisconfigured: 'The Master Page service is misconfigured. Contact whoever maintains this app.',
+    upstreamUnreachable: 'The Master Page service cannot reach the model right now. Try again later.',
+    serviceUnavailable: 'The Master Page service is temporarily unavailable. Try again later.',
+  },
+};
+
+/** 每条成品句子怎么触发：省略 baseUrl 就是默认的本机地址。 */
+const FAILURE_CASES = {
+  connectLocal: { fetch: () => { throw new TypeError('Failed to fetch'); } },
+  connectRemote: {
+    baseUrl: 'https://agent.example.com',
+    fetch: () => { throw new TypeError('Failed to fetch'); },
+  },
+  timeoutLocal: { fetch: abortingFetch() },
+  timeoutRemote: { baseUrl: 'https://agent.example.com', fetch: abortingFetch() },
+  malformedReply: {
+    fetch: () => jsonResponse({ version: 1, ok: true, source: 'cpp-mock', answer: '   ' }),
+  },
+  requestFailed: {
+    fetch: () => jsonResponse(
+      { version: 1, ok: false, error: 'error_code_from_the_future' },
+      { ok: false, status: 404 },
+    ),
+  },
+  serviceMisconfigured: {
+    fetch: () => jsonResponse(
+      { version: 1, ok: false, error: 'upstream_not_configured' },
+      { ok: false, status: 503 },
+    ),
+  },
+  upstreamUnreachable: {
+    fetch: () => jsonResponse(
+      { version: 1, ok: false, error: 'upstream_unreachable' },
+      { ok: false, status: 502 },
+    ),
+  },
+  serviceUnavailable: {
+    fetch: () => jsonResponse(
+      { version: 1, ok: false, error: 'error_code_from_the_future' },
+      { ok: false, status: 502 },
+    ),
+  },
+};
+
+await check('puts the current language’s assistant name into the finished sentence', async () => {
+  for (const lang of LANGS) {
+    await i18n.setLang(lang);
+
+    for (const [key, expected] of Object.entries(FINISHED_SENTENCES[lang])) {
+      const spec = FAILURE_CASES[key];
+      globalThis.fetch = spec.fetch;
+      const bound = client.createAgentClient({ baseUrl: spec.baseUrl });
+      const result = await bound.requestAgent({ page: 1, questionText: 'x', textOrigin: 'LAYER' });
+
+      assert.equal(result.ok, false, `${lang} 下 ${key} 不该被当成成功`);
+      assert.equal(result.answer, expected, `${lang} 下 ${key} 的成品句子不对`);
+    }
+  }
+
+  await i18n.setLang('zh-CN');
 });
 
 await i18n.setLang('zh-CN');

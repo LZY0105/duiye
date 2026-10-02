@@ -6,21 +6,28 @@
 // returned by createAgentPanel().
 
 import { renderAgentAnswer } from '../agent/answer-renderer.js';
+import { onLangChange, t, translateDOM } from '../core/i18n.js';
 
+/** 助手名字本身也是一个词条：句子里要出现时走插值，别在代码里再抄一份。 */
+const agentVars = () => ({ name: t('agent.name') });
+
+/**
+ * 文字来源的标签。OCR 是缩写，三种语言写法一样，不建词条。
+ */
 const SOURCE_LABELS = Object.freeze({
-  LAYER: 'PDF 文字层',
-  OCR: 'OCR',
-  NONE: '文字不可用',
+  LAYER: () => t('agent.origin.layer'),
+  OCR: () => 'OCR',
+  NONE: () => t('agent.origin.none'),
 });
 
 function sourceLabel(origin) {
-  return SOURCE_LABELS[origin] || '';
+  return SOURCE_LABELS[origin]?.() || '';
 }
 
 function metadataLabel(metadata = {}) {
   const parts = [
-    metadata.documentName || '当前文档',
-    Number.isFinite(metadata.page) ? `第 ${metadata.page} 页` : '',
+    metadata.documentName || t('agent.meta.currentDocument'),
+    Number.isFinite(metadata.page) ? t('agent.meta.page', { page: metadata.page }) : '',
     sourceLabel(metadata.textOrigin),
   ];
   return parts.filter(Boolean).join(' · ');
@@ -29,7 +36,7 @@ function metadataLabel(metadata = {}) {
 function createMessageElement(
   role,
   content,
-  { pending = false, status = 'done' } = {},
+  { pending = false, status = 'done', generated = '' } = {},
 ) {
   const messageEl = document.createElement('article');
   messageEl.className = `pdf-agent-message is-${role}`;
@@ -42,6 +49,8 @@ function createMessageElement(
 
   const bodyEl = document.createElement('div');
   bodyEl.className = 'pdf-agent-message-body';
+  // 面板自己生成的那句（目前只有「正在思考」）要跟着语言换，标出来好找。
+  if (generated) bodyEl.dataset.generated = generated;
 
   if (role === 'assistant' && !pending) {
     bodyEl.innerHTML = renderAgentAnswer(content);
@@ -67,12 +76,13 @@ export function createAgentPanel(
 ) {
   const layer = document.createElement('div');
   layer.className = 'pdf-agent-layer';
+  // 静态文案走 data-i18n；由状态决定的那几句（发送/处理中、空会话、等待回答）
+  // 由 syncForm() 和 paintGenerated() 独占，不挂标记，免得两边各写一次。
   layer.innerHTML = `
     <button type="button"
             class="pdf-agent-fab"
             data-role="agent-fab"
-            aria-label="打开 Agent 对话框"
-            title="打开 Agent 对话框">
+            title="${t('agent.fab.open', agentVars())}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
            stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
            width="22" height="22" aria-hidden="true">
@@ -88,20 +98,19 @@ export function createAgentPanel(
              hidden>
       <header class="pdf-agent-dialog-header">
         <div>
-          <h2 id="pdf-agent-dialog-title">Agent</h2>
+          <h2 id="pdf-agent-dialog-title" data-i18n="agent.name">${t('agent.name')}</h2>
           <div class="pdf-agent-dialog-meta" data-role="agent-meta"></div>
         </div>
         <div class="pdf-agent-dialog-actions">
           <button type="button"
                   class="pdf-agent-dialog-clear"
                   data-role="agent-clear"
-                  aria-label="清空当前页的 Agent 对话"
-                  title="清空当前页的对话">清空</button>
+                  data-i18n="agent.dialog.clearShort"
+                  title="${t('agent.dialog.clear', agentVars())}">${t('agent.dialog.clearShort')}</button>
           <button type="button"
                   class="pdf-agent-dialog-close"
                   data-role="agent-close"
-                  aria-label="关闭 Agent 对话框"
-                  title="关闭">×</button>
+                  title="${t('agent.dialog.close', agentVars())}">×</button>
         </div>
       </header>
       <div class="pdf-agent-dialog-content"
@@ -112,12 +121,13 @@ export function createAgentPanel(
                   data-role="agent-question"
                   rows="2"
                   maxlength="500"
-                  aria-label="输入关于当前页的问题"
-                  placeholder="输入关于当前页的问题……"></textarea>
+                  aria-label="${t('agent.question.label')}"
+                  data-i18n-placeholder="agent.question.placeholder"
+                  placeholder="${t('agent.question.placeholder')}"></textarea>
         <button type="submit"
                 class="pdf-agent-submit"
                 data-role="agent-submit"
-                disabled>发送</button>
+                disabled>${t('agent.submit')}</button>
       </form>
     </section>
   `;
@@ -140,6 +150,13 @@ export function createAgentPanel(
   let hasConversation = false;
   let metadata = {};
   let previousFocus = null;
+  /**
+   * 内容区当前画的是什么。
+   *
+   * 整块由面板生成的文字（空会话、读取中、提示、兜底回答）换语言时重画；消息列表
+   * 只换掉「正在思考」那一句——用户消息和模型回答是别人的原话，一个字都不动。
+   */
+  let view = { kind: 'generated', state: '', key: '' };
 
   const syncVisibility = () => {
     fab.hidden = !available || opened;
@@ -150,13 +167,21 @@ export function createAgentPanel(
     const hasQuestion = Boolean(questionInput.value.trim());
     questionInput.disabled = busy;
     submitButton.disabled = busy || !hasQuestion;
-    submitButton.textContent = busy ? '处理中…' : '发送';
+    submitButton.textContent = busy ? t('agent.submitBusy') : t('agent.submit');
     // 正在飞的请求不能一边等回答一边被清掉。
     clearButton.disabled = busy || !hasConversation;
   };
 
   const renderMetadata = () => {
     metaEl.textContent = metadataLabel(metadata);
+  };
+
+  /** 画内容区里那句由面板自己生成的说明。 */
+  const paintGenerated = () => {
+    const { state = '', key = '' } = view;
+    contentEl.dataset.state = state;
+    // 提示里可能嵌着助手名称（"关闭页问后…"），变量必须在这里按当前语言代入。
+    contentEl.textContent = key ? t(key, agentVars()) : '';
   };
 
   const renderConversation = (conversation = {}) => {
@@ -191,8 +216,8 @@ export function createAgentPanel(
       fragment.appendChild(
         createMessageElement(
           'assistant',
-          'Agent 正在思考……',
-          { pending: true },
+          t('agent.status.thinking', agentVars()),
+          { pending: true, generated: 'thinking' },
         ),
       );
     }
@@ -201,12 +226,50 @@ export function createAgentPanel(
     hasConversation = renderedMessages > 0;
 
     if (fragment.childNodes.length === 0) {
-      contentEl.dataset.state = 'notice';
-      contentEl.textContent = '输入一个关于当前页的问题。';
+      view = { kind: 'generated', state: 'notice', key: 'agent.status.empty' };
+      paintGenerated();
     } else {
+      // 有记录才重画，且只在这里画：换语言不动这一块，只换「正在思考」那一句。
+      const scrollTop = contentEl.scrollTop;
+      view = { kind: 'conversation' };
       contentEl.dataset.state = 'conversation';
       contentEl.replaceChildren(fragment);
-      contentEl.scrollTop = contentEl.scrollHeight;
+      contentEl.scrollTop = scrollTop > 0 ? scrollTop : contentEl.scrollHeight;
+    }
+
+    syncForm();
+  };
+
+  /**
+   * 语言换了之后把这一屏重写一遍。
+   *
+   * 静态文案、title 与 aria-label 走 data-i18n；状态说明、页码和来源由这里重画。
+   * 会话内容属于用户和模型，不翻译，也不重新渲染——那样会白跑一遍 Markdown 和公式，
+   * 顺手把滚动位置和对焦搅乱。
+   */
+  const applyLanguage = () => {
+    translateDOM(layer);
+    // 输入框的无障碍名不是悬停提示：data-i18n-title 会给它挂一个 title，不合适。
+    questionInput.setAttribute('aria-label', t('agent.question.label'));
+    // 这三处的文案里嵌着助手名称，t(key) 单独取会留下没填的 {{name}}，所以自己代入。
+    fab.title = t('agent.fab.open', agentVars());
+    fab.setAttribute('aria-label', fab.title);
+    clearButton.title = t('agent.dialog.clear', agentVars());
+    clearButton.setAttribute('aria-label', clearButton.title);
+    closeButton.title = t('agent.dialog.close', agentVars());
+    closeButton.setAttribute('aria-label', closeButton.title);
+    renderMetadata();
+
+    if (view.kind === 'conversation') {
+      for (const el of contentEl.querySelectorAll('[data-generated="thinking"]')) {
+        el.textContent = t('agent.status.thinking', agentVars());
+      }
+    } else if (view.kind === 'answer') {
+      if (view.answer === null) {
+        contentEl.innerHTML = renderAgentAnswer(t('agent.reply.empty', agentVars()));
+      }
+    } else {
+      paintGenerated();
     }
 
     syncForm();
@@ -221,8 +284,8 @@ export function createAgentPanel(
     opened = true;
     busy = false;
     hasConversation = false;
-    contentEl.dataset.state = 'notice';
-    contentEl.textContent = '输入一个关于当前页的问题。';
+    view = { kind: 'generated', state: 'notice', key: 'agent.status.empty' };
+    paintGenerated();
     renderMetadata();
     syncVisibility();
     syncForm();
@@ -235,6 +298,7 @@ export function createAgentPanel(
     busy = false;
     hasConversation = false;
     metadata = {};
+    view = { kind: 'generated', state: '', key: '' };
     contentEl.replaceChildren();
     contentEl.dataset.state = '';
     questionInput.value = '';
@@ -270,6 +334,10 @@ export function createAgentPanel(
     syncForm();
   });
 
+  // 挂上去之后跑一次：静态文案、title 和 aria-label 都要按当前语言写一遍。
+  applyLanguage();
+  const offLang = onLangChange(applyLanguage);
+
   return {
     setAvailable(value) {
       available = !!value;
@@ -298,8 +366,8 @@ export function createAgentPanel(
         metadata = { ...metadata, ...nextMetadata };
         renderMetadata();
       }
-      contentEl.dataset.state = 'loading';
-      contentEl.textContent = '正在检查当前页文字……';
+      view = { kind: 'generated', state: 'loading', key: 'agent.status.reading' };
+      paintGenerated();
 
       syncForm();
     },
@@ -313,12 +381,21 @@ export function createAgentPanel(
         renderMetadata();
       }
       contentEl.dataset.state = result.ok ? 'result' : 'error';
-      contentEl.innerHTML = renderAgentAnswer(result.answer || 'Agent 暂时没有返回结果。',);
+      // 模型回答原样渲染，换语言也不重画；只有它缺席时那句兜底是面板生成的。
+      const answer = result.answer || null;
+      view = { kind: 'answer', answer };
+      contentEl.innerHTML = renderAgentAnswer(
+        answer ?? t('agent.reply.empty', agentVars()),
+      );
 
       syncForm();
     },
 
-    showNotice(message, nextMetadata = null) {
+    /**
+     * @param {string} messageKey 词条键。t() 查不到时原样显示，所以传一句现成的话
+     *   也能用，只是那样不会跟着语言换。
+     */
+    showNotice(messageKey, nextMetadata = null) {
       busy = false;
       hasConversation = false;
 
@@ -326,13 +403,14 @@ export function createAgentPanel(
         metadata = { ...metadata, ...nextMetadata };
         renderMetadata();
       }
-      contentEl.dataset.state = 'notice';
-      contentEl.textContent = message || '';
+      view = { kind: 'generated', state: 'notice', key: messageKey || '' };
+      paintGenerated();
 
       syncForm();
     },
 
     destroy() {
+      offLang();
       layer.remove();
     },
   };
