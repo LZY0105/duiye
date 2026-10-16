@@ -7,3 +7,12 @@
 *.bcmap binary
 *.ttf binary
 *.jar binary
+*.aar binary
+*.ort binary
+
+# 公式识别的模型包原样存取，一个字节都不转。运行器按字节核对 tokenizer.json 的 SHA-256，
+# 检出时要是换成 CRLF，哈希对不上，模型就加载不了。
+android/app/src/main/assets/ocr/** -text
+
+# shell 脚本永远 LF：Git Bash 碰到 CRLF 会把行尾的 \r 当成命令的一部分。
+*.sh text eol=lf

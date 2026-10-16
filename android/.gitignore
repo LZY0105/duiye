@@ -3,6 +3,8 @@
 # Built application files
 *.apk
 *.aar
+# 例外：公式识别用的精简版 ONNX Runtime 是自己从源码编的，只有仓库里这一份，没有它编不出 APK（见 ort-minimal/README.md）。
+!app/libs/onnxruntime-android-minimal-1.23.2.aar
 *.ap_
 *.aab
 

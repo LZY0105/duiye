@@ -140,6 +140,15 @@ android {
     // 完全一样」——现在含了，那句话不再成立，但结论还成立：代理层的 .so 只有
     // 几十 KB，切成四个包省下来的比一个发布页让人挑架构的代价小得多。真接上
     // 模型之后（那才是几十上百兆）该回来重看这一段。
+    //
+    // 2026-10 接上公式识别后重看过：ONNX Runtime 换成精简版以后，三个架构的原生库合计约 9 MB（含代理层），
+    // 仍然不切。另外让原生库在 APK 里压缩存放（默认是不压缩、直接从 APK 里映射），安装包再小约 5 MB；
+    // 代价是安装时系统把本机那一个架构的库解压到应用目录，设备上多占约 3.5 MB。
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 }
 
 repositories {
@@ -153,6 +162,14 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+    // 公式识别（FormulaOcrService）：跑自建公式模型的 ONNX Runtime 1.23.2，精简版。
+    // 官方包（com.microsoft.onnxruntime:onnxruntime-android）每个架构的 libonnxruntime.so 十几到二十多兆，
+    // 三个架构加起来 56 MB；这里的原生库是照模型用到的 20 个算子从源码编的（android/ort-minimal/），
+    // 三个架构合计约 6 MB。Java 部分原样取自官方包，接口不变。精简版只认 ORT 格式模型（assets/ocr/formula/*.ort）；
+    // 换模型结构、用到新算子时要按 android/ort-minimal/README.md 重编。
+    // duiye_proxy 不调它，两个库之间没有 C++ 符号往来，所以 duiye_proxy 仍可静态链接 libc++（上面那段注释担心的是
+    // 异常跨库，这里不跨）。
+    implementation files('libs/onnxruntime-android-minimal-1.23.2.aar')
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

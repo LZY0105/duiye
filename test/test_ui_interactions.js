@@ -2268,11 +2268,17 @@ check('换了许可证，旧的那一份原文仍然留着', () => {
     '分界点在哪、凭什么可以改，要写下来——这是将来唯一拿得出的东西');
 });
 
-check('the notices file no longer credits what was deleted', () => {
+check('the notices file credits what the build links, and nothing it deleted', () => {
   const md = $read('THIRD_PARTY_NOTICES.md');
   const sections = md.split('\n').filter((l) => l.startsWith('## '));
-  assert.ok(!sections.some((l) => /llama\.cpp|ONNX/i.test(l)),
+  // 删掉的那套识别栈（llama.cpp、ONNX Runtime GenAI）不再列。
+  assert.ok(!sections.some((l) => /llama\.cpp|GenAI/i.test(l)),
     'crediting a dependency the build does not have is its own kind of wrong');
+  // 2026-10 接上公式识别后，ONNX Runtime 又进了包（精简版 AAR）。链接了它就得列它，不链接就不列：
+  // 只看依赖那一行，不看注释。
+  const linksOrt = /^\s*implementation\b.*onnxruntime/m.test($code('android/app/build.gradle'));
+  assert.equal(sections.some((l) => /^## ONNX Runtime\s*$/.test(l)), linksOrt,
+    'ONNX Runtime is credited exactly when the build links it');
   assert.ok(/LaTeXSnipper Mobile base/.test(md), 'the base project is still credited');
 });
 

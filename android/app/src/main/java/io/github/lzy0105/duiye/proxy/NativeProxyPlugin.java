@@ -6,6 +6,10 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import java.util.UUID;
 
 /**
@@ -23,12 +27,46 @@ public class NativeProxyPlugin extends Plugin {
 
     private static final String EVENT = "proxyEvent";
 
+    /** ocr 那一位由 Java 接管（见 FormulaOcrService）；C++ 那边的同名空位在 describe 里被它顶替。 */
+    private FormulaOcrService ocr;
+
+    @Override
+    public void load() {
+        ocr = new FormulaOcrService(getContext());
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        if (ocr != null) ocr.close();
+    }
+
     @PluginMethod
     public void describe(PluginCall call) {
         JSObject result = new JSObject();
-        result.put("loaded", NativeProxy.available());
-        result.put("services", NativeProxy.describe());
+        // 带着模型的构建里，就算 C++ 那个库没装上，这一层也算「在」：ocr 那一位是 Java 的。
+        result.put("loaded", NativeProxy.available() || ocr.packaged());
+        result.put("services", withJavaServices(NativeProxy.describe()));
         call.resolve(result);
+    }
+
+    /** 把 C++ 报上来的那份清单里的 ocr 空位换成 Java 这一位。清单形状不对就原样交回去。 */
+    private String withJavaServices(String nativeDescription) {
+        try {
+            JSONObject root = new JSONObject(nativeDescription);
+            JSONArray services = root.optJSONArray("services");
+            JSONArray merged = new JSONArray();
+            if (services != null) {
+                for (int i = 0; i < services.length(); i++) {
+                    JSONObject entry = services.optJSONObject(i);
+                    if (entry != null && !FormulaOcrService.NAME.equals(entry.optString("name"))) merged.put(entry);
+                }
+            }
+            merged.put(ocr.describe());
+            root.put("services", merged);
+            return root.toString();
+        } catch (JSONException malformed) {
+            return nativeDescription;
+        }
     }
 
     @PluginMethod
@@ -48,14 +86,16 @@ public class NativeProxyPlugin extends Plugin {
         }
 
         final String id = requestId;
-        boolean accepted = NativeProxy.submit(service, op, payload.toString(), id,
-                (rid, kind, json) -> {
-                    JSObject event = new JSObject();
-                    event.put("requestId", rid);
-                    event.put("kind", kind);
-                    event.put("data", json);
-                    notifyListeners(EVENT, event);
-                });
+        NativeProxy.EventSink sink = (rid, kind, json) -> {
+            JSObject event = new JSObject();
+            event.put("requestId", rid);
+            event.put("kind", kind);
+            event.put("data", json);
+            notifyListeners(EVENT, event);
+        };
+        boolean accepted = FormulaOcrService.NAME.equals(service)
+                ? ocr.submit(op, payload.toString(), id, sink)
+                : NativeProxy.submit(service, op, payload.toString(), id, sink);
         if (!accepted) {
             call.reject("BAD_REQUEST", "requestId " + id + " is already in flight");
             return;
@@ -74,7 +114,9 @@ public class NativeProxyPlugin extends Plugin {
             call.reject("BAD_REQUEST", "requestId is required");
             return;
         }
-        NativeProxy.cancel(call.getString("service", ""), requestId);
+        String service = call.getString("service", "");
+        if (FormulaOcrService.NAME.equals(service)) ocr.cancel(requestId);
+        else NativeProxy.cancel(service, requestId);
         call.resolve();
     }
 }
