@@ -57,6 +57,7 @@ import {
   stepOffRow,
   yieldToCorner,
   undock,
+  untuck,
   unyield,
 } from './toolbar-state.js';
 import { currentLang, onLangChange, t } from '../core/i18n.js';
@@ -227,6 +228,12 @@ const OFF_ROW_LEAVE_MS = 220;
 const OFF_ROW_ENTER_GAP = 60;
 /** 回到那一排里的球长出来那一下。 */
 const OFF_ROW_POP_MS = 240;
+/**
+ * 那一排收着时把它拖到最上面、藏进去那一下（_tuckAway）：从松手的地方飞向那一排里它的空当，接着跟那一排
+ * 一样往上走掉；后一段淡没（TUCK_FADE_FROM 之后）。比那一排自己收起（ROW_MS）长一点：它要走的路远得多。
+ */
+const TUCK_MS = 420;
+const TUCK_FADE_FROM = 0.45;
 
 /**
  * 工具、颜色上按住划着挑（_installScrub）。
@@ -1218,8 +1225,10 @@ export class InkToolbar {
     this._perchHost = host || null;
     this._offPerch = host?.onChange?.((info) => this._onPerchChange(info)) || null;
     this._liftOffTopEdge();
-    // 开机时那一排就是收着的（上次收起来之后关的）：停在那一排里的直接借住到左边，不演。
-    if (this.state.perch && host?.away?.()) { this._stepOffRow({ animate: false }); return; }
+    // 开机时那一排就是收着的（上次收起来之后关的）：停在那一排里的直接借住到左边，不演。藏进去的
+    // （tucked）照旧藏着——那是人收着那一排的时候亲手藏的。那一排开机时没收着，藏的那一笔就作废。
+    if (this.state.tucked && !host?.away?.()) this._set(untuck(this.state), { pushTools: false });
+    if (this.state.perch && !this.state.tucked && host?.away?.()) { this._stepOffRow({ animate: false }); return; }
     this.render();
   }
 
@@ -1487,9 +1496,16 @@ export class InkToolbar {
     const { state } = this;
     if (state.phase === TOOLBAR_PHASE.DRAGGING) return;
 
-    // 顶上那一排往上收起来了：停在里面的跟着它走掉，从左边出来；拉回来时回原处。
-    if (info.away === true && state.perch) { this._stepOffRow(); return; }
+    // 顶上那一排往上收起来了：停在里面的跟着它走掉，从左边出来；拉回来时回原处。藏进去的那颗本来就跟着
+    // 那一排走（ink-toolbar.css 的 .is-perched 按同一个进度上移、淡出），收起时它不借住；拉回来时它和那一排
+    // 一起落下来、停在人放它的那处空当里——这里只把「藏着」那一笔清掉。
+    if (info.away === true && state.perch && !state.tucked) { this._stepOffRow(); return; }
     if (info.away === false && state.offRow) { this._returnToRow(); return; }
+    if (info.away === false && state.tucked) {
+      this._tuckAnim?.cancel();
+      this._tuckAnim = null;
+      this._set(untuck(state), { pushTools: false });
+    }
 
     const focus = typeof document !== 'undefined'
       && !!document.body?.classList.contains('is-scratch-focus');
@@ -1702,6 +1718,38 @@ export class InkToolbar {
         scale: this.root.style.getPropertyValue('--ink-scale'),
       }
       : null;
+  }
+
+  /**
+   * 藏进收着的那一排那一下。
+   *
+   * 它已经摆在终点：停在那一排里松手那一侧的空当，跟着 is-top-hidden 上移到屏幕外、透明（ink-toolbar.css
+   * 的 .is-perched）。这里只演路上那一段：球从松手的地方飞向那处空当、接着随那一排往上走掉，后一段淡没。
+   * 用单独的 translate / scale / opacity——transform 归「跟着那一排收起」那条公式；那条公式自带的过渡这一刻
+   * 关掉（_settleInstantly），不然它和这一段叠着演，起步时球先往下一跳。
+   */
+  _tuckAway(from) {
+    const el = this.root;
+    this._settleInstantly();
+    if (!from?.width || !from?.height || typeof el.animate !== 'function' || prefersReducedMotion()) return;
+    const to = el.getBoundingClientRect();
+    if (!to.width || !to.height) return;
+    const dx = (from.left + from.width / 2) - (to.left + to.width / 2);
+    const dy = (from.top + from.height / 2) - (to.top + to.height / 2);
+    const sx = Math.max(0.15, from.width / to.width);
+    const sy = Math.max(0.15, from.height / to.height);
+    const anim = el.animate(
+      [
+        { translate: `${dx}px ${dy}px`, scale: `${sx} ${sy}`, opacity: 1 },
+        { opacity: 1, offset: TUCK_FADE_FROM },
+        { translate: '0px 0px', scale: '1 1', opacity: 0 },
+      ],
+      { duration: TUCK_MS, easing: ROW_EASE },
+    );
+    // 还没藏好就把那一排拉回来了：这一段作罢（_onPerchChange），它跟着那一排出来，不先淡没再一下子冒出来。
+    this._tuckAnim = anim;
+    const clear = () => { if (this._tuckAnim === anim) this._tuckAnim = null; };
+    if (anim?.finished) anim.finished.then(clear, clear);
   }
 
   _positionExpanded() {
@@ -1997,10 +2045,13 @@ export class InkToolbar {
       // surprise on release. Inside a corner zone the token swells and its cast
       // deepens — the language of something being pulled toward a magnet.
       //
-      // 上面那两个角不算：松在那儿，球是进顶上那一排的（那一排接得住的时候）。
+      // 上面那两个角不算：松在那儿，球是进顶上那一排的（那一排接得住的时候），或者藏进收着的那一排。
+      // 藏的时候不另亮一圈提示（人说「不要加亮圈」）：松手那一下球自己飞上去，就是交代。
       const rect = this.host.getBoundingClientRect();
       const corner = inRow ? null : cornerOf(point, { width: rect.width, height: rect.height });
-      const toRow = !!corner && corner.startsWith('top') && !!this._perchHost?.spotFor?.(e.clientX);
+      const host = this._perchHost;
+      const toRow = !!corner && corner.startsWith('top')
+        && (!!host?.spotFor?.(e.clientX) || !!host?.tuckSpot?.(e.clientX));
       this.root.classList.toggle('is-corner-armed', !!corner && !toRow);
     };
 
@@ -2083,6 +2134,15 @@ export class InkToolbar {
         this._set(endDrag(this.state, point, viewport, { perch: spot.perch, perchX: spot.at }),
           { pushTools: false });
         this._absorb(from, false, PERCH_LAND_MS);
+        return;
+      }
+      // 那一排收着的时候松在离顶上近的地方：不在顶边展开（人说「则不应该在那展开，应该也自己隐藏到上方位置」），
+      // 收成球、藏进那一排里松手那一侧的空当——跟着那一排看不见；拉回那一排时和它一起落下来（_onPerchChange）。
+      const tuck = topward ? this._perchHost?.tuckSpot?.((rect.left || 0) + point.x) : null;
+      if (tuck) {
+        this._set(endDrag(this.state, point, viewport, { perch: tuck.perch, perchX: tuck.at, tucked: true }),
+          { pushTools: false });
+        this._tuckAway(from);
         return;
       }
       this._set(endDrag(this.state, point, viewport), { pushTools: false });

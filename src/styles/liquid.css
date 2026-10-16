@@ -867,6 +867,10 @@ html[data-skin] .pdf-book-tag.is-combo {
    是「这一栏里这本书」，而这时候屏幕上没有哪一栏。 */
 body.is-library-open .pdf-agent-layer,
 body:has(.pdf-guide) .pdf-agent-layer { visibility: hidden; }
+/* 藏着的时候磨砂也撤：Chromium 照样合成 visibility: hidden 的元素上的 backdrop-filter，那颗按钮会在盖满整屏的说明书上
+   留下一块磨过的圆（浏览器里截图看得见）。液态玻璃里那几层另见 liquid-glass-react.css。 */
+html[data-skin] body.is-library-open .pdf-agent-layer :is(.pdf-agent-fab, .pdf-agent-dialog),
+html[data-skin] body:has(.pdf-guide) .pdf-agent-layer :is(.pdf-agent-fab, .pdf-agent-dialog) { backdrop-filter: none; }
 
 html[data-skin] .pdf-book-block.is-add {
   border: 1.5px dashed rgba(60, 60, 67, 0.24);
@@ -881,11 +885,16 @@ html[data-skin] .pdf-book-block.is-add {
    对话框：iOS 的弹窗和操作单
    ══════════════════════════════════════════════════════════════════════════ */
 
+/* 顶上让出两个标签那一排。标签浮在最上面（z-index 1000）：单子开着也点得到「设置」，切页时单子跟着练习页
+   收起来（pdf.css）。高的单子（新建纸张）原来一直顶到屏幕上沿，标题被标签压住一半。 */
 html[data-skin] .deck-overlay {
   background: rgba(15, 23, 42, 0.2);
+  padding-top: calc(var(--app-bar-top) + var(--app-nav-h) + var(--lg-gutter));
 }
 
 html[data-skin] .deck-dialog {
+  /* deck.css 那条是「屏幕高减 32」（遮罩上下各 16）；上面让出了标签那一排，这里跟着减。 */
+  max-height: calc(100dvh - var(--app-bar-top) - var(--app-nav-h) - var(--lg-gutter) - 16px);
   max-width: 420px;
   padding: 22px 20px 18px;
   gap: 12px;
@@ -1311,6 +1320,158 @@ html[data-skin] .guide-foot {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
+   Agent：右边那颗圆钮，和它拉出来的那一栏
+   ══════════════════════════════════════════════════════════════════════════
+
+   pdf.css 里那一套是「不透明的白，不跟着皮肤走」：一块白抽屉贴满右半边，灰的细边、蓝的
+   发送键、淡蓝的问句框，三套皮肤里都是它。人说「把 Agent 对话框也跟三套主题对齐」。
+
+   这里把它排成和别处一样的东西：一张浮着的卡片，和两栏一样离屏幕右边、下边一个
+   --lg-gutter、上沿和两栏齐平，圆角是对话框那一档（竖着拿时是底下浮起来的一张，四角都
+   圆）。材质全用 tokens：毛玻璃里是厚玻璃（和对话框一样），纸里是一张叠在上面的纸条
+   （paper.css 改写 tokens，再补圆角），液态玻璃里挂真的玻璃（liquid-glass-react.js 的
+   TARGETS，这里的底色、磨砂、影子由 .lgr.lgr 撤掉）。
+
+   问答的排法：人问的那一句是一个靠右的泡（毛玻璃里是一层平平的淡蓝，和「主要动作」同一种
+   底；纸里是一层钢笔水）；Agent 答的那一段直接写在卡片上，不另起框——回答常常是一长段、
+   带公式，再套一个框只是让它更窄。出错是红字，不是一块红底。 */
+
+html[data-skin] .pdf-agent-fab {
+  border: 0;
+  background: var(--lg-glass);
+  backdrop-filter: var(--lg-chrome-blur);
+  box-shadow: var(--lg-rim), var(--lg-edge), var(--lg-float);
+  color: var(--lg-tint);
+}
+@media (hover: hover) and (pointer: fine) {
+  html[data-skin] .pdf-agent-fab:hover {
+    box-shadow: var(--lg-rim), var(--lg-edge), var(--lg-lift);
+  }
+}
+
+html[data-skin] .pdf-agent-dialog {
+  top: 0;
+  right: var(--lg-gutter);
+  bottom: var(--lg-gutter);
+  border: 0;
+  border-radius: var(--lg-radius-sheet);
+  background: var(--lg-glass-thick);
+  backdrop-filter: var(--lg-blur);
+  box-shadow: var(--lg-rim), var(--lg-edge), var(--lg-lift);
+}
+html[data-skin] .pdf-workspace.is-column .pdf-agent-dialog {
+  top: auto;
+  left: var(--lg-gutter);
+  right: var(--lg-gutter);
+  bottom: var(--lg-gutter);
+  border: 0;
+  border-radius: var(--lg-radius-sheet);
+  box-shadow: var(--lg-rim), var(--lg-edge), var(--lg-lift);
+}
+
+html[data-skin] .pdf-agent-dialog-header {
+  align-items: center;
+  padding: 16px 14px 8px 22px;
+  border-bottom: 0;
+  background: transparent;
+}
+html[data-skin] .pdf-agent-dialog-header h2 {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--lg-label);
+}
+html[data-skin] .pdf-agent-dialog-meta {
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--lg-label-2);
+}
+html[data-skin] .pdf-agent-dialog-close {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--lg-bubble);
+  box-shadow: var(--lg-bubble-shadow);
+  color: var(--lg-label-2);
+  font-size: 20px;
+}
+@media (hover: hover) and (pointer: fine) {
+  html[data-skin] .pdf-agent-dialog-close:hover { color: var(--lg-label); }
+}
+
+html[data-skin] .pdf-agent-dialog-content {
+  padding: 8px 22px 14px;
+  font-size: 15px;
+  line-height: 1.62;
+  color: var(--lg-label);
+}
+html[data-skin] .pdf-agent-dialog-content[data-state="loading"],
+html[data-skin] .pdf-agent-dialog-content[data-state="notice"] { color: var(--lg-label-2); }
+html[data-skin] .pdf-agent-dialog-content[data-state="error"] { color: var(--lg-red); }
+html[data-skin] .pdf-agent-dialog-content[data-state="conversation"] { gap: 14px; }
+
+html[data-skin] .pdf-agent-message {
+  padding: 0;
+  border: 0;
+  border-radius: 18px;
+  background: transparent;
+  color: var(--lg-label);
+}
+html[data-skin] .pdf-agent-message.is-user {
+  max-width: 85%;
+  padding: 9px 14px;
+  background: var(--lg-tint-soft);
+  color: var(--lg-label);
+}
+html[data-skin] .pdf-agent-message.is-pending { color: var(--lg-label-2); }
+html[data-skin] .pdf-agent-message.is-error {
+  background: transparent;
+  color: var(--lg-red);
+}
+html[data-skin] .pdf-agent-dialog-content pre {
+  border-radius: 12px;
+  background: var(--lg-fill);
+}
+
+html[data-skin] .pdf-agent-form {
+  align-items: end;
+  gap: 8px;
+  padding: 8px 12px 12px;
+  border-top: 0;
+  background: transparent;
+}
+html[data-skin] .pdf-agent-question {
+  min-height: 44px;
+  padding: 11px 16px;
+  border: 0;
+  border-radius: 22px;
+  background: var(--lg-field);
+  box-shadow: var(--lg-edge);
+  color: var(--lg-label);
+  font-size: 15px;
+}
+html[data-skin] .pdf-agent-question::placeholder { color: var(--lg-label-3); }
+html[data-skin] .pdf-agent-question:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--lg-tint-soft), inset 0 0 0 1px var(--lg-tint);
+}
+html[data-skin] .pdf-agent-submit {
+  min-height: 44px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--lg-primary);
+  color: var(--lg-primary-text);
+  box-shadow: var(--lg-primary-shadow);
+  font-size: 15px;
+  font-weight: 700;
+}
+html[data-skin] .pdf-agent-submit:not(:disabled):active { background: var(--lg-primary-press); }
+html[data-skin] .pdf-agent-submit:disabled { opacity: 0.45; }
+
+/* ══════════════════════════════════════════════════════════════════════════
    Reduce Transparency / Reduce Motion
    ══════════════════════════════════════════════════════════════════════════ */
 
@@ -1321,6 +1482,8 @@ html[data-skin] .guide-foot {
   html[data-skin] .deck-list,
   html[data-skin] .deck-dialog,
   html[data-skin] .save-toast,
+  html[data-skin] .pdf-agent-dialog,
+  html[data-skin] .pdf-agent-fab,
   html[data-skin] .pdf-guide {
     backdrop-filter: none !important;
     background: #fff !important;

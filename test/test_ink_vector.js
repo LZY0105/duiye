@@ -57,6 +57,7 @@ import {
   drawStroke,
   documentToScreen,
   screenToDocument,
+  smoothSamples,
 } from '../src/ink/ink-renderer.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1029,6 +1030,127 @@ check('a hairpin does not collapse the outline', () => {
   assert.equal(rec.fills, 1);
   assert.ok(rec.shape.every(sp => sp.every(p => Number.isFinite(p.x) && Number.isFinite(p.y))),
     'no NaN may reach the path — one would erase the whole stroke');
+});
+
+// 人说「笔迹转折还略显突兀，不够精细」：变粗细的笔原来拿原始采样点连直线、每个点盖一个圆，写快了采样稀，
+// 弯处是一截截折线、转角一个硬拐。现在沿过采样点中点的二次曲线拼（smoothSamples）。
+
+/** 一笔直角：稀疏的五个采样点，(0,0) → (60,0) → (60,60)。钢笔、压力 0.5：半宽 1。 */
+function cornerStroke(extra = {}) {
+  const st = createStroke({ tool: INK_TOOLS.PEN, color: '#111827', ...extra });
+  for (const [x, y] of [[0, 0], [30, 0], [60, 0], [60, 30], [60, 60]]) appendPoint(st, x, y, 0.5, 0);
+  return st;
+}
+
+/** 中心线相邻两段之间转了多少度，取最大的那一个。 */
+function maxTurnDeg(pts) {
+  let max = 0;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = Math.atan2(pts[i].y - pts[i - 1].y, pts[i].x - pts[i - 1].x);
+    const b = Math.atan2(pts[i + 1].y - pts[i].y, pts[i + 1].x - pts[i].x);
+    let d = Math.abs(b - a);
+    if (d > Math.PI) d = 2 * Math.PI - d;
+    max = Math.max(max, (d * 180) / Math.PI);
+  }
+  return max;
+}
+
+check('手写的转角是圆过去的：折角那一点不再有墨，弯上的点有，中心线每一下只拐一小点', () => {
+  const rec = pathRecorder();
+  drawStroke(rec, cornerStroke(), createTransform(1, 0, 0));
+  assert.equal(rec.fills, 1, '还是一次填完');
+  assert.ok(!inked(rec, 60, 0), '原来那个硬拐角（采样点上盖的圆）不在了');
+  assert.ok(inked(rec, 56.25, 3.75), '曲线从角的里侧圆过去（二次曲线 t = 0.5 那一点）');
+  assert.ok(inked(rec, 30, 0) && inked(rec, 60, 45), '直的两边照旧');
+  assert.ok(inked(rec, 0, 0) && inked(rec, 60, 60), '两头还是第一个、最后一个采样点：笔画不短一截');
+  const raw = [[0, 0], [30, 0], [60, 0], [60, 30], [60, 60]].map(([x, y]) => ({ x, y, r: 1 }));
+  assert.equal(Math.round(maxTurnDeg(raw)), 90, '原来：一个 90° 的折角');
+  assert.ok(maxTurnDeg(smoothSamples(raw)) < 25, `现在：每一下拐 ${maxTurnDeg(smoothSamples(raw)).toFixed(1)}°`);
+});
+
+check('形状的角是真的角：矩形、三角形不跟着削圆', () => {
+  const rec = pathRecorder();
+  drawStroke(rec, cornerStroke({ shape: { kind: 'rect' } }), createTransform(1, 0, 0));
+  assert.ok(inked(rec, 60, 0), '角上照样有墨');
+});
+
+check('写得慢、采样密的直线：一个点都不多（平滑只在弯的地方加点）', () => {
+  const rec = pathRecorder();
+  drawStroke(rec, flatStroke(40, INK_TOOLS.PEN), createTransform(1, 0, 0));
+  // 第一段从起笔那个采样点起（不是从中点起），按参数算的偏差会让它多切一刀；别处一个不多。
+  assert.ok(rec.arcs <= 41, `40 个采样点画了 ${rec.arcs} 个圆`);
+  // 半圆，每 15° 一个采样点（写快了就是这么稀）。
+  const pts = Array.from({ length: 13 }, (_, i) => {
+    const a = (i / 12) * Math.PI;
+    return { x: 50 * Math.cos(a), y: 50 * Math.sin(a), r: 1 };
+  });
+  const curve = smoothSamples(pts);
+  assert.ok(curve.length <= 13 * 16 + 2, '一段最多切十六段');
+  assert.ok(maxTurnDeg(curve) < 15, `原来每一下拐 15°，平滑之后 ${maxTurnDeg(curve).toFixed(1)}°`);
+  // 细分出来的折线离那条二次曲线最远不超过 0.25px：在曲线上取很密的点，量到折线的距离。
+  const exact = [];
+  let from = pts[0];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const c = pts[i];
+    const to = { x: (c.x + pts[i + 1].x) / 2, y: (c.y + pts[i + 1].y) / 2 };
+    for (let s = 0; s <= 50; s++) {
+      const t = s / 50;
+      const u = 1 - t;
+      exact.push({ x: u * u * from.x + 2 * u * t * c.x + t * t * to.x, y: u * u * from.y + 2 * u * t * c.y + t * t * to.y });
+    }
+    from = to;
+  }
+  const toSegment = (p, a, b) => {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const k = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+    return Math.hypot(p.x - (a.x + k * dx), p.y - (a.y + k * dy));
+  };
+  const worst = Math.max(...exact.map((p) => Math.min(...curve.slice(1).map((b, i) => toSegment(p, curve[i], b)))));
+  assert.ok(worst <= 0.25 + 1e-9, `折线离曲线最远 ${worst.toFixed(3)}px`);
+});
+
+check('粗细沿同一条曲线变：不跳', () => {
+  const out = smoothSamples([{ x: 0, y: 0, r: 1 }, { x: 10, y: 10, r: 2 }, { x: 20, y: 0, r: 3 }]);
+  assert.equal(out[0].r, 1);
+  assert.equal(out.at(-1).r, 3);
+  for (let i = 1; i < out.length; i++) assert.ok(out[i].r >= out[i - 1].r - 1e-9, '一路变粗，不回头');
+});
+
+check('每一笔记一份拼法（写字时整页每帧重画）：原地挪过、缩过、接着写，都按新的样子画，不拿旧的', () => {
+  const st = cornerStroke();
+  const view = createTransform(1, 0, 0);
+  const a = pathRecorder();
+  drawStroke(a, st, view);
+  const b = pathRecorder();
+  drawStroke(b, st, view);
+  assert.deepEqual(b.shape, a.shape, '什么都没变：画出来一模一样');
+
+  // 拖着搬（ink-surface.js 里那种原地挪，挪完 recomputeBounds）
+  for (const pt of st.points) { pt.x += 100; pt.y += 50; }
+  recomputeBounds(st);
+  const moved = pathRecorder();
+  drawStroke(moved, st, view);
+  assert.ok(inked(moved, 130, 50) && !inked(moved, 30, 0), '画在挪到的地方，不是原来那里');
+
+  // 缩放（粗细跟着变）
+  st.width *= 3;
+  recomputeBounds(st);
+  const thick = pathRecorder();
+  drawStroke(thick, st, view);
+  assert.ok(inked(thick, 130, 52.5), '变粗了（半宽 1 → 3）');
+
+  // 正在写的那一笔又多了几个点
+  appendPoint(st, 160, 140, 0.5, 0);
+  appendPoint(st, 160, 170, 0.5, 0);
+  const longer = pathRecorder();
+  drawStroke(longer, st, view);
+  assert.ok(inked(longer, 160, 170), '新写的那一截也画上了');
+
+  // 换了视图（缩放页面）
+  const zoomed = pathRecorder();
+  drawStroke(zoomed, st, createTransform(2, 0, 0));
+  assert.ok(inked(zoomed, 320, 340), '按新的视图换算');
 });
 
 // ═══════════════════════════════════════════════════════════════

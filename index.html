@@ -204,8 +204,8 @@
              套分页。两条都是独立的一件功能，不是这里的一个属性。
 
              2026-09-14 评估过，决定先不做。 -->
-        <input type="file" accept="application/pdf,.pdf" hidden data-role="file-exercise">
-        <input type="file" accept="application/pdf,.pdf" hidden data-role="file-answer">
+        <input type="file" accept="application/pdf,.pdf" multiple hidden data-role="file-exercise">
+        <input type="file" accept="application/pdf,.pdf" multiple hidden data-role="file-answer">
       </div>
 
       <div class="pdf-workspace-host" data-role="workspace"></div>
@@ -295,6 +295,12 @@
                 </label>
               </div>
               <div class="set-section" id="devOptionsContent" style="display:none;">
+                <!-- 识别还没接引擎：打开它就用一份模拟结果走一遍「圈一块 → 识别 → 挑 → 复制 / 转成笔迹」（src/ocr/ocr-mock.js）。 -->
+                <label class="set-toggle">
+                  <input type="checkbox" id="devOcrMock">
+                  <span class="set-toggle-track"></span>
+                  <span data-i18n="dev.ocrMock">预览识别（模拟结果）</span>
+                </label>
                 <pre id="devLogOutput" style="display:none;margin-top:0.4rem;padding:0.5rem;background:var(--bg);border-radius:8px;font-size:0.72rem;max-height:200px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;"></pre>
                 <div style="display:flex;gap:0.4rem;margin-top:0.4rem;">
                   <button class="action-btn secondary" id="devShowLogs" data-i18n="dev.showLogs" style="flex:1;">查看日志</button>

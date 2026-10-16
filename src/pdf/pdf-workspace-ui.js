@@ -8,7 +8,9 @@
 import { PdfWorkspace } from './pdf-workspace.js';
 import {
   DOC_ROLES,
+  LIBRARY_ERRORS,
   deleteDocument,
+  getDocumentMeta,
   importPdf,
   libraryUsageBytes,
   listDocuments,
@@ -17,11 +19,17 @@ import {
 } from './pdf-library.js';
 import { isPdfRuntimeAvailable } from './pdf-document.js';
 import { docViewOrder, forgetDocView } from './document-session.js';
-import { deleteDocumentInk } from '../ink/ink-store.js';
+import { deleteDocumentInk, loadLayer, saveLayer } from '../ink/ink-store.js';
+import { bookmarkLabel } from './bookmark-state.js';
+import { loadBookmarks, saveBookmarks } from './bookmark-store.js';
+import { bookmarksForNewBook, mergeFromSource, syncBaseOf } from './bookmark-book.js';
+import { derivedFrom, loadDerivedBase, recordDerived, updateDerivedBase } from './derived-store.js';
+import { InkLayer } from '../ink/ink-layer.js';
 import { ENTRY_KINDS } from './deck-state.js';
 import {
   chooseAction,
   chooseFolder,
+  chooseMarkPages,
   confirmDestructive,
   pickResources,
   promptText,
@@ -44,6 +52,7 @@ import {
   addFolder,
   deleteFolder,
   folderMembers,
+  folderOf,
   listFolders,
   moveToFolder,
   pruneFolders,
@@ -75,7 +84,7 @@ import {
   writeExportFile,
 } from './pdf-files.js';
 import { PERMISSION, ensureFilesPermission, openDevicePdfPicker } from './pdf-picker.js';
-import { EXPORT_KINDS, buildExport } from '../export/export-document.js';
+import { EXPORT_KINDS, buildExport, buildPagesExport } from '../export/export-document.js';
 import { EXPORT_ERRORS, exportFileName } from '../export/pdf-export.js';
 import { ensureExportPermission, introduceFilesPermission } from '../export/export-permission.js';
 import { saveFile, showSaveToast } from '../export/save-file.js';
@@ -98,9 +107,25 @@ function formatBytes(n) {
   return `${(n / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-function setStatus(message, isError) {
+/**
+ * 一句说完了的话（「已换成…」「已导入…」）在顶栏右边留多久（ms），然后淡掉。人说「这个通知改为停留一段时间
+ * 就消失」：它说的是刚才那件事，一直挂到下一件事来，就成了旧闻。出错的留久一点——要读原因。还在进行的
+ * 事（「正在读取…」「正在导出…」）不走这一条：用 showProgress，留到下一句把它换掉。
+ */
+const STATUS_LINGER_MS = 4000;
+const STATUS_ERROR_LINGER_MS = 8000;
+/** 淡掉那一段（pdf.css 的 .pdf-status.is-fading 同长）。 */
+const STATUS_FADE_MS = 300;
+let statusTimer = 0;
+/** 书架头上那一行平时写的是份数（refreshLibrary 写的）：状态说完了就换回它。 */
+let shelfUsageText = '';
+
+function setStatus(message, isError, { sticky = false } = {}) {
   const el = elRoot?.querySelector('[data-role="pdf-status"]');
   if (!el) return;
+  clearTimeout(statusTimer);
+  statusTimer = 0;
+  el.classList.remove('is-fading');
   el.textContent = message || '';
   el.classList.toggle('is-error', !!isError);
   // 书架开着的时候，那条状态栏正被它盖着。
@@ -115,6 +140,26 @@ function setStatus(message, isError) {
     shelfEl.textContent = message || '';
     shelfEl.classList.toggle('is-error', !!isError);
   }
+  if (!message || sticky) return;
+  const said = message;
+  statusTimer = setTimeout(() => {
+    el.classList.add('is-fading');
+    statusTimer = setTimeout(() => {
+      statusTimer = 0;
+      el.classList.remove('is-fading', 'is-error');
+      el.textContent = '';
+      // 书架头上还是这句话的话，换回份数。
+      if (shelfEl && shelfEl.textContent === said) {
+        shelfEl.textContent = shelfUsageText;
+        shelfEl.classList.remove('is-error');
+      }
+    }, STATUS_FADE_MS);
+  }, isError ? STATUS_ERROR_LINGER_MS : STATUS_LINGER_MS);
+}
+
+/** 还在进行的事（正在打开、正在读取、正在导出…）：一直留着，直到下一句把它换掉。 */
+function showProgress(message) {
+  setStatus(message, false, { sticky: true });
 }
 
 /**
@@ -189,7 +234,7 @@ async function refreshLibrary() {
   if (usageEl) {
     // 笔记本也算进来。原来这行只数文档和草稿纸，于是建了几本笔记之后它还是
     // 说「0 个文档 · 0 张草稿纸」，而架子上明明摆着东西。
-    usageEl.textContent = t('shelf.usage', {
+    usageEl.textContent = shelfUsageText = t('shelf.usage', {
       docs: docs.length, notes: notes.length, pads: pads.length, size: formatBytes(usage),
     });
   }
@@ -334,7 +379,7 @@ async function openItem(item) {
     // 先让这一下站稳，再去干那件会占住主线程的活。顺序反过来，书会先愣三百
     // 毫秒再飞——真机上量到的就是这个。
     if (flight) await flight.ready();
-    setStatus('正在打开…');
+    showProgress('正在打开…');
     await workspace.openResource(item.id, { slot, kind: kindForShelf(item) });
     setStatus('');
     if (flight) await flight.land();
@@ -398,7 +443,7 @@ async function useCombo(item) {
  * 已经答过这个问题了。
  */
 async function applyComboNow(item, combo) {
-  setStatus(t('combo.applying', { name: item.name }));
+  showProgress(t('combo.applying', { name: item.name }));
   const flights = beginComboFlight(item, combo);
   try {
     // 先让这几下站稳，再去干那件会占住主线程的活。顺序反过来，书会先愣三百
@@ -576,6 +621,11 @@ async function openItemMenu(item) {
   // 书、笔记本、草稿纸都能导出成 PDF。组合不是一份文件，是「几本书怎么摆」，没有
   // 东西可导——要导出里面的书，去导出那几本书。
   if (!isCombo) actions.push({ id: 'export', label: t('export.menu') });
+  // 标过书签的书：书签成书（人说「文档库的那三个点也该有书签成书选项」）。本子也能记书签，但拷不出「原书的页」，不给。
+  const marks = !isPad && !isNote && !isCombo ? loadBookmarks(item.id) : [];
+  if (marks.length) actions.push({ id: 'marks-book', label: t('marksBook.menu') });
+  // 书签成书做出来的书：把母本那几页的最新批注拉过来。
+  if (!isPad && !isNote && !isCombo && derivedFrom(item.id)) actions.push({ id: 'sync', label: t('marksBook.syncMenu') });
   actions.push({ id: 'delete', label: '永久删除', danger: true });
 
   const chosen = await chooseAction({
@@ -618,6 +668,16 @@ async function openItemMenu(item) {
 
   if (chosen === 'export') {
     await exportAsPdf({ kind: kindForShelf(item), id: item.id, name: item.name });
+    return;
+  }
+
+  if (chosen === 'sync') {
+    await syncFromSource({ id: item.id, name: item.name });
+    return;
+  }
+
+  if (chosen === 'marks-book') {
+    await makeBookFromMarks({ id: item.id, name: item.name, marks, slot: null });
     return;
   }
 
@@ -968,14 +1028,19 @@ function closeLibrary() {
  *
  * @returns {Promise<string|null>} chosen role, or null if cancelled
  */
-function confirmRole(file, suggested) {
+function confirmRole(files, suggested) {
+  // 一批只问一次：一起选的几份几乎总是同一种（几本习题、几本答案），一份一问是一串对话框。
+  const list = Array.isArray(files) ? files : [files];
+  const names = list.map((f) => f.name);
+  const title = list.length > 1 ? `这 ${list.length} 份文件是？` : '这份文件是？';
+  const shown = names.slice(0, 3).join('、') + (names.length > 3 ? ` 等 ${names.length} 份` : '');
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'pdf-role-overlay';
     overlay.innerHTML = `
       <div class="pdf-role-dialog" role="dialog" aria-modal="true">
-        <div class="pdf-role-title">这份文件是？</div>
-        <div class="pdf-role-file">${escapeHtml(file.name)}</div>
+        <div class="pdf-role-title">${escapeHtml(title)}</div>
+        <div class="pdf-role-file">${escapeHtml(shown)}</div>
         <div class="pdf-role-options">
           <button type="button" data-role="${DOC_ROLES.EXERCISE}"
             class="${suggested === DOC_ROLES.EXERCISE ? 'is-suggested' : ''}">习题册（题目）</button>
@@ -1112,7 +1177,7 @@ export async function pickAndImport(role = DOC_ROLES.EXERCISE) {
   // 先把权限问清楚，再摊面板。没有权限的那张面板是空的，而空面板不会告诉人**为
   // 什么**空——它看着就像「这台机器上没有 PDF」。
   const permission = await ensureFilesPermission({
-    onWaiting: () => setStatus(t('picker.waitingGrant')),
+    onWaiting: () => showProgress(t('picker.waitingGrant')),
   });
   if (permission === PERMISSION.CANCELLED) return;
   if (permission === PERMISSION.NO_SETTINGS_PAGE) setStatus(t('picker.noSettingsPage'), true);
@@ -1128,18 +1193,15 @@ export async function pickAndImport(role = DOC_ROLES.EXERCISE) {
     setStatus(t('picker.failed'), true);
     return;
   }
-  if (!chosen) return;
+  if (!chosen?.length) return;
 
-  let file;
-  try {
-    setStatus(`正在读取 ${chosen.name} …`);
-    file = await readDevicePdf(chosen);
-  } catch (error) {
-    Logger.error('PDF', 'read device pdf failed', error);
-    setStatus(`读取 ${chosen.name} 失败`, true);
-    return;
-  }
-  await handleImport([file], role);
+  // 先不读：交给 handleImport 的是「到时候再读」的那一份。选了五本，不能五本一起读进内存——一本几百
+  // 兆，导完一本、放掉一本，再读下一本。
+  await handleImport(chosen.map((entry) => ({
+    name: entry.name,
+    size: entry.size,
+    open: (onProgress) => readDevicePdf(entry, { onProgress }),
+  })), role);
 }
 
 /**
@@ -1155,42 +1217,87 @@ function openSystemPicker(role) {
 }
 
 /**
- * Imports one document.
+ * 导入一份或几份（人说「导入文件时要允许用户多选」）。
  *
- * One at a time, deliberately. The pickers no longer carry `multiple` and this
- * takes only the first entry even if a file list arrives from somewhere else
- * (a drop, a share intent). A batch import asked the role question once per
- * file in a modal chain, and a run that failed on file three left files one and
- * two imported with no way to tell from the status line which had landed.
+ * 以前故意只收一份，因为一批一批地导有两个毛病：每一份都问一次「这份文件是？」，一串对话框接着一串；
+ * 第三份出了错，前两份已经进去了，状态栏上却看不出哪几份落了地。现在两处都改了：
+ *
+ *   · 问一次：「这几份文件是？」——一起选的一批，几乎总是同一种（几本习题、几本答案）；
+ *   · 一份一份来：读一份、导一份、放掉一份，再读下一份。一本几百兆的书，几本同时躺在内存里会把
+ *     WebView 撑没；出了错的那一份跳过，接着导完剩下的，最后一句话说清楚导进了几份、哪几份没导、为
+ *     什么。存储满了就停下，后面的再导也是一样的错。
+ *
+ * @param {Array<File|{name: string, size?: number, open: function(function): Promise<Object>}>} items
+ *   系统选择器给的 File，或者应用内那张单子给的「到时候再读」（open 读出一份长得像 File 的东西）
+ * @param {string} suggestedRole 「这几份文件是？」的默认答案
  */
-async function handleImport(files, suggestedRole) {
-  const file = files && files[0];
-  if (!file) return;
+async function handleImport(items, suggestedRole) {
+  const sources = (items || []).filter(Boolean).map((item) => (
+    typeof item.open === 'function' ? item : { name: item.name, size: item.size, open: async () => item }
+  ));
+  if (!sources.length) return;
 
-  const role = await confirmRole(file, suggestedRole);
+  const role = await confirmRole(sources, suggestedRole);
   if (role === null) { setStatus('已取消导入'); return; }
 
-  let meta = null;
-  try {
-    setStatus(`正在导入 ${file.name} …`);
-    meta = await importPdf(file, role);
-  } catch (error) {
-    Logger.error('PDF', 'import failed', error);
-    const reason = error.message === 'PDF_STORAGE_FULL'
-      ? '设备存储空间不足，请先删除一些文档再导入'
-      : error.message;
-    setStatus(`导入 ${file.name} 失败: ${reason}`, true);
-    return;
+  const total = sources.length;
+  const step = (i) => (total > 1 ? `（${i + 1}/${total}）` : '');
+  const landed = [];
+  const failed = [];
+  let skipped = 0;
+  for (let i = 0; i < total; i++) {
+    const source = sources[i];
+    let file = null;
+    try {
+      showProgress(`正在读取${step(i)} ${source.name} …`);
+      file = await source.open((done, size) => {
+        if (size > 0) showProgress(`正在读取${step(i)} ${source.name} … ${Math.floor((done / size) * 100)}%`);
+      });
+      showProgress(`正在导入${step(i)} ${source.name} …`);
+      const meta = await importPdf(file, role);
+      // 在一个文件夹里导入，东西就落在这个文件夹里。人是站在「高代」里点的「＋」，
+      // 他要的不是「导进来然后自己再挪一次」。
+      if (openFolderId && meta?.id) {
+        try { moveToFolder(meta.id, openFolderId); } catch (_) { /* 落在外面也不算丢 */ }
+      }
+      landed.push(source.name);
+    } catch (error) {
+      Logger.error('PDF', 'import failed', error);
+      failed.push({ name: source.name, reason: importFailureReason(error) });
+      if (error?.message === LIBRARY_ERRORS.STORAGE_FULL) {
+        skipped = total - i - 1;
+        break;
+      }
+    }
+    // 放掉这一份再读下一份：一本几百兆，别让两本同时躺在内存里。
+    file = null;
   }
 
-  // 在一个文件夹里导入，东西就落在这个文件夹里。人是站在「高代」里点的「＋」，
-  // 他要的不是「导进来然后自己再挪一次」。
-  if (openFolderId && meta?.id) {
-    try { moveToFolder(meta.id, openFolderId); } catch (_) { /* 落在外面也不算丢 */ }
-  }
-  setStatus('已导入 1 个文档');
+  setStatus(importSummary(landed, failed, skipped), failed.length > 0);
   // openLibrary 自己会刷新，不必先刷一遍——那是把整架书连同每一张封面重建两次。
-  openLibrary();
+  if (landed.length) openLibrary();
+}
+
+/** 一份没导成，说给人听的原因。 */
+function importFailureReason(error) {
+  switch (error?.message) {
+    case LIBRARY_ERRORS.STORAGE_FULL: return '设备存储空间不足，请先删除一些文档再导入';
+    case LIBRARY_ERRORS.NOT_A_PDF: return '不是 PDF 文件';
+    case LIBRARY_ERRORS.EMPTY_FILE: return '文件是空的';
+    case FILES_ERRORS.READ_FAILED: return '读取失败';
+    case FILES_ERRORS.NO_PERMISSION: return '没有文件访问权限';
+    default: return error?.message || '未知错误';
+  }
+}
+
+/** 一批导完的那一句：导进了几份；没导成的列名字和原因（太多就只列前三个）；存储满了说后面没导。 */
+function importSummary(landed, failed, skipped) {
+  if (!failed.length) return `已导入 ${landed.length} 个文档`;
+  const listed = failed.slice(0, 3).map((f) => `${f.name}（${f.reason}）`).join('；');
+  const more = failed.length > 3 ? ` 等 ${failed.length} 份` : '';
+  const rest = skipped ? `；后面 ${skipped} 份没有导入` : '';
+  if (!landed.length && failed.length === 1 && !skipped) return `导入 ${failed[0].name} 失败：${failed[0].reason}`;
+  return `已导入 ${landed.length} 个，${failed.length} 个没导入：${listed}${more}${rest}`;
 }
 
 /**
@@ -1247,9 +1354,14 @@ function exportAsPdf(target) {
   return exporting;
 }
 
-async function runExport({ kind, id, name }) {
+/**
+ * @param {{kind: string, id: string, name?: string, pages?: number[], ink?: boolean}} target
+ *   `pages` 给了就只导这几页（书签成书的「导出 PDF」），`ink` 为假时批注不画进去（单子上去掉了「带上批注」）；
+ *   名字就是人在那张单子上起的，不再加「（批注）」
+ */
+async function runExport({ kind, id, name, pages, ink = true }) {
   const title = name || t('export.untitled');
-  const waiting = () => setStatus(t('export.waiting'));
+  const waiting = () => showProgress(t('export.waiting'));
   const allowed = await ensureExportPermission({ notify: showSaveToast, onWaiting: waiting });
   if (!allowed) {
     setStatus('');
@@ -1260,14 +1372,15 @@ async function runExport({ kind, id, name }) {
   // 刚才看见的样子。
   await workspace?.flushInkFor?.(id);
 
-  setStatus(t('export.working', { name: title }));
+  showProgress(t('export.working', { name: title }));
   let built;
   try {
-    built = await buildExport({ kind, id }, {
-      onProgress: ({ stage, done, total }) => {
-        if (stage === 'pages' && total > 1) setStatus(t('export.progress', { name: title, done, total }));
-      },
-    });
+    const onProgress = ({ stage, done, total }) => {
+      if (stage === 'pages' && total > 1) showProgress(t('export.progress', { name: title, done, total }));
+    };
+    built = pages
+      ? await buildPagesExport({ id, pages, stamp: ink !== false, title }, { onProgress })
+      : await buildExport({ kind, id }, { onProgress });
   } catch (error) {
     if (error?.message !== EXPORT_ERRORS.EMPTY) throw error;
     setStatus('');
@@ -1275,7 +1388,7 @@ async function runExport({ kind, id, name }) {
     return;
   }
 
-  const fileName = exportFileName(title, kind === EXPORT_KINDS.PDF ? t('export.suffix') : '');
+  const fileName = exportFileName(title, kind === EXPORT_KINDS.PDF && !pages ? t('export.suffix') : '');
 
   // 浏览器里（开发、测试）没有原生层：交给浏览器自己的下载。
   if (!nativeFilesAvailable()) {
@@ -1287,7 +1400,7 @@ async function runExport({ kind, id, name }) {
   }
 
   const save = () => writeExportFile(built.bytes, fileName, {
-    onProgress: (done, total) => setStatus(t('export.saving', {
+    onProgress: (done, total) => showProgress(t('export.saving', {
       name: title, percent: Math.round((done / total) * 100),
     })),
   });
@@ -1312,6 +1425,172 @@ async function runExport({ kind, id, name }) {
   showSaveToast(done);
 }
 
+/**
+ * 「书签成书」：把一本书标过书签的页挑出来，存成一本新书或导出。
+ *
+ * 先摊那张单子（chooseMarkPages）挑页、起名字；人选「导出 PDF」就走和本栏 ⋯ 里的导出同一条路，只导这几页、
+ * 批注画进页里；选「存成新书」见 saveBookmarkBook。取消就什么都不动。
+ *
+ * @param {{id: string, name: string, slot: string, marks: Array<{page: number, label: string}>}} source
+ *   来自 PdfWorkspace.bookFromMarksSlot
+ */
+async function makeBookFromMarks(source) {
+  if (!source?.id || !source.marks?.length) return;
+  const title = source.name || t('export.untitled');
+  const answer = await chooseMarkPages({
+    bookName: title,
+    marks: source.marks,
+    defaultName: t('marksBook.defaultName', { name: title }),
+    labelFor: bookmarkLabel,
+  });
+  if (!answer) return;
+  if (answer.action === 'export') {
+    await exportAsPdf({
+      kind: EXPORT_KINDS.PDF, id: source.id, name: answer.name, pages: answer.pages, ink: answer.withInk,
+    });
+    return;
+  }
+  await saveBookmarkBook(source, answer);
+}
+
+/**
+ * 「存成新书」：挑出来的几页做成一本真的书，放进文档库，在原书这一栏打开。
+ *
+ *   · 页：原书的页原样拷过去（字还能选）；原书加了密的话是逐页画成的图，说一声字不能选；
+ *   · 批注：原书第 n 页的批注拷成新书对应那一页的，是新书自己的一份——以后在新书上改、擦，原书不动，反过来也一样；
+ *   · 书签：新书每一页都标上，名字说它是原书第几页（见 bookmark-book.js），新书的书签页就是一张目录；
+ *   · 册别（习题 / 答案）照原书；原书在哪个文件夹，新书也放进去。
+ *
+ * 做完在原书这一栏打开新书：人刚说了「做一本」，接下来要看的就是它。原书还压在这一栏的摞里，划一下就回去。
+ *
+ * 同一时刻只做一本，和导出一样：第二下点进来说一声，不悄悄排队。
+ */
+let makingBook = null;
+function saveBookmarkBook(source, { pages, name, withInk = true }) {
+  if (makingBook) {
+    showSaveToast(t('export.busy'));
+    return makingBook;
+  }
+  makingBook = runSaveBookmarkBook(source, pages, name, withInk)
+    .catch((error) => {
+      Logger.error('PDF', `bookmarks-to-book failed: ${error?.message || error}`, error);
+      const full = error?.message === LIBRARY_ERRORS.STORAGE_FULL;
+      setStatus(t(full ? 'marksBook.storageFull' : 'marksBook.failed'), true);
+      showSaveToast(t(full ? 'marksBook.storageFull' : 'marksBook.failed'));
+    })
+    .finally(() => { makingBook = null; });
+  return makingBook;
+}
+
+async function runSaveBookmarkBook(source, pages, name, withInk) {
+  // 屏幕上刚写的那几笔可能还没落盘：拷过去的批注得是人刚才看见的样子。
+  await workspace?.flushInkFor?.(source.id);
+  showProgress(t('marksBook.working', { name }));
+  const built = await buildPagesExport({ id: source.id, pages, stamp: false, title: name }, {
+    onProgress: ({ stage, done, total }) => {
+      if (stage === 'pages' && total > 1) showProgress(t('marksBook.progress', { name, done, total }));
+    },
+  });
+
+  const original = await getDocumentMeta(source.id).catch(() => null);
+  const file = new File([built.bytes], exportFileName(name), { type: 'application/pdf' });
+  const meta = await importPdf(file, original?.role || DOC_ROLES.UNSPECIFIED);
+
+  // 和母本之间那根线（「从母本更新」用）：新书第 i 页是母本第几页、这一次从母本拷了哪几笔。没带批注就一笔没拷，
+  // 以后「从母本更新」把母本那几页的批注整个拉过来。
+  const base = {};
+  if (withInk) {
+    for (let i = 0; i < pages.length; i++) {
+      const layer = await loadLayer(source.id, pages[i]);
+      if (layer.isEmpty()) continue;
+      await saveLayer(meta.id, i + 1, layer);
+      base[i + 1] = syncBaseOf(layer.getAll());
+    }
+  }
+  await recordDerived(meta.id, { source: source.id, pages, base });
+  saveBookmarks(meta.id, bookmarksForNewBook(source.marks, pages, {
+    named: (label, page) => t('marksBook.newMark', { label, page }),
+    unnamed: (page) => t('marksBook.newMarkPage', { page }),
+  }));
+  const folderId = folderOf(source.id);
+  if (folderId) {
+    try { moveToFolder(meta.id, folderId); } catch (_) { /* 落在外面也不算丢 */ }
+  }
+
+  await refreshLibrary();
+  setStatus(t(built.raster ? 'marksBook.savedRaster' : 'marksBook.saved', { name: meta.name, count: pages.length }));
+  // 从栏里做的：在那一栏打开。从书架上做的：人就站在书架前，新书已经摆上去了，不替他打开。
+  if (source.slot) await workspace?.openResource(meta.id, { slot: source.slot, kind: ENTRY_KINDS.PDF });
+}
+
+/**
+ * 「从母本更新」：书签成书做出来的书，把母本那几页的最新批注拉过来。
+ *
+ * 先把母本和这本两边没落盘的笔迹都存下，再一页一页合（bookmark-book.js 的 mergeFromSource）：母本改了的、新写的跟过来，
+ * 母本擦了的去掉；人在这本书上自己写的、改过的不动，在这本书上擦掉的母本笔迹不再加回来。
+ *
+ * 动手之前先算一遍、说清楚：没有新改动就一句话完事；有就列出是母本哪几页、问一声再换——换上去之后撤销不回来（撤销
+ * 记录从换上那一刻重新开始）。母本被删了（线也就断了，菜单里不会再有这一项）照实说一句。
+ *
+ * 同一时刻只更新一次：第二下点进来就等着前一次。
+ */
+let syncing = null;
+function syncFromSource(target) {
+  if (syncing) return syncing;
+  syncing = runSyncFromSource(target)
+    .catch((error) => {
+      Logger.error('PDF', `sync from source failed: ${error?.message || error}`, error);
+      setStatus(t('marksBook.syncFailed'), true);
+    })
+    .finally(() => { syncing = null; });
+  return syncing;
+}
+
+async function runSyncFromSource({ id }) {
+  const link = derivedFrom(id);
+  if (!link) return;
+  const parent = await getDocumentMeta(link.source).catch(() => null);
+  if (!parent) {
+    setStatus(t('marksBook.syncGone'), true);
+    return;
+  }
+  await workspace?.flushInkFor?.(link.source);
+  await workspace?.flushInkFor?.(id);
+
+  const plan = [];
+  const base = {};
+  const was = await loadDerivedBase(id);
+  for (let i = 0; i < link.pages.length; i++) {
+    const page = i + 1;
+    const [theirs, mine] = await Promise.all([loadLayer(link.source, link.pages[i]), loadLayer(id, page)]);
+    const merged = mergeFromSource(theirs.getAll(), mine.getAll(), was[page] || {});
+    base[page] = merged.base;
+    if (merged.changed) plan.push({ page, from: link.pages[i], strokes: merged.strokes });
+  }
+  if (!plan.length) {
+    await updateDerivedBase(id, base);
+    setStatus(t('marksBook.syncNone', { name: parent.name }));
+    return;
+  }
+
+  const shown = plan.slice(0, 8).map((p) => t('marksBook.newMarkPage', { page: p.from })).join(t('pdf.closeAllJoin'))
+    + (plan.length > 8 ? t('marksBook.syncMore', { count: plan.length }) : '');
+  const chosen = await chooseAction({
+    title: t('marksBook.syncTitle'),
+    note: t('marksBook.syncNote', { name: parent.name, count: plan.length, pages: shown }),
+    actions: [{ id: 'sync', label: t('marksBook.syncConfirm', { count: plan.length }) }],
+  });
+  if (chosen !== 'sync') return;
+
+  for (const { page, strokes } of plan) {
+    // 正显示着这一页的栏就地换上，再存：栏里那一层要是还是旧的，它下次自动保存会把更新整个盖回去。
+    workspace?.replaceInkOnScreen?.(id, page, strokes);
+    await saveLayer(id, page, new InkLayer(strokes));
+  }
+  await updateDerivedBase(id, base);
+  setStatus(t('marksBook.syncDone', { count: plan.length }));
+}
+
 /** Builds the PDF page and restores the previous workspace session. */
 export async function initPdfWorkspace() {
   elRoot = document.getElementById('page-pdf');
@@ -1334,6 +1613,9 @@ export async function initPdfWorkspace() {
   workspace.onImport = (role) => pickAndImport(role);
   // 本栏 ⋯ 里的「导出 PDF」：导出这一栏正显示着的那一份。
   workspace.onExport = (target) => exportAsPdf(target);
+  // 本栏 ⋯ 里、书签那一页底下的「书签成书」。
+  workspace.onBookFromMarks = (source) => makeBookFromMarks(source);
+  workspace.onSyncFromSource = (target) => syncFromSource(target);
 
   chromeOff?.();
   // 菜单栏一动，工具栏就跟着让位——见 initChromeHiding 里那个泵。

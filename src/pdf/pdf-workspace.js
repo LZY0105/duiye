@@ -62,6 +62,7 @@ import {
   LABEL_MAX, hasBookmark, renameBookmark, toggleBookmark,
 } from './bookmark-state.js';
 import { forgetBookmarks, loadBookmarks, saveBookmarks } from './bookmark-store.js';
+import { derivedFrom, forgetDerived } from './derived-store.js';
 import {
   createPanelState,
   selectTab as panelSelectTab,
@@ -404,6 +405,8 @@ export class PdfWorkspace {
       onOpen: () => this.openAgentForActiveDocument(),
       onSubmit: (question) => this.submitAgentQuestion(question),
       onClose: () => { this.agentTarget = null; },
+      // 拖到了另一边、另一个高度：贴边的工具栏挡不挡它，要重新量。
+      onPlace: () => this._syncAgentFab(),
     });
 
     // 空工作区上那两颗按钮和横杠上的「导入」是同一个动作，所以走同一条路——
@@ -429,7 +432,7 @@ export class PdfWorkspace {
         // 笔一落到纸上，工具栏就该让开——前提是人在设置里要过这件事。
         onInkDraw: () => this.toolbar?.minimizeOnDraw?.(),
         onInkHistoryChange: () => this._syncSlotChrome(slot),
-        onInkDragOver: (at) => this._markInkDropTarget(slot, at),
+        onInkDragOver: (at) => this._previewInkDrag(slot, at),
         onInkDragDrop: (payload) => this._dropInkIntoOtherSlot(slot, payload),
       });
       this.strips[slot] = new DeckStrip(this.elSlots[slot], {
@@ -462,6 +465,9 @@ export class PdfWorkspace {
         getBookmarks: () => this._bookmarksIn(slot),
         onToggleBookmark: (page) => this._toggleBookmark(slot, page),
         onNameBookmark: (mark) => this._nameBookmark(slot, mark),
+        // 书签那一页底下的「书签成书」：本子也有书签，但只有书做得了，见 canMakeBookFromMarks。
+        canMakeBookFromMarks: () => this.canMakeBookFromMarks(slot),
+        onBookFromMarks: () => this.bookFromMarksSlot(slot),
         getInkDocId: () => {
           const entry = this._entryOnScreen(slot);
           // 本子的笔迹和书的走同一条路（ink-store 按 (id, 页码) 存），所以缩略
@@ -574,23 +580,14 @@ export class PdfWorkspace {
   }
 
   /**
-   * 拖动途中：把手指底下那一栏点亮。
+   * 拖动途中：越过分隔条的那一截，在对面那一栏当场画出来。
    *
-   * 一片被拖到半空中的笔迹，如果没有任何东西表示它会落在哪，人只会以为自己把它
-   * 拖丢了——于是松手前就缩回来了，这个功能等于不存在。
+   * 原来还会给手指底下那一栏描一圈蓝框，表示「松手会落在这儿」。拿掉了：对面已经
+   * 实时画出了这一片本身，落在哪一眼就看得见，再框一圈只是多一层蓝。
    */
-  _markInkDropTarget(fromSlot, at) {
-    // 预览要先做，而且每一次移动都要做：下面那个「目标没变就直接回去」的短路是
-    // 给描边用的（描边一次手势只变两下），而这一片是每一帧都在动的。
+  _previewInkDrag(fromSlot, at) {
+    // 每一次移动都要做：这一片是每一帧都在动的。
     this._showInkGhost(fromSlot, at?.ghost || null);
-
-    const hit = at?.outside ? this._inkSurfaceAt(at.clientX, at.clientY) : null;
-    const target = hit && hit.slot !== fromSlot ? hit.slot : null;
-    if (this._inkDropSlot === target) return;
-    this._inkDropSlot = target;
-    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
-      this.elSlots?.[slot]?.classList.toggle('is-ink-drop', slot === target);
-    }
   }
 
   /**
@@ -604,7 +601,7 @@ export class PdfWorkspace {
   _dropInkIntoOtherSlot(fromSlot, { strokes, clientX, clientY, scale, origin } = {}) {
     const hit = this._inkSurfaceAt(clientX, clientY);
     if (!hit || hit.slot === fromSlot) {
-      this._markInkDropTarget(fromSlot, null);
+      this._previewInkDrag(fromSlot, null);
       return null;
     }
     // 回的不是「接住了没有」，是一组把手：源那边要把「撤销拖走」接到这一份上，
@@ -614,7 +611,7 @@ export class PdfWorkspace {
     const landed = hit.view.ink.adoptStrokes(strokes, clientX, clientY, scale, origin);
     // 先落地再撤预览。反过来的话中间会空一帧——那一帧上这一片哪儿都不在，看着就
     // 是闪了一下。
-    this._markInkDropTarget(fromSlot, null);
+    this._previewInkDrag(fromSlot, null);
     if (landed) {
       // 落过去之后那一栏就是活动栏：人接下来要动的是它。
       this._markActive(hit.slot);
@@ -1716,35 +1713,46 @@ export class PdfWorkspace {
     const width = column ? rect.width : this._toolbarColumnWidth(fractions, rect);
 
     this.toolbar.fitTo({ height: rect.height, column: width });
+    // Agent 那颗按钮也不进栏头：拖不进去，记着的高度落进去了也往下让。
+    this._agentSafe = safe;
+    this.agentPanel?.setSafeArea?.(safe.top, safe.bottom);
     this._syncAgentFab(rect);
   }
 
   /**
-   * Agent 那颗圆按钮给贴在右边的工具栏让路。
+   * Agent 那颗圆按钮给贴边的工具栏让路。
    *
-   * 那颗按钮钉在工作区右边、正中间，48px；工具栏贴右边时也在那儿，而且更长——
-   * 按钮正好压在它中间那两格上（多半是颜色），层级还比它高，那两格就点不到了。
-   * 两样东西都是浮在工作区上的，谁也不知道谁，所以由这里来量：横杠展开着、贴右
-   * 边、竖着方向上和按钮相交，按钮就挪到它左边，隔 8px。收成球、贴别的边、或者
-   * 根本不相交的时候，它回原处。
+   * 那颗按钮默认钉在工作区右边、正中间，48px；人可以把它拖到左边或右边的任何高度
+   * （agent-panel.js）。工具栏贴在同一条边上时也在那儿，而且更长——按钮正好压在它某两格
+   * 上（多半是颜色），层级还比它高，那两格就点不到了。两样东西都是浮在工作区上的，谁也不
+   * 知道谁，所以由这里来量：横杠展开着、贴着按钮那一边、竖着方向上和按钮相交，按钮就挪到
+   * 它里侧，隔 8px。收成球、贴别的边、或者根本不相交的时候，它回原处。
    *
    * 用的是横杠停稳之后的位置（toolbar.rect），不是这一帧画在哪儿，理由同
    * _toolbarSafeArea：展开的头几百毫秒它还在从球的位置飞过来。
    */
-  _syncAgentFab(rect = this.root?.getBoundingClientRect?.()) {
+  _syncAgentFab(rect = this.root?.getBoundingClientRect?.(), safe = this._agentSafe) {
     const layer = this.root?.querySelector?.('.pdf-agent-layer');
     if (!layer || !rect?.height) return;
+    const { side, y } = this.agentPanel?.placement?.() || { side: 'right', y: 0.5 };
+    const onLeft = side === 'left';
     const state = this.toolbar?.state;
     const bar = this.toolbar?.rect?.();
     const FAB = 48;
-    let right = 14;
-    if (state?.phase === TOOLBAR_PHASE.EXPANDED && state.edge === EDGES.RIGHT && bar?.width) {
-      const middle = rect.top + rect.height / 2;
+    const MARGIN = 14;
+    // 按钮占的那一条竖带：和样式表里一样，正中在 y 处，上面不进栏头、下面留 14px。
+    const top = Math.min(
+      Math.max(y * rect.height - FAB / 2, (safe?.top || 0) + MARGIN),
+      rect.height - (safe?.bottom || 0) - MARGIN - FAB,
+    );
+    const middle = rect.top + top + FAB / 2;
+    let inset = MARGIN;
+    if (state?.phase === TOOLBAR_PHASE.EXPANDED && state.edge === (onLeft ? EDGES.LEFT : EDGES.RIGHT) && bar?.width) {
       if (bar.top < middle + FAB / 2 && bar.bottom > middle - FAB / 2) {
-        right = Math.round(rect.right - bar.left) + 8;
+        inset = Math.round(onLeft ? bar.right - rect.left : rect.right - bar.left) + 8;
       }
     }
-    layer.style.setProperty('--agent-fab-right', `${right}px`);
+    layer.style.setProperty(onLeft ? '--agent-fab-left' : '--agent-fab-right', `${inset}px`);
   }
 
   /**
@@ -1867,6 +1875,8 @@ export class PdfWorkspace {
     });
     on('organize', () => { this._closeSlotMenus(); this.organize(slot, null); });
     on('export-pdf', () => { this._closeSlotMenus(); this.exportSlot(slot); });
+    on('marks-book', () => { this._closeSlotMenus(); this.bookFromMarksSlot(slot); });
+    on('marks-sync', () => { this._closeSlotMenus(); this.syncFromSourceSlot(slot); });
     on('scratch-style', () => {
       this._closeSlotMenus();
       const kind = activeEntryIn(this.state, slot)?.kind;
@@ -2040,6 +2050,16 @@ export class PdfWorkspace {
     set('close', n => { n.textContent = t('deck.removeFromPane'); });
     set('organize', n => { n.textContent = t('deck.organize'); });
     set('export-pdf', n => { n.textContent = t('export.menu'); });
+    // 只给标过书签的书：没有书签时这一项点进去什么都挑不出来，不如不摆。
+    set('marks-book', n => {
+      n.hidden = !loaded || !this.canMakeBookFromMarks(slot);
+      n.textContent = t('marksBook.menu');
+    });
+    // 书签成书做出来的书：从母本把那几页的最新批注拉过来。
+    set('marks-sync', n => {
+      n.hidden = !loaded || !this.canSyncFromSource(slot);
+      n.textContent = t('marksBook.syncMenu');
+    });
     set('scratch-style', n => {
       n.hidden = !scratch && !note;
       n.textContent = note ? t('note.style') : t('scratch.style');
@@ -2445,7 +2465,7 @@ export class PdfWorkspace {
       onInkDraw: () => this.toolbar?.minimizeOnDraw?.(),
       onInkHistoryChange: () => this._syncSlotChrome(slot),
       onSaveStateChange: () => this._syncSlotChrome(slot),
-      onInkDragOver: (at) => this._markInkDropTarget(slot, at),
+      onInkDragOver: (at) => this._previewInkDrag(slot, at),
       onInkDragDrop: (payload) => this._dropInkIntoOtherSlot(slot, payload),
     });
     this.scratchPanes[slot] = pane;
@@ -2904,6 +2924,56 @@ export class PdfWorkspace {
     if (!entry?.resourceId) return;
     const name = this.describeEntry(slot, entry)?.name || '';
     this.onExport?.({ kind: entry.kind, id: entry.resourceId, name });
+  }
+
+  /**
+   * 这一栏的书能不能「书签成书」：是一本书（不是本子、草稿纸），而且标过书签。
+   *
+   * 本子的页也能记书签，但本子不是文档库里的一份 PDF，拷不出「原书的那几页」，所以只给书。
+   */
+  canMakeBookFromMarks(slot) {
+    const entry = this._entryOnScreen(slot);
+    return entry?.kind === ENTRY_KINDS.PDF && !!entry.resourceId && this._bookmarksIn(slot).length > 0;
+  }
+
+  /** 这一栏的书是书签成书做出来的、母本还在：本栏 ⋯ 里给「从母本更新」。 */
+  canSyncFromSource(slot) {
+    const entry = this._entryOnScreen(slot);
+    return entry?.kind === ENTRY_KINDS.PDF && !!derivedFrom(entry.resourceId);
+  }
+
+  /** 「从母本更新」：交给界面层（onSyncFromSource，见 pdf-workspace-ui.js 的 syncFromSource）。 */
+  syncFromSourceSlot(slot) {
+    if (!this.canSyncFromSource(slot)) return;
+    const entry = this._entryOnScreen(slot);
+    this.onSyncFromSource?.({ id: entry.resourceId, name: this.describeEntry(slot, entry)?.name || '' });
+  }
+
+  /**
+   * 一页笔迹被整份换过了（从母本更新）：两栏里正显示着这一页的，就地换上（见 PdfPane.replaceInk）。
+   * 没显示着的不用管——它们下次翻到这一页时从存储里读，读到的就是新的。
+   */
+  replaceInkOnScreen(resourceId, page, strokes) {
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+      if (this._entryOnScreen(slot)?.resourceId !== resourceId) continue;
+      this.panes[slot]?.replaceInk?.(resourceId, page, strokes);
+    }
+  }
+
+  /**
+   * 「书签成书」：把这一栏的书、它的书签交给界面层（onBookFromMarks，见 pdf-workspace-ui.js 的
+   * makeBookFromMarks）。挑页、做文件、存进文档库或导出都是那边的事，和导出一样。
+   */
+  bookFromMarksSlot(slot) {
+    if (!this.canMakeBookFromMarks(slot)) return;
+    const entry = this._entryOnScreen(slot);
+    const name = this.describeEntry(slot, entry)?.name || '';
+    this.onBookFromMarks?.({
+      id: entry.resourceId,
+      name,
+      slot,
+      marks: this._bookmarksIn(slot),
+    });
   }
 
   /**
@@ -3460,6 +3530,8 @@ export class PdfWorkspace {
     // The marks describe pages of a document that is about to stop existing.
     forgetBookmarks(resourceId);
     if (this._marks) delete this._marks[resourceId];
+    // 书签成书的那根线：它是新书就断线，它是母本，从它做出来的新书也没有母本可更新了。
+    forgetDerived(resourceId);
     // An association naming a book that no longer exists would send the next
     // lookup after bytes that are not there.
     forgetPairsFor(resourceId);
@@ -4540,6 +4612,10 @@ function slotChrome(slot) {
       <button type="button" class="pdf-slot-menu-item" role="menuitem" data-role="organize"></button>
       <!-- 把这一栏正显示着的那一份导出成 PDF：书连同批注，本子和草稿纸连同纸样。 -->
       <button type="button" class="pdf-slot-menu-item" role="menuitem" data-role="export-pdf"></button>
+      <!-- 书签成书：把这本书标过书签的页挑出来，存成一本新书或导出。只在标过书签的书上出现。 -->
+      <button type="button" class="pdf-slot-menu-item" role="menuitem" data-role="marks-book" hidden></button>
+      <!-- 书签成书做出来的书：把母本那几页的最新批注拉过来。只在这样的书上出现。 -->
+      <button type="button" class="pdf-slot-menu-item" role="menuitem" data-role="marks-sync" hidden></button>
       <!-- Relabelled from 关闭文档. Removing an entry detaches it from this
            pane; the resource stays in its library, and the pane falls to
            whatever was underneath rather than emptying. -->

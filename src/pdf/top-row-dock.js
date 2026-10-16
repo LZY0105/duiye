@@ -407,6 +407,14 @@ export function initTopRowDock(elRoot, { body = document.body, measure = layoutR
     && !body.classList.contains('is-top-hidden')
     && !body.classList.contains('is-library-open');
 
+  /** 松在 x 处的球停到这一排的哪一侧、哪儿（spotFor、tuckSpot 共用）。 */
+  const spotIn = (x) => {
+    const r = rects();
+    const side = rowSideFor(x, r, null, 0);
+    const box = side ? ballAt(side, x, r) : null;
+    return box ? { perch: side, at: rowFraction(box.left + box.width / 2, r) } : null;
+  };
+
   /** 手指在 y 处算不算在这一排里：已经在里面的，要多拖出一截才算离开。 */
   const reaches = (y, already) => {
     const r = rects();
@@ -630,10 +638,18 @@ export function initTopRowDock(elRoot, { body = document.body, measure = layoutR
      */
     spotFor(x) {
       if (!catching()) return null;
-      const r = rects();
-      const side = rowSideFor(x, r, null, 0);
-      const box = side ? ballAt(side, x, r) : null;
-      return box ? { perch: side, at: rowFraction(box.left + box.width / 2, r) } : null;
+      return spotIn(x);
+    },
+
+    /**
+     * 这一排收着的时候，松在 x 处（离顶上够近）的球该藏到哪儿：哪一侧、在这一排里的哪儿——和 spotFor 同
+     * 一套算法（量的是三枚胶囊在家的位置，收起时的上移不算），只是那一排此刻不在。人说「工具栏如果在顶部
+     * 菜单栏隐藏的情况下拖到最上方位置，则不应该在那展开，应该也自己隐藏到上方位置……偏左就在左边空位，
+     * 偏右就在右边空位」。那一排没收着（那时归 spotFor）、书架盖着、不在练习页上，都是 null。
+     */
+    tuckSpot(x) {
+      if (!available() || !away() || body.classList.contains('is-library-open')) return null;
+      return spotIn(x);
     },
 
     ballBox(perch, size = PERCH_BALL, at = null) {

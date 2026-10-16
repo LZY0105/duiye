@@ -63,11 +63,10 @@ html[data-glass="liquid"] #settingsSave.lgr {
   /* 影子那一层画在盒子外面。.action-btn 原来有一条 overflow: hidden，是给按下去那圈水波纹兜边的——
      挂着这几层的按钮不再有水波纹（liquid-glass.js 让开了），身子由 .lgr-lens 自己裁圆角。 */
   overflow: visible !important;
+  /* 原来的那圈线也不要（空桌面那张卡片、对话框里的按钮、选角色那两格……）：玻璃的边由那两道边光来画。
+     只把颜色撤掉、宽度留着——宽度一变，东西就挪了。 */
+  border-color: transparent !important;
 }
-
-/* 空桌面那张卡片：material.css 把它当成「内容」（Tier 2），给了实在的白底和一圈细线。白底由上面那条
-   撤掉；那圈线也不要——玻璃的边由那两道边光来画。 */
-html[data-glass="liquid"] .pdf-empty-card.lgr { border-color: transparent; }
 
 /* 原来没定位的：定个位，里面那几层才贴得住它。 */
 .lgr--anchor { position: relative; }
@@ -131,6 +130,18 @@ html[data-glass="liquid"] .pdf-book-more.lgr > .lgr-shadow {
    这样滚起来和改之前一样（最长一帧 41ms）。 */
 html[data-glass="liquid"] .pdf-book-more .lgr-warp { filter: var(--lgr-filter, none); }
 html[data-glass="liquid"].lgr-busy .pdf-book-more .lgr-warp { filter: none; }
+
+/* 「练习 / 设置」、找页面板那三页的滑块弹过去的那半秒：所有玻璃只磨不弯，滑块停了再弯回来。平板上 WebView 每一帧都把整页的
+   玻璃重画一遍，动的时候那一版（只弯一次）几块加起来也把一帧推到 33ms（约 30 帧）；身子上那层折射一撤，滑块动画约 60 帧
+   （实测：超过 20ms 的帧 32% → 12%）。人选的是「只在滑块动时不弯」：翻页、拖工具栏这些别的动作照旧弯着。 */
+html[data-glass="liquid"]:has([data-lens-moving]) .lgr-warp { filter: none; }
+
+/* 笔的设置卡片：毛玻璃那套给它的一点高光（::before，mix-blend-mode: screen）和一圈边光（::after）撤掉。子元素一有
+   混合模式，卡片就自成一组，身子那层的磨砂只看得见卡片自己——书页一点都磨不到：浏览器里看，卡片整块透明，底下书页的字
+   清清楚楚压在「粗细」「不透明度」上；往卡片里塞一块最朴素的 backdrop-filter 也一样，放到卡片外面就磨得到。边由那两道
+   边光来画。 */
+html[data-glass="liquid"] .ink-card.lgr::before,
+html[data-glass="liquid"] .ink-card.lgr::after { display: none; }
 
 /* ── 边 ─────────────────────────────────────────────────────────────────── */
 
@@ -231,6 +242,245 @@ html[data-glass="liquid"].lgr-busy .ink-scrub-drop {
   backdrop-filter: saturate(140%) url(#lgr-drop-lean);
 }
 
+/* ══ 全面液态玻璃化 ══════════════════════════════════════════════════════════
+
+   人说「液态玻璃风格全面液态玻璃化，除了文件栏的边框，如果有重叠记得像库里那样做模糊，一定要 1：1
+   还原」。挂哪些、挂哪一种写在 liquid-glass-react.js 的 TARGETS；盖在内容上的那些用库里演示站那张
+   卡片的数（PRESETS.sheet：磨 20px）——库里演示的正是一块玻璃压在一段正文上，底下的字磨成一片，玻璃
+   上的字才读得清。例外只有两栏那两张装内容的卡片（.pdf-ws-slot），照旧。 */
+
+/* ── 两栏那两张卡片：形状、边、影子都不动，只是自己不再磨背后 ─────────────── */
+
+/* 它原来带着一层磨砂（pdf.css 的 --card-blur：磨 20px、饱和度翻倍、亮 5%）。一带磨砂，它就是自己里面
+   所有东西的 backdrop 根：栏头、答案面板、本栏内容那张单子、⋯ 单子、缩放比例、套索那一条，它们接在自己
+   身上的折射一弯到边上，要去取卡片外面的像素，在根里面那是空的——浏览器里实测，栏头整条成了一道深灰。
+   它磨的是背后那片很淡的渐变桌面，磨与不磨看不出来；看得出来的只是提亮和提饱和的那一点——把白底从五成
+   提到八成五，同一块地方算出来的颜色差在一两级以内。顺带：每一栏少一整块 20px 的磨砂，平板上翻页、写字
+   时每一帧都要重做它。 */
+html[data-glass="liquid"] .pdf-ws-slot {
+  backdrop-filter: none;
+  background: rgba(255, 255, 255, 0.85);
+}
+
+/* 文档库也一样：它整页带着磨砂（liquid.css：九成的白、磨 30px），里面的玻璃（「导入」那一格、进了文件夹
+   以后顶上那一条、关闭）看得到的「背后」只有它那九成的白。库里的色散是三个通道各弯一次、用 screen 混回去
+   ——背后不透明时混回去就是原来的颜色；背后是九成的白，混回去整块暗一成，边上还弯进一片透明，「导入」那一格
+   成了一块灰、右边一道暗带（浏览器里截图对比过，关掉折射就是正常的浅色玻璃）。它盖满整屏，磨的是被书架整个
+   挡住的工作区，那一成本来就看不出来：底色换成同一个颜色的不透明，不再磨背后。 */
+html[data-glass="liquid"] .pdf-library {
+  background:
+    radial-gradient(900px 600px at 0% -10%, rgba(196, 214, 255, 0.36), transparent 60%),
+    radial-gradient(800px 560px at 105% 110%, rgba(236, 216, 248, 0.36), transparent 60%),
+    rgb(246, 247, 250);
+  backdrop-filter: none;
+}
+/* 「导入」那一格不是书：没有书脊那一道暗。 */
+html[data-glass="liquid"] .pdf-book-block.is-add.lgr::before { display: none; }
+
+/* ── 挂了那几层的：对话框、卡片、面板 ───────────────────────────────────── */
+
+/* 对话框自己不滚了：层是绝对定位的，自己一滚就跟着内容一起滚走。太高的时候整张往下长，由外面那层
+   遮罩来滚（deck.css 的 .deck-overlay 本来就是 overflow-y: auto）——确认键照样滚得到。 */
+html[data-glass="liquid"] .deck-dialog.lgr { max-height: none !important; }
+
+/* 选角色那张卡：material.css 给它的是一圈 7px 的透明边框（在边框里画一道浅浅的白边）。玻璃那几层贴着
+   内边距那一圈，圆角却是按外框给的，差着 7px 就套不齐——边框收成 0，那 7px 挪进内边距，大小不变。 */
+html[data-glass="liquid"] .pdf-role-dialog.lgr {
+  border-width: 0 !important;
+  padding: calc(1.35rem + 7px) calc(1.5rem + 7px);
+}
+
+/* 进场只用位移和缩放，不淡入。元素半透明的那一段，它自己就成了 backdrop 的根：里面那层 warp 看不到
+   背后，玻璃先是空的，淡入走完才一下子弯出来——看着像闪了一下。遮罩也不碰 opacity（它半透明的那一段
+   同样会把里面那张卡变成空的），改成底色从无到有。 */
+html[data-glass="liquid"] .deck-overlay,
+html[data-glass="liquid"] .update-overlay,
+html[data-glass="liquid"] .pdf-picker-overlay { animation-name: lgr-scrim-in; }
+/* 选角色那层遮罩还带着磨砂（material.css）：遮罩一磨，它自己就是根，里面那张卡只看得见遮罩那层灰。
+   这里卡片自己磨，遮罩只压暗。 */
+html[data-glass="liquid"] .pdf-role-overlay {
+  animation-name: lgr-scrim-in;
+  backdrop-filter: none !important;
+}
+html[data-glass="liquid"] .deck-dialog.lgr { animation-name: lgr-rise-in; }
+html[data-glass="liquid"] .pdf-role-dialog.lgr,
+html[data-glass="liquid"] .update-dialog.lgr { animation-name: lgr-pop-in; }
+html[data-glass="liquid"] .pdf-agent-dialog.lgr { animation-name: lgr-slide-in; }
+html[data-glass="liquid"] .pdf-workspace.is-column .pdf-agent-dialog.lgr { animation-name: lgr-rise-in; }
+html[data-glass="liquid"] .pdf-outline-panel.lgr { animation-name: lgr-drop-in; }
+html[data-glass="liquid"] .ink-card.lgr { animation-name: lgr-card-in; }
+
+@keyframes lgr-scrim-in { from { background-color: transparent; } }
+@keyframes lgr-rise-in { from { translate: 0 10px; scale: 0.97; } }
+@keyframes lgr-pop-in { from { scale: 0.92; } }
+@keyframes lgr-slide-in { from { translate: 18px 0; } }
+@keyframes lgr-drop-in { from { translate: 0 -8px; } }
+@keyframes lgr-card-in { from { translate: 0 -6px; scale: 0.96; } }
+
+/* 危险的那一项是红字，主要的那一项是蓝字——玻璃是透明的，颜色只能落在字上。原来是白字的（「放东西
+   进来」「发送」）换成主题色，不然透明的底上白字就没了。 */
+html[data-glass="liquid"] .deck-dialog-btn.is-danger.lgr { color: var(--lg-red) !important; }
+html[data-glass="liquid"] .pdf-folder-bar-add.lgr,
+html[data-glass="liquid"] .pdf-agent-submit.lgr { color: var(--lg-tint) !important; }
+/* 不能按的时候变淡的是字，不是整颗：整颗半透明的话，它自己成了根，玻璃就空了（见上面进场那条）。 */
+html[data-glass="liquid"] .pdf-agent-submit.lgr:disabled {
+  opacity: 1;
+  color: var(--lg-label-3) !important;
+}
+
+/* 「挑一个」的那几格（打开在哪一栏、插在哪一项后面、草稿纸还是本子、纸样）：原来选中是一道蓝边加一层淡蓝，
+   玻璃上边框的颜色和底色都撤了（.lgr.lgr），选中的那一格改成往里描一圈主题色。 */
+html[data-glass="liquid"] .deck-destination.is-selected.lgr,
+html[data-glass="liquid"] .deck-anchor.is-selected.lgr,
+html[data-glass="liquid"] .paper-mode.is-selected.lgr,
+html[data-glass="liquid"] .create-style-tile.is-selected.lgr {
+  outline: 2px solid var(--lg-tint);
+  outline-offset: -2px;
+}
+
+/* 文档库、说明书盖满整屏时，Agent 那一层是 visibility: hidden（liquid.css）——可 Chromium 照样合成藏着的元素上的
+   backdrop-filter：那颗按钮的玻璃身子在说明书右边缘留下一块磨过的圆（浏览器里截图看得见，撤掉滤镜就没了）。藏着的时候
+   连滤镜一起撤。 */
+html[data-glass="liquid"] body.is-library-open .pdf-agent-layer .lgr-warp,
+html[data-glass="liquid"] body:has(.pdf-guide) .pdf-agent-layer .lgr-warp {
+  backdrop-filter: none !important;
+  filter: none !important;
+}
+
+/* 小玻璃的影子按个头收：按钮那一圈（往下 12px、糊开 40px）放在这么小一块上，会在底下晕开一大片灰。 */
+html[data-glass="liquid"] .pdf-agent-dialog-close.lgr > .lgr-shadow,
+html[data-glass="liquid"] .pdf-folder-bar-back.lgr > .lgr-shadow,
+html[data-glass="liquid"] .pdf-folder-bar-add.lgr > .lgr-shadow {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+}
+
+/* ── 挂不了那几层的：玻璃接在元素自己的 backdrop-filter 后面 ────────────── */
+
+/* 为什么挂不了，见 liquid-glass-react.js 的 TARGETS：自己就是滚动的容器，或者靠淡入淡出进出场。弯法、
+   磨砂、饱和度和挂了那几层的一样（滤镜是 NAMED_FILTERS 的 lgr-sheet-* / lgr-cap-*），静止 / 手在屏幕上
+   两版也一样换。少的是边上那道跟着指针转的光：这里的边是库里那两道边光在指针居中时的样子——一圈
+   1.5px 的白，加它身上那两道内影。 */
+html[data-glass="liquid"] {
+  --lgr-rim-still:
+    inset 0 0 0 1.5px rgba(255, 255, 255, 0.34),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.5),
+    inset 0 1px 3px rgba(255, 255, 255, 0.25);
+  /* 小的那几样（换边的圆钮、分栏的握柄、缩放比例）：和透镜同一档影子。 */
+  --lgr-shadow-small: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+/* 盖在内容上的那几样：菜单、本栏内容那张单子、设置页的下拉、答案面板、提示条、缩放比例、套索那一条。 */
+html[data-glass="liquid"] .pdf-bar-menu,
+html[data-glass="liquid"] .pdf-slot-menu,
+html[data-glass="liquid"] .deck-list,
+html[data-glass="liquid"] .set-select-dropdown,
+html[data-glass="liquid"] .pdf-answer-panel,
+html[data-glass="liquid"] .save-toast,
+html[data-glass="liquid"] .pdf-zoom-badge,
+html[data-glass="liquid"] .ink-selection-bar,
+html[data-glass="liquid"] .ink-recognize-pill,
+html[data-glass="liquid"] .ink-recognize-panel {
+  background: transparent !important;
+  border-color: transparent !important;
+  backdrop-filter: blur(20px) saturate(140%) url(#lgr-sheet-rich) !important;
+  box-shadow: var(--lgr-rim-still), var(--lgr-shadow) !important;
+}
+html[data-glass="liquid"].lgr-busy .pdf-bar-menu,
+html[data-glass="liquid"].lgr-busy .pdf-slot-menu,
+html[data-glass="liquid"].lgr-busy .deck-list,
+html[data-glass="liquid"].lgr-busy .set-select-dropdown,
+html[data-glass="liquid"].lgr-busy .pdf-answer-panel,
+html[data-glass="liquid"].lgr-busy .save-toast,
+html[data-glass="liquid"].lgr-busy .pdf-zoom-badge,
+html[data-glass="liquid"].lgr-busy .ink-selection-bar,
+html[data-glass="liquid"].lgr-busy .ink-recognize-pill,
+html[data-glass="liquid"].lgr-busy .ink-recognize-panel {
+  backdrop-filter: blur(20px) saturate(140%) url(#lgr-sheet-lean) !important;
+}
+html[data-glass="liquid"] .pdf-zoom-badge { box-shadow: var(--lgr-rim-still), var(--lgr-shadow-small) !important; }
+
+/* 原来是深色底、白字的两样（提示条、套索那一条）：玻璃是透明的，字换成深色，危险的那一项是正常的红。 */
+html[data-glass="liquid"] .save-toast { color: var(--lg-label) !important; }
+html[data-glass="liquid"] .ink-selection-btn { color: var(--lg-label); }
+html[data-glass="liquid"] .ink-recognize-pill { color: var(--lg-label); }
+html[data-glass="liquid"] .ink-recognize-pill-btn { background: var(--lg-fill); }
+html[data-glass="liquid"] .ink-recognize-pill-btn:active { background: var(--lg-fill-2); }
+/* 色排上面那道细线、每排左边那个字：原来是深底上的白，玻璃上换成浅浅的灰、次一档的字色。 */
+html[data-glass="liquid"] .ink-selection-palette,
+html[data-glass="liquid"] .ink-selection-size { border-top-color: rgba(60, 60, 67, 0.16); }
+html[data-glass="liquid"] .ink-selection-palette-label { color: var(--lg-label-2); }
+html[data-glass="liquid"] .ink-selection-btn.is-danger { color: var(--lg-red); }
+html[data-glass="liquid"] .ink-selection-btn:active { background: var(--lg-fill-2); }
+@media (hover: hover) and (pointer: fine) {
+  html[data-glass="liquid"] .ink-selection-btn:hover { background: var(--lg-fill); }
+  html[data-glass="liquid"] .ink-selection-btn.is-danger:hover { background: var(--lg-red-soft); }
+}
+
+/* 答案面板里每一行那颗「跳过去」：原来是一块实心的蓝。面板里有十几颗、跟着面板滚，挂那几层太重（和书架上
+   的「⋯」一个道理）；它压在面板那块玻璃上，底下已经磨过、弯过，这里只画边和字。 */
+html[data-glass="liquid"] .answer-goto,
+html[data-glass="liquid"] .answer-close {
+  background: transparent;
+  box-shadow: var(--lgr-rim-still), 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+html[data-glass="liquid"] .answer-goto { color: var(--lg-tint); }
+
+/* 栏头那枚胶囊：原来是一层极淡的灰（人更早说过「文件栏里那条栏头除外」），这一次它也是玻璃，和顶上
+   那几枚胶囊同一组数（6px、140%、lgr-cap-*）。它放不下的时候能横着滚，所以也是接在自己身上。
+   不要浮起来的那圈影子：往下 12px、糊开 40px 是给浮在最上面的东西的（菜单、对话框），放在栏头上，它看着离开了
+   这一栏、飘在栏外面——人说「这个菜单栏的阴影使其位置关系与整个栏目很不协调」。它是嵌在栏里的一条：只留边光，
+   加一道贴着的细线把轮廓收住（毛玻璃里它本来就没有影子）。 */
+html[data-glass="liquid"] .pdf-slot-toolbar {
+  background: transparent;
+  backdrop-filter: blur(6px) saturate(140%) url(#lgr-cap-rich);
+  box-shadow: var(--lgr-rim-still), 0 0 0 0.5px rgba(15, 23, 42, 0.08);
+}
+html[data-glass="liquid"].lgr-busy .pdf-slot-toolbar {
+  backdrop-filter: blur(6px) saturate(140%) url(#lgr-cap-lean);
+}
+
+/* 分栏线上那颗换边的圆钮、那根握柄。圆钮平时是半亮的（material.css 的 opacity: 0.5）——接在它自己
+   身上的玻璃不怕它半透明。握柄只有 6px 宽，弯不出什么来，只磨。 */
+html[data-glass="liquid"] .pdf-ws-swap {
+  background: transparent;
+  border-color: transparent;
+  backdrop-filter: blur(6px) saturate(140%) url(#lgr-cap-rich);
+  box-shadow: var(--lgr-rim-still), var(--lgr-shadow-small);
+}
+html[data-glass="liquid"].lgr-busy .pdf-ws-swap {
+  backdrop-filter: blur(6px) saturate(140%) url(#lgr-cap-lean);
+}
+html[data-glass="liquid"] .pdf-ws-divider-grip {
+  background: transparent;
+  border-color: transparent;
+  backdrop-filter: blur(6px) saturate(140%);
+  box-shadow: var(--lgr-rim-still), var(--lgr-shadow-small);
+}
+
+/* ── 输入框：挂不了那几层（<input>、<textarea> 里面放不进东西） ───────────── */
+
+/* 玻璃上凹进去的一块：iOS 里放在玻璃上的输入框那样，一层很淡的灰、上沿一道内影，不是再浮起来一块——它
+   是往里填的地方。页码框、对话框里的名字、Agent 的问句框、本机 PDF 的搜索框。（第一版是三成的白加那一圈
+   边，浮在浅色的栏头玻璃上就看不见了，页码框只剩一个数字，看不出能点进去改。） */
+html[data-glass="liquid"] .pdf-slot-page,
+html[data-glass="liquid"] .deck-dialog input[type="text"],
+html[data-glass="liquid"] .deck-dialog input:not([type]),
+html[data-glass="liquid"] .deck-dialog textarea,
+html[data-glass="liquid"] .pdf-agent-question,
+html[data-glass="liquid"] .pdf-picker-search input {
+  background: rgba(120, 120, 128, 0.12) !important;
+  border-color: transparent !important;
+  box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.1), inset 0 0 0 0.5px rgba(15, 23, 42, 0.05) !important;
+}
+html[data-glass="liquid"] .pdf-slot-page:focus,
+html[data-glass="liquid"] .deck-dialog input:focus,
+html[data-glass="liquid"] .deck-dialog textarea:focus,
+html[data-glass="liquid"] .pdf-agent-question:focus-visible,
+html[data-glass="liquid"] .pdf-picker-search input:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--lg-tint-soft), inset 0 0 0 1px var(--lg-tint) !important;
+}
+
 /* ── 系统设置 ───────────────────────────────────────────────────────────── */
 
 /* 减少透明：不磨、不弯，一块实在的白。工具栏那几样由 material.css 铺成不透明的，这里把弯也撤掉。 */
@@ -244,6 +494,23 @@ html[data-glass="liquid"].lgr-busy .ink-scrub-drop {
   html[data-glass="liquid"] .ink-token,
   html[data-glass="liquid"] .ink-scrub-drop {
     backdrop-filter: none !important;
+  }
+  /* 接在自己身上的那几样：不磨不弯，一块实在的白。 */
+  html[data-glass="liquid"] .pdf-bar-menu,
+  html[data-glass="liquid"] .pdf-slot-menu,
+  html[data-glass="liquid"] .deck-list,
+  html[data-glass="liquid"] .set-select-dropdown,
+  html[data-glass="liquid"] .pdf-answer-panel,
+  html[data-glass="liquid"] .save-toast,
+  html[data-glass="liquid"] .pdf-zoom-badge,
+  html[data-glass="liquid"] .ink-selection-bar,
+  html[data-glass="liquid"] .ink-recognize-pill,
+  html[data-glass="liquid"] .ink-recognize-panel,
+  html[data-glass="liquid"] .pdf-slot-toolbar,
+  html[data-glass="liquid"] .pdf-ws-swap,
+  html[data-glass="liquid"] .pdf-ws-divider-grip {
+    backdrop-filter: none !important;
+    background: #fff !important;
   }
 }
 

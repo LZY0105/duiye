@@ -57,6 +57,8 @@ function modal(build) {
     };
     const onKey = (e) => {
       if (e.key !== 'Escape') return;
+      // 切到了设置页，单子跟着练习页收起来了（pdf.css）：这一下是设置页的，不是这张看不见的单子的。
+      if (getComputedStyle(overlay).display === 'none') return;
       e.preventDefault();
       e.stopPropagation();
       finish(null);
@@ -840,5 +842,128 @@ export function pickResources({ title, note = '', items = [], confirm, empty }) 
       if (!picked.size) return;
       finish([...picked]);
     });
+  });
+}
+
+/**
+ * 书签成书：从一本书的书签页里挑几页，做成一份新的 PDF。
+ *
+ * 和 pickResources 一个样子：一行一页，点整行选中、再点取消；不同的是**默认全选**——人点「书签成书」，
+ * 十有八九要的就是全部书签页，挑掉几页比一页页点上省事。上面一颗「全选 / 全不选」，旁边说着选了几页（按钮上就不再写）。
+ *
+ * 新书叫什么放在最上面，有一个现成的名字（「原书名（书签）」），想改就点进去改。
+ *
+ * 两条出路：
+ *   - 「存成新书」：落进文档库，是一本真的书——页还是原书的页（字能选），批注拷成它自己的、还能接着改；
+ *   - 「导出 PDF」：批注画进页里，存一份文件到「文档/对页」，和本栏 ⋯ 里的导出同一条路。
+ * 一页都没选时两颗都按不下去：按下去什么都不会发生的按钮，会让人以为是坏了。
+ *
+ * 「带上批注」默认勾着：人问「导出的或者成书的包含笔记吗」，要的是带着；去掉勾就是只要原书的页（打印一份干净的、
+ * 重新做一遍）。两条出路都认它。
+ *
+ * @param {{bookName: string, marks: Array<{page: number, label: string}>,
+ *          defaultName: string, labelFor: function({page, label}): string}} spec
+ * @returns {Promise<{action: 'save'|'export', pages: number[], name: string, withInk: boolean}|null>}
+ *   `pages` 照原书的次序；取消是 null
+ */
+export function chooseMarkPages({ bookName, marks = [], defaultName = '', labelFor }) {
+  return modal((dialog, finish) => {
+    dialog.classList.add('deck-pick-dialog', 'marks-book-dialog');
+    const pages = [...new Set(marks.map((m) => m.page))].sort((a, b) => a - b);
+    const picked = new Set(pages);
+
+    dialog.innerHTML = `
+      <div class="deck-dialog-title" data-role="title"></div>
+      <p class="deck-dialog-note" data-role="note"></p>
+      <label class="deck-dialog-label" for="marks-book-name" data-role="name-label"></label>
+      <input id="marks-book-name" class="deck-input" type="text" maxlength="80" data-role="name">
+      <div class="marks-book-head">
+        <span class="marks-book-count" data-role="count" aria-live="polite"></span>
+        <button type="button" class="marks-book-all" data-role="all"></button>
+      </div>
+      <div class="deck-pick-list marks-book-list" data-role="list"></div>
+      <label class="deck-check marks-book-ink">
+        <input type="checkbox" data-role="with-ink" checked>
+        <span data-role="with-ink-label"></span>
+      </label>
+      <div class="deck-dialog-actions">
+        <button type="button" class="deck-dialog-btn" data-role="cancel">${escapeHtml(t('deck.cancel'))}</button>
+        <button type="button" class="deck-dialog-btn" data-role="export"></button>
+        <button type="button" class="deck-dialog-btn is-primary" data-role="save"></button>
+      </div>`;
+    dialog.querySelector('[data-role="title"]').textContent = t('marksBook.title');
+    dialog.querySelector('[data-role="note"]').textContent = t('marksBook.note', { name: bookName, count: pages.length });
+    dialog.querySelector('[data-role="name-label"]').textContent = t('marksBook.nameLabel');
+    dialog.querySelector('[data-role="with-ink-label"]').textContent = t('marksBook.withInk');
+    const inkEl = dialog.querySelector('[data-role="with-ink"]');
+    const nameEl = dialog.querySelector('[data-role="name"]');
+    nameEl.value = defaultName;
+    nameEl.placeholder = defaultName;
+
+    const listEl = dialog.querySelector('[data-role="list"]');
+    const countEl = dialog.querySelector('[data-role="count"]');
+    const allEl = dialog.querySelector('[data-role="all"]');
+    const saveEl = dialog.querySelector('[data-role="save"]');
+    const exportEl = dialog.querySelector('[data-role="export"]');
+    const rows = new Map();
+
+    const sync = () => {
+      const n = picked.size;
+      countEl.textContent = t('marksBook.count', { picked: n, total: pages.length });
+      const everything = n === pages.length;
+      allEl.textContent = everything ? t('marksBook.none') : t('marksBook.all');
+      allEl.setAttribute('aria-pressed', everything ? 'true' : 'false');
+      // 选了几页上面那一行已经说了，按钮上不再重复：三颗按钮挤在一行，带上页数就折成两行。
+      saveEl.textContent = t('marksBook.save');
+      exportEl.textContent = t('marksBook.export');
+      saveEl.disabled = n === 0;
+      exportEl.disabled = n === 0;
+      for (const [page, row] of rows) {
+        const on = picked.has(page);
+        row.classList.toggle('is-selected', on);
+        row.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
+    };
+
+    for (const mark of marks) {
+      if (rows.has(mark.page)) continue;
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'deck-pick-row marks-book-row';
+      row.dataset.page = String(mark.page);
+      row.innerHTML = `
+        <span class="marks-book-page"></span>
+        <span class="deck-pick-name"></span>
+        <span class="deck-folder-tick" aria-hidden="true">✓</span>`;
+      row.querySelector('.marks-book-page').textContent = String(mark.page);
+      row.querySelector('.deck-pick-name').textContent = labelFor ? labelFor(mark) : (mark.label || '');
+      row.addEventListener('click', () => {
+        if (picked.has(mark.page)) picked.delete(mark.page);
+        else picked.add(mark.page);
+        sync();
+      });
+      rows.set(mark.page, row);
+    }
+    for (const page of pages) listEl.appendChild(rows.get(page));
+
+    allEl.addEventListener('click', () => {
+      if (picked.size === pages.length) picked.clear();
+      else for (const page of pages) picked.add(page);
+      sync();
+    });
+    const answer = (action) => {
+      if (!picked.size) return;
+      const name = nameEl.value.replace(/\s+/g, ' ').trim() || defaultName;
+      finish({ action, pages: pages.filter((p) => picked.has(p)), name, withInk: inkEl.checked });
+    };
+    dialog.querySelector('[data-role="cancel"]').addEventListener('click', () => finish(null));
+    saveEl.addEventListener('click', () => answer('save'));
+    exportEl.addEventListener('click', () => answer('export'));
+    nameEl.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      nameEl.blur();
+    });
+    sync();
   });
 }

@@ -241,6 +241,28 @@ html[data-skin="minimal"] .pdf-bar-menu-icon { color: var(--p-pen); }
 html[data-skin="minimal"] .set-option:hover { background: var(--lg-fill); }
 html[data-skin="minimal"] .set-option:active { background: var(--lg-fill-2); color: var(--p-ink); }
 
+/* 套索「识别」认出来的那张单子：也是一张纸条；按钮和对话框里的一样——细线框出来的方块，主要的那一个是一块
+   钢笔色的章（钢笔色、纸色的字由 --lg-primary / --lg-primary-text 带过去）。小条和套索那一条一样，不换。 */
+html[data-skin="minimal"] .ink-recognize-panel {
+  border-radius: 4px;
+  background: var(--p-paper);
+  box-shadow: var(--p-slip);
+}
+html[data-skin="minimal"] .ink-recognize-row,
+html[data-skin="minimal"] .ink-recognize-kind,
+html[data-skin="minimal"] .ink-recognize-edit { border-radius: 2px; }
+html[data-skin="minimal"] .ink-recognize-btn {
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--p-rule-2);
+}
+html[data-skin="minimal"] .ink-recognize-btn:not(.is-primary):active:not(:disabled) { background: var(--lg-fill-2); }
+html[data-skin="minimal"] .ink-recognize-btn.is-primary {
+  background: var(--lg-primary);
+  box-shadow: none;
+}
+html[data-skin="minimal"] .ink-recognize-btn.is-primary:active:not(:disabled) { background: var(--lg-primary-press); }
+
 /* ── 两栏：平放的纸 ─────────────────────────────────────────────────────────── */
 
 html[data-skin="minimal"] .pdf-ws-slot {
@@ -481,6 +503,7 @@ html[data-skin="minimal"] .settings-title,
 html[data-skin="minimal"] .guide-head h2,
 html[data-skin="minimal"] .guide-chapter-title,
 html[data-skin="minimal"] .deck-dialog-title,
+html[data-skin="minimal"] .pdf-agent-dialog-header h2,
 html[data-skin="minimal"] .pdf-empty-title {
   font-family: var(--p-serif);
   color: var(--p-ink);
@@ -700,19 +723,30 @@ html[data-skin="minimal"] .pdf-agent-fab {
   color: var(--p-pen);
   box-shadow: 0 2px 0 rgba(37, 35, 31, 0.04), 0 8px 18px -8px rgba(37, 35, 31, 0.3);
 }
-html[data-skin="minimal"] .pdf-agent-dialog {
-  border-color: var(--p-rule);
+/* 拉出来的那一栏是一张叠在上面的纸条（和对话框一样：方角、切边、叠纸的影子）。原来它贴满右半边，
+   左边一道影子；现在和别的皮肤一样浮着（排法在 liquid.css），这里只把它画成纸。 */
+html[data-skin="minimal"] .pdf-agent-dialog,
+html[data-skin="minimal"] .pdf-workspace.is-column .pdf-agent-dialog {
+  border-radius: 6px;
   background: var(--p-paper);
-  box-shadow: -10px 0 24px -14px rgba(37, 35, 31, 0.3);
+  box-shadow: var(--p-slip);
 }
-html[data-skin="minimal"] .pdf-agent-dialog-header {
-  border-color: var(--p-rule);
-  background: var(--p-paper);
-}
+html[data-skin="minimal"] .pdf-agent-dialog-header { background: transparent; }
 html[data-skin="minimal"] .pdf-agent-dialog-meta { color: var(--p-ink-2); }
 html[data-skin="minimal"] .pdf-agent-dialog-close {
-  border-color: var(--p-rule-2);
-  border-radius: 3px;
-  background: var(--p-paper);
+  border-radius: 4px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--p-rule-2);
   color: var(--p-ink-2);
 }
+/* 人问的那一句：一层钢笔水（tokens 里的 --lg-tint-soft），方一点的角。 */
+html[data-skin="minimal"] .pdf-agent-message.is-user { border-radius: 4px; }
+html[data-skin="minimal"] .pdf-agent-dialog-content pre { border-radius: 3px; }
+/* 问句框：一道下划线，像表格上要填的那一栏；「发送」是一块钢笔色的章（tokens 里的 --lg-primary）。 */
+html[data-skin="minimal"] .pdf-agent-question {
+  border-radius: 0;
+  background: transparent;
+  box-shadow: inset 0 -1px 0 var(--p-rule-2);
+}
+html[data-skin="minimal"] .pdf-agent-question:focus-visible { box-shadow: inset 0 -1.5px 0 var(--p-pen); }
+html[data-skin="minimal"] .pdf-agent-submit { border-radius: 4px; }

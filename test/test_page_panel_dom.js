@@ -217,6 +217,49 @@ await test('changing the book drops everything', async () => {
   panel.destroy();
 });
 
+// ═══════════════════════════════════════════════════════════════
+group('4. 书签那一页：蓝的那一行跟着翻到的页走');
+
+await test('点另一个书签翻过去：蓝的那一行跟着换过去（原来一直停在第一次画出来的那一行，用户截图）', async () => {
+  document.body.innerHTML = '<div class="pdf-ws-slot">'
+    + '<div data-role="outline-panel" hidden></div>'
+    + '<div data-role="pane"></div></div>';
+  const host = document.querySelector('.pdf-ws-slot');
+  let current = 76;
+  const marks = [{ page: 73 }, { page: 76, label: '扰动法' }, { page: 88, label: '不可逆例子' }];
+  let state = selectTab(createPanelState(), PANEL_TABS.MARKS);
+  const panel = new PagePanel(host, {
+    getState: () => state,
+    onState: (change) => {
+      state = change({ selectTab: (tab) => selectTab(state, tab), setHeight: (h) => setHeight(state, h) });
+    },
+    getDoc: () => ({ numPages: 200, renderPage: () => new Promise(() => {}) }),
+    getPageCount: () => 200,
+    getCurrentPage: () => current,
+    getPageSize: () => ({ width: 595, height: 842 }),
+    getBookmarks: () => marks,
+    // 和工作区一样：翻到了别的页，栏里的东西跟着对一遍（PdfWorkspace._syncSlotChrome → syncCurrentPage）。
+    onGoToPage: (page) => { current = page; panel.syncCurrentPage(); },
+    onOpenChange: () => {},
+  });
+  panel.open();
+  const blue = () => [...host.querySelectorAll('.pdf-mark-row.is-current')].map((row) => row.dataset.page);
+  const go = () => [...host.querySelectorAll('.pdf-mark-go')];
+  assert.deepEqual(blue(), ['76']);
+  go()[2].click();
+  assert.deepEqual(blue(), ['88'], '点了「88 不可逆例子」：蓝的换到这一行');
+  assert.equal(go()[2].getAttribute('aria-current'), 'page');
+  assert.equal(go()[1].getAttribute('aria-current'), 'false');
+  current = 77;
+  panel.syncCurrentPage();
+  assert.deepEqual(blue(), [], '翻到没有书签的一页：哪一行都不蓝');
+  current = 73;
+  panel.syncCurrentPage();
+  assert.deepEqual(blue(), ['73']);
+  assert.equal(go().length, 3, '没有重画整张单子');
+  panel.destroy();
+});
+
 console.log('\n═══════════════════════════════════════════════════════════════');
 console.log(`  ${passed} passed, ${failed} failed`);
 console.log('═══════════════════════════════════════════════════════════════');

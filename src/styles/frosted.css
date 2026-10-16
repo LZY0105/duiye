@@ -1,0 +1,72 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   毛玻璃：只给它的几条
+   ══════════════════════════════════════════════════════════════════════════
+
+   毛玻璃 = data-skin="liquid-math"，不挂 data-glass（settings.js 的 SKINS）。它的样子全在 liquid.css 里，和纸、
+   液态玻璃一起穿；这里只放「只有毛玻璃要、另外两套不能动」的几条。用户看了毛玻璃里的「组合」单子说要改，又说
+   「液态玻璃不用改，改毛玻璃就行」——所以单开这一份，不碰三套共用的 liquid.css（那份里一条只挂在玻璃上的规则都
+   不许有，test_skin_parity.js 钉着），也不碰液态玻璃、纸各自那一份。
+
+   在 liquid.css、liquid-glass-react.css 之后引入：同样的东西写得更具体、更晚。 */
+
+/* ── 顶上那两枚胶囊：玻璃画在一层伪元素上 ───────────────────────────────────
+
+   胶囊一带 backdrop-filter，就成了它里面所有东西的 backdrop 根：从它里面弹出来的那两张单子（导入、组合）只磨得到
+   胶囊自己画的东西，胶囊外面——栏头、书名、工具栏——一点都磨不到，隔着单子那七八成的白原样透上来（用户截图：
+   「组合」单子底下的「陈现平399例第二版 1/4」和一排图标清清楚楚）。磨砂、底色、边光挪到伪元素上：伪元素不是单子的
+   祖先，胶囊也就不再是根。z-index: 0 让胶囊自成一层，-1 的伪元素落在按钮下面、不跑出胶囊。 */
+html[data-skin="liquid-math"]:not([data-glass="liquid"]) .pdf-bar-group {
+  position: relative;
+  z-index: 0;
+  background: transparent !important;
+  backdrop-filter: none !important;
+  box-shadow: none;
+}
+html[data-skin="liquid-math"]:not([data-glass="liquid"]) .pdf-bar-group::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--lg-glass);
+  backdrop-filter: var(--lg-chrome-blur);
+  box-shadow: var(--lg-rim), var(--lg-edge), var(--lg-float);
+  pointer-events: none;
+}
+
+/* ── 单子里两项之间的细线：一道直线 ─────────────────────────────────────────
+
+   liquid.css 画的是 inset 的 box-shadow：它沿着这一项 10px 的圆角走，到两头跟着往下弯，一张单子看着像一摞圆角框
+   （同一张截图）。这里画在伪元素上：一道直线，两头各让进 14px（和图标的左边一齐）。危险的那一项（栏里「⋯」那张
+   单子的最后一项）前面那道粗一点，在它上面那 4px 的空当正中。 */
+html[data-skin="liquid-math"]:not([data-glass="liquid"]) :is(.pdf-bar-menu-item, .pdf-slot-menu-item) {
+  position: relative;
+}
+html[data-skin="liquid-math"]:not([data-glass="liquid"]) .pdf-slot-menu-item:not([hidden]) ~ .pdf-slot-menu-item:not([hidden]),
+html[data-skin="liquid-math"]:not([data-glass="liquid"]) .pdf-bar-menu-item ~ .pdf-bar-menu-item {
+  box-shadow: none;
+}
+html[data-skin="liquid-math"]:not([data-glass="liquid"]) .pdf-slot-menu-item:not([hidden]) ~ .pdf-slot-menu-item:not([hidden])::before,
+html[data-skin="liquid-math"]:not([data-glass="liquid"]) .pdf-bar-menu-item ~ .pdf-bar-menu-item::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 14px;
+  right: 14px;
+  height: 0.5px;
+  background: var(--lg-separator);
+  pointer-events: none;
+}
+/* 选择器比上面那条具体，才压得过它的 top / height。 */
+html[data-skin="liquid-math"]:not([data-glass="liquid"]) .pdf-slot-menu-item:not([hidden]) ~ .pdf-slot-menu-item.is-danger:not([hidden])::before {
+  top: -2.5px;
+  height: 1px;
+}
+
+/* 减少透明度：胶囊的底在伪元素上，跟着换成实白（liquid.css 那一段换的是胶囊自己，这里它是透明的）。 */
+@media (prefers-reduced-transparency: reduce) {
+  html[data-skin="liquid-math"]:not([data-glass="liquid"]) .pdf-bar-group::before {
+    backdrop-filter: none;
+    background: #fff;
+  }
+}

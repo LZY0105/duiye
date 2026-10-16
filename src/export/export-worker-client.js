@@ -54,7 +54,7 @@ function spawn() {
 /**
  * 在后台线程里做一份 PDF。
  *
- * @param {'book'|'notebook'|'scratch'} job 做哪一种（对应 pdf-export.js 的 build*）
+ * @param {'book'|'pages'|'notebook'|'scratch'} job 做哪一种（对应 pdf-export.js 的 build*）
  * @param {object} input 交给 build* 的东西，要能被结构化复制：字节、笔迹、纸样
  * @param {{onProgress?: function(number, number), transfer?: Transferable[]}} [options]
  *   transfer 里的东西转手给后台线程，不复制——之后主线程这边就空了

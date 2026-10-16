@@ -48,6 +48,17 @@ import {
   transformSelection,
 } from './ink-selection.js';
 import { SelectionBar, SELECTION_ACTIONS } from './ink-selection-bar.js';
+import { RecognizeOverlay, copyText } from './ink-recognize.js';
+import {
+  OCR_ERRORS,
+  activeOcrProvider,
+  ocrAvailable,
+  onOcrAvailabilityChange,
+  recognizeRegion,
+} from '../ocr/ocr-service.js';
+import { printedExtent, typesetToStrokes } from '../ocr/ink-typeset.js';
+import { currentLang } from '../core/i18n.js';
+import Logger from '../core/logger.js';
 import {
   LASSO_STROKE,
   createTransform,
@@ -155,6 +166,84 @@ const COPY_OFFSET = 18;
  */
 const LOOP_SPACING = 2;
 
+/**
+ * 松手以后多久不再落笔，就把写字用的那张缓存图放掉（见 _releaseLayerCacheSoon），毫秒。
+ *
+ * 这张图跨笔留着：下一笔落笔时它还对得上，就不用把整页再画一遍——满是字的一页，那一遍在平板上要 40ms。停下来想一会儿
+ * 再写是常事，所以留一分钟；一分钟不写，多半是在看、在翻页，不必再占着一块和画布一样大的图。
+ */
+const LAYER_CACHE_IDLE_MS = 60000;
+
+/**
+ * 识别前截圈里那一块（主人那边按圈的大小重画这一页）最多等多久。截不出来——比如书页一直画不完——就说「等太久了」，
+ * 不让小条一直转下去。认本身另有 30 秒（ocr-service.js 的 OCR_TIMEOUT_MS）。
+ */
+const CAPTURE_TIMEOUT_MS = 15000;
+
+/**
+ * 认出来的字写成笔迹时，一个字（em）最小、最大多大（文档单位）。照书上量出来的太离谱——圈进了半页、只圈到一个点——就夹在
+ * 这中间。正文的字大约十几个单位高。
+ */
+const INK_EM_MIN = 4;
+const INK_EM_MAX = 96;
+
+/** 选区「大小」那一排：每按一下放大 / 缩小多少，最多放大、缩小到原来的几倍。 */
+const SELECTION_SCALE_STEP = 1.25;
+const SELECTION_SCALE_MIN = 0.2;
+const SELECTION_SCALE_MAX = 5;
+
+/** 一组笔迹的点的外框（不含笔的粗细）。 */
+function pointsBounds(strokes) {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const stroke of strokes) {
+    for (const p of stroke.points) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+  }
+  return Number.isFinite(minX) ? { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY } : null;
+}
+
+/** 等一件事，最多等 ms 毫秒；到点还没好就以 code 拒绝。 */
+function within(promise, ms, code) {
+  let timer = 0;
+  const late = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(code)), ms); });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+
+/** 每个点数组一个号，拿来认「这条笔迹的点被整个换过」（套索搬、转、缩，撤销）。见 _layerPrint。 */
+const pointsIds = new WeakMap();
+let nextPointsId = 1;
+function pointsIdOf(points) {
+  if (!points) return 0;
+  let id = pointsIds.get(points);
+  if (!id) { id = nextPointsId++; pointsIds.set(points, id); }
+  return id;
+}
+
+/** 一条笔迹在缓存图里长什么样，由这几样定，挨个记进 out。见 _layerPrint。 */
+function printStroke(out, stroke) {
+  const b = stroke.bounds;
+  out.push(
+    pointsIdOf(stroke.points), stroke.points?.length ?? 0,
+    b ? b.minX : null, b ? b.minY : null, b ? b.maxX : null, b ? b.maxY : null,
+    stroke.color, stroke.fill ?? null, stroke.width, stroke.opacity, stroke.tool,
+  );
+  return out;
+}
+
+/** 两串值一样长、逐个全等。 */
+function sameList(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
 export const INPUT_MODES = Object.freeze({
   /** Draw with any pointer. */
   ANY: 'any',
@@ -205,6 +294,12 @@ export class InkSurface {
     this.enabled = true;
 
     this._active = null;      // in-progress stroke
+    // 写字时已经落笔的那一层画成的一张图（见 _blitLayerCache）、过一会儿不写就把它放掉的计时，
+    // 和「这一笔建不出这张图，别再试了」。
+    this._layerCache = null;
+    this._layerCacheTimer = 0;
+    this._layerCacheOff = false;
+    this._dpr = 1;
     // 正在测的那一段橡皮路径（文档空间），最多两个点：上一次的位置和这一次。
     // 不是整条拖动轨迹 —— 见 _eraseAlong。
     this._eraserPath = null;
@@ -232,6 +327,30 @@ export class InkSurface {
       else if (action === SELECTION_ACTIONS.PASTE) this.pasteClipboard();
       else if (action === SELECTION_ACTIONS.COLOR_PICK) this.recolorSelection(value);
       else if (action === SELECTION_ACTIONS.FILL_PICK) this.refillSelection(value || null);
+      else if (action === SELECTION_ACTIONS.RECOGNIZE) this.recognizeRegion();
+      else if (action === SELECTION_ACTIONS.SIZE_UP) this.scaleSelection(SELECTION_SCALE_STEP);
+      else if (action === SELECTION_ACTIONS.SIZE_DOWN) this.scaleSelection(1 / SELECTION_SCALE_STEP);
+      else if (action === SELECTION_ACTIONS.SIZE_RESET) this.scaleSelection(1 / this._selectionScaleNow());
+    });
+    // 这一片从圈住（或者刚写成）到现在放大了多少倍：选区条「大小」那一排显示它，点一下百分比回到原来。换了一片就从 1 算起。
+    this._selectionScale = 1;
+    this._scaleKey = '';
+    // 识别的字刚写成笔迹：选区条这一次把「大小」那一排直接打开——人多半要调一下大小。
+    this._openSizeOnce = false;
+
+    // ── 识别（OCR）──
+    // 圈里没套到笔迹、只圈了书上印的字时，那一圈留下来当「识别区域」（接了识别才留，没接的时候照旧丢掉）。
+    this.regionLoop = null;
+    // 正在认的那一次：{ controller, loop, capture, result }。认着的时候套索那条小条收起来，换成识别那一套界面。
+    this._recognition = null;
+    this._recognizer = null;
+    // 识别接上、断开了：「识别」那颗按钮跟着出现、消失；断开时识别区域也没意义了。
+    onOcrAvailabilityChange(() => {
+      if (!this.canRecognize()) {
+        this._cancelRecognition();
+        this.regionLoop = null;
+      }
+      this.render();
     });
 
     // `erasing` and `selecting` are born here, through the same door every
@@ -331,10 +450,13 @@ export class InkSurface {
     // 形状那几颗圆点和套索的选区是同一类东西：「这一片现在还听我的」。所以翻页、
     // 换工具、剪切之后统统该走，而那些地方叫的都是这一扇门。
     const hadShape = this._dropShapeSelection();
-    if (!this.selection.length && !this._loop) {
+    // 识别区域、正在认的那一次也是「这一片」：翻页、换工具时一起走（认了一半的就取消）。
+    if (!this.selection.length && !this._loop && !this.regionLoop && !this._recognition) {
       if (hadShape) this.render();
       return;
     }
+    this._cancelRecognition();
+    this.regionLoop = null;
     this.selection = [];
     this.selectionLoop = null;
     this._bar?.hide();
@@ -395,6 +517,8 @@ export class InkSurface {
       this.canvas.style.width = `${cssWidth}px`;
       this.canvas.style.height = `${cssHeight}px`;
       this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      // 写字时那张缓存图按同一个比例画（_blitLayerCache）：和这块画布的变换记在同一处，两边不会对不上。
+      this._dpr = dpr;
     }
     this._viewport = { width: cssWidth, height: cssHeight };
     // The repaint stays: the transform may have moved even when the size did not.
@@ -421,9 +545,165 @@ export class InkSurface {
 
   // ── rendering ─────────────────────────────────────────────────────────────
 
+  /**
+   * 把已经落笔的那一层整张贴回来，不重画。
+   *
+   * 笔每动一下（pointermove，一秒一百多次）render 都要把这一页所有笔迹重新拼一遍、填一次：平板上量过，一页九百来个
+   * 圆，一次 5.5ms，一帧 8.3ms 里只剩不到 3ms。可写字的时候已经落笔的那些根本不会变，变的只有正在写的那一笔。所以
+   * 把这一层画进一块离屏画布（和这块画布一样大、同一个比例），写的时候每一下只把它整张贴回来，再画正在写的那一笔和
+   * 上面那几样（橡皮、套索、形状、选区……照旧）。
+   *
+   * 这张图跨笔留着。满是字的一页（平板上量过 2.1 万个圆）整页画一遍要 40ms，原来落笔、松手各来一遍，每一笔开头都晚
+   * 那么一截。现在松手只把新的那一笔画进图里（_settleLayerCache），下一笔落笔前核对一遍这一层是不是还是图里那个
+   * 样子（_startLayerCache），是就接着用。哪些东西变了算「不是」：
+   *   - 视图、画布大小、dpr、这一层、这一层的笔迹数组和条数（_layerCacheKey）——缩放、平移、转屏、翻页、撤销、擦、
+   *     别的栏拖进来；
+   *   - 每条笔迹的点数组、点数、边界、颜色、填充、粗细、透明度、工具（_layerPrint）——套索换色、搬、转、缩是原地改
+   *     那条笔迹的，数组和条数都不变。
+   * 写着的时候只比前一样（每一下都比一遍所有笔迹不划算，落笔时已经比过）；不写字的时候两样都比，对得上也贴图。
+   * 笔迹还是只存矢量：这张图只是拿来显示的，随时能从矢量重画出来。
+   *
+   * @param {boolean} build 对不上时当场重画这张图（写字、刚松手的时候）；false 时对不上就算了，调用方照旧整页画
+   * @returns {boolean} 贴上了；false 表示没贴（对不上，或者这儿建不了离屏画布），调用方照旧整页重画
+   */
+  _blitLayerCache(build) {
+    const main = this.canvas;
+    const target = this.ctx;
+    if (this._layerCacheOff || typeof target?.drawImage !== 'function') return false;
+    const key = this._layerCacheKey();
+    let cache = this._layerCache;
+    let fresh = !!cache?.key && sameList(key, cache.key);
+    if (fresh && !build && !sameList(this._layerPrint(), cache.print)) {
+      // 认出过一次不对，之后别每画一次都再比一遍所有笔迹：下一笔落笔重画。
+      cache.key = null;
+      fresh = false;
+    }
+    if (!fresh) {
+      if (!build) return false;
+      cache = cache || this._createLayerCache();
+      if (!cache) {
+        // 建不出来：这一笔就别每动一下都再试一遍，下一笔落笔再说（见 _startLayerCache）。
+        this._layerCacheOff = true;
+        return false;
+      }
+      if (cache.canvas.width !== main.width || cache.canvas.height !== main.height) {
+        cache.canvas.width = main.width;
+        cache.canvas.height = main.height;
+      }
+      cache.ctx.setTransform(this._dpr, 0, 0, this._dpr, 0, 0);
+      renderLayer(cache.ctx, this.layer, this.transform, this._viewport);
+      cache.key = key;
+      cache.print = this._layerPrint();
+      this._layerCache = cache;
+    }
+    // 按像素一比一整张盖上去：先清掉，变换、透明度、混合都回到默认，不然贴出来的和原来画的不是一个样。
+    target.save();
+    target.setTransform(1, 0, 0, 1, 0, 0);
+    target.globalAlpha = 1;
+    target.globalCompositeOperation = 'source-over';
+    target.clearRect(0, 0, main.width, main.height);
+    target.drawImage(cache.canvas, 0, 0);
+    target.restore();
+    return true;
+  }
+
+  /**
+   * 一块离屏画布，拿来存那张图。
+   *
+   * 这儿没有 2D 画布（jsdom 跑的测试）就不去建：建一块再要 2D 上下文，jsdom 会每次都喊一声「没实现」。
+   */
+  _createLayerCache() {
+    const doc = this.canvas.ownerDocument;
+    if (typeof doc?.defaultView?.CanvasRenderingContext2D !== 'function') return null;
+    const canvas = doc.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    return ctx ? { canvas, ctx, key: null, print: null } : null;
+  }
+
+  /** 那张图是照着哪个视图、哪块画布、哪一层、多少条笔迹画的。见 _blitLayerCache。 */
+  _layerCacheKey() {
+    const main = this.canvas;
+    const strokes = this.layer.getAll();
+    return [
+      this.layer, strokes, strokes.length,
+      this.transform.scale, this.transform.offsetX, this.transform.offsetY,
+      main.width, main.height, this._dpr, this._viewport.width, this._viewport.height,
+    ];
+  }
+
+  /** 这一层每条笔迹画出来长什么样由哪几样定，挨条记下来。见 _blitLayerCache。 */
+  _layerPrint() {
+    const out = [];
+    for (const stroke of this.layer.getAll()) printStroke(out, stroke);
+    return out;
+  }
+
+  /** 那张图现在还是这一层的样子吗：视图、条数，加每一条。 */
+  _layerCacheIntact() {
+    const cache = this._layerCache;
+    return !!cache?.key && sameList(this._layerCacheKey(), cache.key)
+      && sameList(this._layerPrint(), cache.print);
+  }
+
+  /**
+   * 落笔了：那张图写着的时候别被放掉；两笔之间这一层被别的路改过（套索换色、搬动，另一栏改了同一页……），这一笔
+   * 先把它重画（见 _blitLayerCache）。没改过就接着用，不用把整页再画一遍。
+   */
+  _startLayerCache() {
+    clearTimeout(this._layerCacheTimer);
+    this._layerCacheTimer = 0;
+    this._layerCacheOff = false;
+    if (this._layerCache && !this._layerCacheIntact()) this._layerCache.key = null;
+  }
+
+  /**
+   * 松手了，那一笔刚落进层里：图要是一直对得上（`intact`，落进去之前量的），新的那一笔又落在最上面，就只把它画进
+   * 图里——和整页重画出来的一个样，因为它本来就是最后画的那一条。不然让这张图作废，松手那一下重画。
+   *
+   * @param {Object} stroke 刚写完的那一笔
+   * @param {boolean} intact 落进层里之前，图还是这一层的样子
+   */
+  _settleLayerCache(stroke, intact) {
+    const cache = this._layerCache;
+    if (cache) {
+      const strokes = this.layer.getAll();
+      if (intact && strokes[strokes.length - 1] === stroke) {
+        cache.ctx.setTransform(this._dpr, 0, 0, this._dpr, 0, 0);
+        drawStroke(cache.ctx, stroke, this.transform);
+        cache.key = this._layerCacheKey();
+        printStroke(cache.print, stroke);
+      } else {
+        cache.key = null;
+      }
+    }
+    this._releaseLayerCacheSoon();
+  }
+
+  /**
+   * 松手以后过一会儿不写，就把那张图放掉：一块和画布一样大的位图，两栏加草稿纸各一块，十几、几十兆。接着写的时候
+   * 留着它，落笔不用重画；停下来了就不必一直占着。
+   */
+  _releaseLayerCacheSoon() {
+    clearTimeout(this._layerCacheTimer);
+    this._layerCacheTimer = setTimeout(() => {
+      this._layerCacheTimer = 0;
+      const cache = this._layerCache;
+      this._layerCache = null;
+      if (cache?.canvas) { cache.canvas.width = 0; cache.canvas.height = 0; }
+    }, LAYER_CACHE_IDLE_MS);
+  }
+
   render() {
+    this._render(!!this._active);
+  }
+
+  /** @param {boolean} buildCache 那张图对不上时可以当场重画它（写字、刚松手）。见 _blitLayerCache。 */
+  _render(buildCache) {
     if (!this._viewport) return;
-    renderLayer(this.ctx, this.layer, this.transform, this._viewport);
+    // 已经落笔的那一层不重画：贴一张缓存的图（见 _blitLayerCache）。贴不上就照旧整页重画。
+    if (!this._blitLayerCache(buildCache)) {
+      renderLayer(this.ctx, this.layer, this.transform, this._viewport);
+    }
     // The in-progress stroke is drawn on top so it appears live, before it is
     // committed to the layer on pointerup.
     if (this._active && isDrawable(this._active)) {
@@ -468,7 +748,10 @@ export class InkSurface {
         this.ctx, shapeHandles(marked), this.transform, this._shapeHandleRadius(),
       );
     }
-    if (this.selection.length) this._drawSelection();
+    // 识别区域（没套到笔迹的一圈）也走这里：同一种站住了的套索线，只是没有把手。
+    if (this.selection.length || this.regionLoop) this._drawSelection();
+    // 认着、或者结果单子开着：缩放、平移了，扫光和单子跟着圈走。
+    if (this._recognition && this._recognizer) this._recognizer.place(this._screenLoop(this._recognition.loop), this._viewport);
     this._placeBar();
   }
 
@@ -486,8 +769,18 @@ export class InkSurface {
     // 手还在动就什么都不露：正在画的那一圈还不算选区，正在搬的那一片人看的是
     // 它落到哪儿。
     if (this._grab || this._loop) { this._bar.hide(); return; }
+    // 认着、或者结果单子开着：条让位给识别那一套界面，不然两样东西挤在圈旁边。
+    if (this._recognition) { this._bar.hide(); return; }
 
     const loop = this.selectionLoop;
+    // 识别区域（没套到笔迹的一圈）：条上只有「识别」。
+    if (!this.selection.length && this.regionLoop && this.selecting && this.canRecognize() && this._viewport) {
+      const region = polygonBounds(this.regionLoop);
+      const a = documentToScreen(this.transform, region.minX, region.minY);
+      const b = documentToScreen(this.transform, region.maxX, region.maxY);
+      this._bar.place({ minX: a.x, minY: a.y, maxX: b.x, maxY: b.y }, this._viewport, { mode: 'region' });
+      return;
+    }
     if (!this.selection.length || !loop || loop.length < 3) {
       // 没选东西，但手里还捏着剪下来的一片：那就只剩一个粘贴。剪下来却放不下去
       // 的剪切，和删除没有区别。
@@ -511,11 +804,64 @@ export class InkSurface {
     const a = documentToScreen(this.transform, docBox.minX, docBox.minY);
     const b = documentToScreen(this.transform, docBox.maxX, docBox.maxY);
     const { canFill, current } = this._selectionPaint();
+    const openSize = this._openSizeOnce;
+    this._openSizeOnce = false;
     this._bar.place(
       { minX: a.x, minY: a.y, maxX: b.x, maxY: b.y },
       this._viewport || { width: 0, height: 0 },
-      { mode: 'selection', colors: this._swatches, canFill, current },
+      {
+        mode: 'selection', colors: this._swatches, canFill, current, recognize: this.canRecognize(),
+        scale: this._selectionScaleNow(), openSize,
+      },
     );
+  }
+
+  /** 这一片眼下是圈住时的几倍大。换了一片（选中的笔迹不是同一批了）就从 1 算起。 */
+  _selectionScaleNow() {
+    const key = this.selection.join(',');
+    if (key !== this._scaleKey) {
+      this._scaleKey = key;
+      this._selectionScale = 1;
+    }
+    return this._selectionScale;
+  }
+
+  /**
+   * 把选中的这一片按 factor 放大、缩小，以它的中心为准；笔的粗细跟着变，套索线跟着变。一下是一步撤销。
+   * 总倍数夹在 SELECTION_SCALE_MIN..MAX 之间（相对圈住的时候），到头了再按就不动。
+   * @returns {boolean} 动了没有
+   */
+  scaleSelection(factor) {
+    if (!this.selection.length || !this.selectionLoop || !(factor > 0)) return false;
+    const current = this._selectionScaleNow();
+    const next = Math.min(SELECTION_SCALE_MAX, Math.max(SELECTION_SCALE_MIN, current * factor));
+    const step = next / current;
+    if (Math.abs(step - 1) < 1e-6) return false;
+    const origin = boundsCentre(polygonBounds(this.selectionLoop) || this.selectionBox());
+    if (!origin) return false;
+    const before = snapshotStrokes(this.layer, this.selection);
+    const loopBefore = this.selectionLoop.map((p) => ({ ...p }));
+    const transform = { origin, scale: step };
+    if (!transformSelection(this.layer, null, this.selection, transform)) return false;
+    this.selectionLoop = transformPolygon(this.selectionLoop, transform);
+    this.history?.recordTransform(before, snapshotStrokes(this.layer, this.selection), {
+      loopBefore,
+      loopAfter: this.selectionLoop.map((p) => ({ ...p })),
+    });
+    // 量出来的倍数用 next，不用 current * step：一路乘下去的误差会让「100%」变成「99%」。
+    this._selectionScale = Math.abs(next - 1) < 1e-6 ? 1 : next;
+    this._anchor = handleIndex(this.selectionLoop);
+    this.render();
+    this.handlers.onChange?.(this.layer);
+    return true;
+  }
+
+  /** 眼下看得见的那一块（文档坐标）。 */
+  _visibleDocRect() {
+    if (!this._viewport) return null;
+    const a = screenToDocument(this.transform, 0, 0);
+    const b = screenToDocument(this.transform, this._viewport.width, this._viewport.height);
+    return { minX: Math.min(a.x, b.x), minY: Math.min(a.y, b.y), maxX: Math.max(a.x, b.x), maxY: Math.max(a.y, b.y) };
   }
 
   /**
@@ -613,6 +959,247 @@ export class InkSurface {
     if (!strokes.length) return false;
     putOnClipboard(strokes);
     return this.deleteSelection();
+  }
+
+  // ── 识别（OCR）────────────────────────────────────────────────────────────
+
+  /**
+   * 能不能识别：接了识别引擎（src/ocr/ocr-service.js），而且这块画布的主人会把圈里那一块页面截给我
+   * （handlers.captureRegion——书的那一栏有；草稿纸上没有「文件里的字」，现在没有）。
+   */
+  canRecognize() {
+    return ocrAvailable() && typeof this.handlers.captureRegion === 'function';
+  }
+
+  /** 识别那一套界面：头一次用到才搭。 */
+  _ensureRecognizer() {
+    if (!this._recognizer) {
+      this._recognizer = new RecognizeOverlay(this.canvas.parentElement, {
+        onCancel: () => { this._cancelRecognition(); this.render(); },
+        onClose: () => { this._cancelRecognition(); this.render(); },
+        onRetry: () => { this.recognizeRegion(); },
+        onCopy: (items) => this._copyRecognized(items),
+        onConvert: (items) => this._convertRecognized(items),
+      });
+    }
+    return this._recognizer;
+  }
+
+  /** 一圈文档坐标的点 → 屏幕上（相对画布的 CSS 像素）。 */
+  _screenLoop(loop) {
+    return (loop || []).map((p) => documentToScreen(this.transform, p.x, p.y));
+  }
+
+  /** 引擎给的框（截图上的像素）→ 屏幕上的框。 */
+  _imageBoxToScreen(box, capture) {
+    if (!box || !capture?.box || !(capture.scale > 0)) return null;
+    const x0 = capture.box.minX + box.x / capture.scale;
+    const y0 = capture.box.minY + box.y / capture.scale;
+    const a = documentToScreen(this.transform, x0, y0);
+    const b = documentToScreen(this.transform, x0 + box.width / capture.scale, y0 + box.height / capture.scale);
+    return { x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y };
+  }
+
+  /**
+   * 认圈里那一块：套索那条小条上「识别」按下去走到这里。
+   *
+   * 截图（主人给的 captureRegion）→ 交给引擎（recognizeRegion）→ 界面上扫、出结果、或者说没认出 / 没认成。期间人可以
+   * 取消；又落笔、又圈了一块、翻了页、换了工具也都算取消（见 clearSelection、pointerdown）。旧的那一次被取消以后才回来
+   * 的结果一律不要——每一步都先问「我还是不是正在认的那一次」。
+   *
+   * @returns {Promise<boolean>} 认出了东西（单子摆出来了）
+   */
+  async recognizeRegion() {
+    const loop = this.selectionLoop || this.regionLoop;
+    if (!loop || loop.length < 3 || !this.canRecognize()) return false;
+    this._cancelRecognition();
+    const ui = this._ensureRecognizer();
+    const job = { controller: new AbortController(), loop: loop.map((p) => ({ ...p })), capture: null, result: null };
+    this._recognition = job;
+    this._bar?.hide();
+    ui.scan(this._screenLoop(job.loop), this._viewport);
+    // 圈里的笔迹也给引擎（矢量，文档坐标）：认手写的引擎用得上，认印刷体的不看它。
+    const strokes = this.selection
+      .map((id) => this.layer.getById(id))
+      .filter(Boolean)
+      .map(serializeStroke);
+    try {
+      const capture = await within(
+        Promise.resolve(this.handlers.captureRegion({ polygon: job.loop, strokes })),
+        CAPTURE_TIMEOUT_MS, OCR_ERRORS.TIMEOUT,
+      );
+      if (job !== this._recognition) return false;
+      job.capture = capture;
+      // 书上印的东西有多大，现在就量：图刚画好，读得出像素。等人挑完、点「转为笔迹」再读，中间可能隔了好一阵。
+      job.printed = printedExtent(capture);
+      const result = await recognizeRegion(
+        { ...capture, polygon: job.loop, strokes, mode: 'auto', lang: currentLang() },
+        { signal: job.controller.signal, onProgress: (f) => { if (job === this._recognition) ui.progress(f); } },
+      );
+      if (job !== this._recognition) return false;
+      job.result = result;
+      if (!result.items.length) {
+        ui.empty();
+        return false;
+      }
+      ui.results(result.items, {
+        mock: !!activeOcrProvider()?.mock,
+        boxes: result.items.map((item) => this._imageBoxToScreen(item.box, capture)),
+      });
+      return true;
+    } catch (error) {
+      if (job !== this._recognition) return false;
+      const code = error?.message;
+      if (code === OCR_ERRORS.CANCELLED) {
+        this._cancelRecognition();
+        this.render();
+        return false;
+      }
+      // 圈在书页外面（页边的空白、两页之间）：那儿本来就没有字，说「没认出」，不说「没认成」、也不给「再试一次」。
+      if (code === 'CAPTURE_OUTSIDE_PAGE') {
+        ui.empty();
+        return false;
+      }
+      ui.error(Object.values(OCR_ERRORS).includes(code) ? code : OCR_ERRORS.FAILED);
+      return false;
+    }
+  }
+
+  /** 不认了：引擎那边停下，界面收起。识别区域留着（人可以再点一次「识别」）。 */
+  _cancelRecognition() {
+    const job = this._recognition;
+    if (!job) return;
+    this._recognition = null;
+    job.controller.abort();
+    this._recognizer?.close();
+  }
+
+  /** 复制挑中的几条：文字照原样，公式是 $LaTeX$——粘到别处还是公式。一条一行。 */
+  async _copyRecognized(items) {
+    const text = items.map((item) => (item.kind === 'math' ? `$${item.latex}$` : item.text)).join('\n');
+    return copyText(text);
+  }
+
+  /**
+   * 写出来的字多大（文档单位）：引擎给了每一条的框，就照印在书上的字高；没给，就按圈的高度分给这几条。
+   */
+  _estimateEm(items, capture, loop) {
+    const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    const heights = items.map((item) => item.box?.height).filter((h) => h > 0)
+      .map((h) => h / (capture?.scale || 1)).sort((a, b) => a - b);
+    if (heights.length) return clamp(heights[Math.floor(heights.length / 2)] * 0.8, 6, 64);
+    const box = polygonBounds(loop);
+    const h = box ? box.maxY - box.minY : 40;
+    return clamp((h / Math.max(1, items.length)) * 0.55, 6, 48);
+  }
+
+  /**
+   * 挑中的几条写成笔迹，一步撤销；写好的那一片直接是选中的（套索线圈着），「大小」那一排打开着，人接着就能拖、调大小、换色。
+   *
+   * 多大：照书上印的那么大——量截图里那一条的墨（printedExtent），把写出来的那一条缩放到正好放得进那么大的地方（宽、高
+   * 取小的那个比例）。量不到（模拟识别的假图）就照估的字号。摆在哪：竖着一条接一条，左边对齐书上那一条；整块默认在圈的下面，
+   * 下面出了屏幕而上面放得下就摆到上面，右边出了屏幕就往左挪——写出来的东西得看得见。
+   * @returns {Promise<boolean>}
+   */
+  async _convertRecognized(items) {
+    const job = this._recognition;
+    if (!job || !items?.length) return false;
+    const region = polygonBounds(job.loop);
+    const em = this._estimateEm(items, job.capture, job.loop);
+    let typeset;
+    try {
+      typeset = await typesetToStrokes(items, { em, color: this.color, width: Math.max(0.5, em * 0.075) });
+    } catch (_) {
+      if (job === this._recognition) this._recognizer?.error('TYPESET_FAILED');
+      return false;
+    }
+    if (job !== this._recognition) return false;
+    const groups = (typeset?.groups?.length ? typeset.groups : [{ strokes: typeset?.strokes || [], em }])
+      .filter((g) => g.strokes?.length);
+    if (!groups.length) {
+      this._recognizer?.error('TYPESET_FAILED');
+      return false;
+    }
+
+    // 一条对一条时才量得出「这一条在书上多大」：引擎给了框就量框里的；只有一条就是截图里的全部（截图时已经量好）。
+    // 对不上（排版器把几条合成了一组）就都按估的字号。
+    const printed = groups.length !== items.length ? [] : items.map((item) => (item.box
+      ? printedExtent(job.capture, item.box) : (items.length === 1 ? job.printed || printedExtent(job.capture) : null)));
+    const placed = groups.map((g, i) => {
+      const box = pointsBounds(g.strokes);
+      const gEm = g.em || em;
+      const target = printed[i];
+      let scale = 1;
+      if (target && box && box.width > 0 && box.height > 0) {
+        scale = Math.min(target.width / box.width, target.height / box.height);
+      } else if (target && box && box.width > 0) {
+        scale = target.width / box.width;
+      }
+      scale = Math.min(INK_EM_MAX / gEm, Math.max(INK_EM_MIN / gEm, scale));
+      return { strokes: g.strokes, box, scale, left: target ? target.x : region.minX, em: gEm * scale };
+    }).filter((p) => p.box);
+    if (!placed.length) {
+      this._recognizer?.error('TYPESET_FAILED');
+      return false;
+    }
+
+    Logger.info('OCR', `转为笔迹：${placed.map((p, i) => `第 ${i + 1} 条 ${printed[i]
+      ? `书上 ${printed[i].width.toFixed(1)}×${printed[i].height.toFixed(1)}` : '量不到书上的大小'}，写成 `
+      + `${(p.box.width * p.scale).toFixed(1)}×${(p.box.height * p.scale).toFixed(1)}`).join('；')}`);
+
+    const gapOf = (p) => p.em * 0.4;
+    const blockHeight = placed.reduce((h, p, i) => h + p.box.height * p.scale + (i ? gapOf(p) : 0), 0);
+    const view = this._visibleDocRect();
+    let top = region.maxY + gapOf(placed[0]);
+    const above = region.minY - gapOf(placed[0]) - blockHeight;
+    if (view && top + blockHeight > view.maxY && above >= view.minY) top = above;
+    const blockLeft = Math.min(...placed.map((p) => p.left));
+    const blockRight = Math.max(...placed.map((p) => p.left + p.box.width * p.scale));
+    const shift = view && blockRight > view.maxX ? Math.max(view.minX - blockLeft, view.maxX - blockRight) : 0;
+
+    const strokes = [];
+    placed.forEach((p, i) => {
+      if (i) top += gapOf(p);
+      for (const stroke of p.strokes) {
+        for (const pt of stroke.points) {
+          pt.x = p.left + shift + (pt.x - p.box.minX) * p.scale;
+          pt.y = top + (pt.y - p.box.minY) * p.scale;
+        }
+        stroke.width = Math.max(0.3, stroke.width * p.scale);
+        recomputeBounds(stroke);
+        strokes.push(stroke);
+      }
+      top += p.box.height * p.scale;
+    });
+
+    this.history.beginBatch();
+    for (const stroke of strokes) {
+      this.layer.add(stroke);
+      this.history.recordAdd(stroke, this.layer.strokes.length - 1);
+    }
+    this.history.endBatch();
+
+    this._cancelRecognition();
+    this.regionLoop = null;
+    this.selection = strokes.map((st) => st.id);
+    const box = strokes.reduce((acc, st) => (st.bounds ? {
+      minX: Math.min(acc.minX, st.bounds.minX), minY: Math.min(acc.minY, st.bounds.minY),
+      maxX: Math.max(acc.maxX, st.bounds.maxX), maxY: Math.max(acc.maxY, st.bounds.maxY),
+    } : acc), { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity });
+    const pad = 6;
+    this.selectionLoop = [
+      { x: box.minX - pad, y: box.minY - pad },
+      { x: box.maxX + pad, y: box.minY - pad },
+      { x: box.maxX + pad, y: box.maxY + pad },
+      { x: box.minX - pad, y: box.maxY + pad },
+    ];
+    this._anchor = -1;
+    this._scaleKey = this.selection.join(',');
+    this._selectionScale = 1;
+    this._openSizeOnce = true;
+    this.render();
+    this.handlers.onChange?.(this.layer);
+    return true;
   }
 
   /**
@@ -741,12 +1328,15 @@ export class InkSurface {
    * does in a single movement.
    */
   _drawSelection() {
-    const loop = this.selectionLoop;
+    // 识别区域（接了识别、圈里没套到笔迹）也是一圈站住了的套索线：同一个画法，但没有把手——里面没有能搬的东西。
+    const region = !this.selection.length;
+    const loop = region ? this.regionLoop : this.selectionLoop;
     if (!loop || loop.length < 3) return;
 
     // The SAME renderer that drew it while the hand was moving, so releasing
     // the stylus does not change how the loop looks. It only closes.
     drawLasso(this.ctx, loop, this.transform, { closed: true });
+    if (region) return;
 
     const handle = this._handleAt();
     if (!handle) return;
@@ -893,6 +1483,8 @@ export class InkSurface {
       this._pointerId = e.pointerId;
       c.setPointerCapture(e.pointerId);
       const pt = this._docPoint(e);
+      // 笔又落到纸上了：认着的取消、结果单子收起——人已经去做下一件事了。（手指平移、缩放不走这里，那时界面跟着圈挪。）
+      if (this._recognition) this._cancelRecognition();
 
       if (this.selecting) {
         this._beginSelectionGesture(pt);
@@ -930,6 +1522,8 @@ export class InkSurface {
         opacity: this.opacity,
       });
       appendPoint(this._active, pt.x, pt.y, InkSurface._pressure(e));
+      // 这一笔写的时候只贴已有那一层的图：按这一刻的层重画一张（见 _blitLayerCache）。
+      this._startLayerCache();
       this.render();
     });
 
@@ -1085,6 +1679,9 @@ export class InkSurface {
         // empty page is not a selection, and leaving it on screen would offer
         // a handle that transforms nothing.
         this.selectionLoop = this.selection.length ? loop : null;
+        // 接了识别：没套到笔迹的那一圈留下来当识别区域——人圈的多半是书上印的字和公式，要认的正是它。
+        // 它不是选区：没有把手，不能搬。
+        this.regionLoop = !this.selection.length && loop.length >= 3 && this.canRecognize() ? loop : null;
         this._anchor = this.selectionLoop ? handleIndex(loop) : -1;
         this.render();
         return;
@@ -1124,12 +1721,22 @@ export class InkSurface {
 
       const stroke = this._active;
       this._active = null;
-      if (stroke && isDrawable(stroke)) {
+      if (!stroke) {
+        this.render();
+        return;
+      }
+      // 落进层里之前先量：那张图在这一笔写着的时候还是不是这一层的样子（另一栏可能同时改了同一页）。
+      const intact = this._layerCacheIntact();
+      const drawable = isDrawable(stroke);
+      if (drawable) {
         const index = this.layer.add(stroke);
         this.history.recordAdd(stroke, index);
-        this.handlers.onChange?.(this.layer);
       }
-      this.render();
+      // 新的那一笔画进那张图里，贴图代替整页重画；图要是对不上了，这一下重画它，下一笔落笔就不用再画。
+      // 赶在 onChange 之前：外面听到「变了」要是当场重画，图已经是新的。
+      this._settleLayerCache(stroke, intact);
+      if (drawable) this.handlers.onChange?.(this.layer);
+      this._render(true);
     };
 
     c.addEventListener('pointerup', finish);
@@ -1197,6 +1804,9 @@ export class InkSurface {
 
     this.selection = [];
     this.selectionLoop = null;
+    // 又圈了一块：上一块的识别区域不要了，认了一半的取消。
+    this._cancelRecognition();
+    this.regionLoop = null;
     this._anchor = -1;
     this._loopFrom = pt;
     this._loop = this.lassoShape === 'rect' ? rectLoop(pt, pt) : [pt];
@@ -1761,6 +2371,7 @@ export class InkSurface {
   undo() {
     const op = this.history.undo();
     if (!op) return false;
+    this._scaleKey = '';
     this._syncSelectionTo(op, 'loopBefore');
     this.render();
     this.handlers.onChange?.(this.layer);
@@ -1770,6 +2381,7 @@ export class InkSurface {
   redo() {
     const op = this.history.redo();
     if (!op) return false;
+    this._scaleKey = '';
     this._syncSelectionTo(op, 'loopAfter');
     this.render();
     this.handlers.onChange?.(this.layer);

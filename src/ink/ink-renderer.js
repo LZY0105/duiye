@@ -82,6 +82,99 @@ const norm = (x, y) => {
 };
 
 /**
+ * 细分后的折线离那条平滑曲线最远差多少（屏幕像素）。0.25px：放大看也是一条光滑的边；又只在弯的地方加点——
+ * 写得慢、采样密的地方一个点都不多（见 smoothSamples）。
+ */
+const SMOOTH_TOLERANCE_PX = 0.25;
+/** 一段曲线最多切成几小段：急转弯时控制点离弦很远，不封顶的话一个转角能切出上百段。 */
+const MAX_SPLIT = 16;
+
+/**
+ * 一条手写笔画的中心线：过相邻采样点中点的二次曲线，每个采样点是它那一段的控制点——和等宽的笔（荧光笔）
+ * 一直用的是同一种平滑。按每一段弯的程度细分成足够密的点，粗细（r）沿同一条曲线插值，交给 traceStroke 拼。
+ *
+ * 人说「笔迹转折还略显突兀，不够精细」：变粗细的笔（钢笔、铅笔、马克笔）原来是拿原始采样点一段一段连直线、
+ * 每个点上盖一个圆——写快了采样点隔得远，弯的地方就是一截一截的折线，转角处一个硬拐。现在转角被这条曲线
+ * 圆过去，弯处是光滑的边。
+ *
+ * 拼法还是 traceStroke 那一套（凸的小块并起来、一次填完），平滑只改「沿着哪条线拼」：急转处不会鼓包的那条
+ * 保证不受影响。两头仍是第一个、最后一个采样点，笔画不会短一截。
+ *
+ * 加多少点由这一段离它的弦有多远定：二次曲线离弦最远是「控制点到弦中点距离」的一半，均分成 k 段之后每段降到
+ * 1/k²——k 取到每段都不超过 tolerance。直的、采样密的地方 k = 1，点数和原来一样。
+ *
+ * 导出 PDF 也用它（src/export/pdf-export.js），按文档坐标给 tolerance：导出来的笔迹和屏幕上是同一条曲线。
+ *
+ * @param {Array<{x: number, y: number, r: number}>} pts
+ * @param {number} [tolerance] 和 pts 同一个单位
+ * @returns {Array<{x: number, y: number, r: number}>}
+ */
+export function smoothSamples(pts, tolerance = SMOOTH_TOLERANCE_PX) {
+  const n = pts.length;
+  if (n < 3) return pts;
+  const out = [pts[0]];
+  let from = pts[0];
+  for (let i = 1; i < n - 1; i++) {
+    const c = pts[i];
+    const next = pts[i + 1];
+    const to = { x: (c.x + next.x) / 2, y: (c.y + next.y) / 2, r: (c.r + next.r) / 2 };
+    const dev = Math.hypot(c.x - (from.x + to.x) / 2, c.y - (from.y + to.y) / 2) / 2;
+    const k = Math.min(MAX_SPLIT, Math.max(1, Math.ceil(Math.sqrt(dev / tolerance))));
+    for (let j = 1; j <= k; j++) {
+      const t = j / k;
+      const u = 1 - t;
+      const a = u * u;
+      const b = 2 * u * t;
+      const d = t * t;
+      out.push({
+        x: a * from.x + b * c.x + d * to.x,
+        y: a * from.y + b * c.y + d * to.y,
+        r: a * from.r + b * c.r + d * to.r,
+      });
+    }
+    from = to;
+  }
+  out.push(pts[n - 1]);
+  return out;
+}
+
+/**
+ * 一笔在这一个视图下拼成什么样（中心线上的点和半宽），每一笔记一份。
+ *
+ * 写字时整页每一帧都重画，已经落了笔的那些每一帧都一样——每一笔重新换算、重新平滑是白算（一整页六百笔，桌面
+ * 上平滑一遍 2.5ms，平板慢几倍）。按「点数、边界、粗细、工具、视图」记：点被原地挪过（拖着搬、粘贴、拖进另一
+ * 栏、缩放）时边界一定跟着变（那几处都 recomputeBounds），正在写的那一笔点数在变，转、缩会换一个新的点数组——
+ * 哪一样对不上就重算。形状不走这里（不平滑；拖顶点时可能只动中间某个点）。
+ */
+const outlines = new WeakMap();
+
+function outlineSamples(stroke, transform, points) {
+  const b = stroke.bounds;
+  const hit = outlines.get(points);
+  if (hit && hit.length === points.length && hit.scale === transform.scale
+    && hit.offsetX === transform.offsetX && hit.offsetY === transform.offsetY
+    && hit.width === stroke.width && hit.tool === stroke.tool
+    && hit.minX === b?.minX && hit.minY === b?.minY && hit.maxX === b?.maxX && hit.maxY === b?.maxY) {
+    return hit.pts;
+  }
+  const pts = smoothSamples(screenSamples(stroke, transform, points));
+  outlines.set(points, {
+    length: points.length,
+    scale: transform.scale,
+    offsetX: transform.offsetX,
+    offsetY: transform.offsetY,
+    width: stroke.width,
+    tool: stroke.tool,
+    minX: b?.minX,
+    minY: b?.minY,
+    maxX: b?.maxX,
+    maxY: b?.maxY,
+    pts,
+  });
+  return pts;
+}
+
+/**
  * A variable-width stroke, as the UNION of local pieces in one path.
  *
  * Two earlier attempts at this are worth recording, because each fixed a real
@@ -367,7 +460,12 @@ export function drawStroke(ctx, stroke, transform) {
   // Pressure-varying width: one filled outline, not one stroked curve per
   // sample. A single path can only carry one lineWidth, which is what forced
   // the old per-segment loop and its string of overlapping caps.
-  const pts = screenSamples(stroke, transform, points);
+  //
+  // 手写的沿平滑后的中心线拼（smoothSamples，按笔记一份：outlineSamples）；形状（矩形、三角形……）的角是
+  // 真的角，不能削圆。
+  const pts = stroke.shape
+    ? screenSamples(stroke, transform, points)
+    : outlineSamples(stroke, transform, points);
   if (pts.length === 1) {
     ctx.beginPath();
     ctx.arc(pts[0].x, pts[0].y, Math.max(0.4, pts[0].r), 0, Math.PI * 2);

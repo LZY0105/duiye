@@ -357,6 +357,13 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 2px;
+  /* 单子比屏幕还高时（毛玻璃、纸里单子是自己滚的：一列 flex、限高），flex 先压能滚的孩子——自己能滚的
+     就这一块，它的最小高度是 0。格子又是 overflow: hidden（最小高度也是 0），网格就跟着把行压得比格子
+     还矮：底下那行名字只剩上半截（用户截图：平板上格子 58px，要 66px；「笔记本」那一页多一栏页数，压得
+     更狠）。液态玻璃里单子不限高、由外面那层滚，所以没有。
+     不让压：单子比屏幕高就单子自己滚；这一块自己的 168px 到了，行也照样装得下格子，多出来的在这里面滚。 */
+  flex: none;
+  grid-auto-rows: max-content;
 }
 
 .create-style-tile {

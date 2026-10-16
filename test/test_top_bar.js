@@ -330,6 +330,49 @@ await test('JS 那边照旧当场改状态，不等动画', () => {
   assert.ok(/menu\.hidden = true;/.test(ui));
 });
 
+await test('单子开着时，横杠整层抬到浮着的工具栏上面（「导入」那张的图标不再压在贴左边的工具栏底下）', () => {
+  const zOf = (css, selector) => {
+    const at = css.indexOf(`${selector} {`);
+    assert.ok(at >= 0, selector);
+    return Number(/z-index:\s*(\d+)/.exec(css.slice(at, css.indexOf('}', at)))[1]);
+  };
+  const pdf = $read('src/styles/pdf.css').replace(/\r\n/g, '\n');
+  const ink = $read('src/styles/ink-toolbar.css').replace(/\r\n/g, '\n');
+  const lifted = zOf(pdf, '.pdf-page-bar:has(.pdf-bar-menu:not([hidden]))');
+  const resting = zOf(pdf, '.pdf-page-bar');
+  assert.ok(lifted > zOf(ink, '.ink-toolbar'), '高过浮着的工具栏');
+  assert.ok(lifted > zOf(ink, '.ink-toolbar.is-perched'), '也高过停进这一排的工具栏');
+  assert.ok(resting < zOf(ink, '.ink-toolbar'), '平时横杠还在工具栏底下，谁在上面不变');
+});
+
+await test('右边那一行字：说完了的话（「已换成…」）留一会儿就淡掉；还在进行的（「正在…」）一直留着，等下一句换掉它', () => {
+  // 人说「这个通知改为停留一段时间就消失」（截图：「已换成『高代那一套』」一直挂在顶栏右边）。
+  const code = $read('src/pdf/pdf-workspace-ui.js').replace(/\r\n/g, '\n');
+  const num = (name) => Number(new RegExp(`const ${name} = (\\d+);`).exec(code)?.[1]);
+  const linger = num('STATUS_LINGER_MS');
+  const errorLinger = num('STATUS_ERROR_LINGER_MS');
+  const fade = num('STATUS_FADE_MS');
+  assert.ok(linger >= 3000 && linger <= 6000, `留 ${linger}ms：够读完，不挂成旧闻`);
+  assert.ok(errorLinger > linger, '出错的留久一点，要读原因');
+  const fn = code.slice(code.indexOf('function setStatus('), code.indexOf('function showProgress('));
+  assert.ok(/\{ sticky = false \} = \{\}/.test(fn) && /if \(!message \|\| sticky\) return;/.test(fn));
+  assert.ok(/clearTimeout\(statusTimer\)/.test(fn), '新的一句来了，上一句的计时作废');
+  assert.ok(/shelfUsageText/.test(fn), '书架头上那一行说完了换回份数');
+  assert.ok(/shelfUsageText = t\('shelf\.usage'/.test(code));
+  // 还在进行的事一律 showProgress：没有一句「正在…」还走会淡掉的那一条。
+  assert.ok(!/setStatus\(`正在/.test(code) && !/setStatus\('正在/.test(code));
+  for (const key of ['combo.applying', 'picker.waitingGrant', 'export.waiting', 'export.working', 'export.progress', 'export.saving']) {
+    assert.ok(code.includes(`showProgress(t('${key}'`), key);
+  }
+  assert.ok(/setStatus\(missing\s*\?/.test(code) || /setStatus\(missing/.test(code), '「已换成…」走会淡掉的那一条');
+  const css = $read('src/styles/pdf.css').replace(/\r\n/g, '\n');
+  assert.ok(/\.pdf-status\.is-fading \{ opacity: 0; \}/.test(css));
+  // 行首那一条（.pdf-bar-trail > .pdf-status 也以「.pdf-status {」结尾）。
+  const at = css.indexOf('\n.pdf-status {');
+  const rule = css.slice(at, css.indexOf('}', at));
+  assert.ok(rule.includes(`transition: opacity ${fade / 1000}s ease;`), '淡掉那一段和 JS 等的一样长');
+});
+
 console.log('\n═══════════════════════════════════════════════════════════════');
 console.log(`  ${passed} passed, ${failed} failed`);
 console.log('═══════════════════════════════════════════════════════════════');

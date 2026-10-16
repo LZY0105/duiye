@@ -44,6 +44,10 @@ const MAPS = { standard: STANDARD_MAP, polar: POLAR_MAP, prominent: PROMINENT_MA
  * panel：  空桌面正中那张卡片（「一边做题，一边对答案」）。人说「这个也做成库里展示那种液态玻璃」：
  *          库的默认值原样（位移 70、模糊 0.0625、饱和度 140、色散 2）——它是一大块，库里演示的也是
  *          一大块。不弹：一张要读的卡片跟着笔尖晃，字就跟着晃。
+ * sheet：  盖在内容上的那些：对话框、菜单、面板、Agent、设置的分组、说明书的卡片。人说「液态玻璃风格
+ *          全面液态玻璃化……如果有重叠记得像库里那样做模糊，一定要 1:1 还原」：库里演示站那张「User
+ *          Info」卡片的数原样照搬——位移 100、模糊 0.5（4 + 0.5 × 32 = 20px）、饱和度 140、色散 2、
+ *          不弹。库里演示的就是这一块玻璃压在一段正文上：底下的字被磨成一片，玻璃上面的字才读得清。
  */
 export const PRESETS = Object.freeze({
   capsule: Object.freeze({
@@ -58,6 +62,9 @@ export const PRESETS = Object.freeze({
   panel: Object.freeze({
     displacementScale: 70, blurAmount: 0.0625, saturation: 140, aberrationIntensity: 2, elasticity: 0, mode: 'standard',
   }),
+  sheet: Object.freeze({
+    displacementScale: 100, blurAmount: 0.5, saturation: 140, aberrationIntensity: 2, elasticity: 0, mode: 'standard',
+  }),
 });
 
 /** 指针离玻璃的边多近才开始有反应（px，库里的数）。 */
@@ -71,20 +78,24 @@ export function blurRadius(blurAmount) {
 /**
  * 一段 SVG 滤镜的标记。两种：
  *
- * chromatic: true——库里 GlassFilter 逐个原语照搬（没用上的那个 radialGradient 不搬）：三个通道各弯
- * 一次、各取一个通道、screen 混回去、柔化一点，再按贴图做的边缘遮罩合回去。贴图是一道线性的坡，
- * 越往边上弯得越多，三个通道弯的量差得也越多——边上那一圈彩边就是这么来的。人说「胶囊按钮边缘的
- * 折射也该还原」：静止的时候就用它（见 BUSY）。
+ * chromatic: true——库里 GlassFilter 的三个通道：各弯一次、各取一个通道、screen 混回去、柔化一点。贴图
+ * 是一道线性的坡，越往边上弯得越多，三个通道弯的量差得也越多——边上那一圈彩边就是这么来的。人说「胶囊
+ * 按钮边缘的折射也该还原」：静止的时候就用它（见 BUSY）。
  *
  * 默认只弯一次：库里那张贴图、库里那个位移量，就是库里红通道那一次（x 看 R、y 看 B）——和色散版的
  * 弯法一样，只少那圈彩边。手在屏幕上的时候用它：平板上（Chromium 138）实测，色散版在翻页、写字、
  * 收起顶栏时每隔一帧 50–67ms（多路合成每一路都要开一张中间图，每块玻璃每一帧都重做一遍），只弯一次
  * 和不弯一样快。静止的时候屏幕不重画，色散版一帧都不用算。
  *
- * backdrop: true 给 backdrop-filter: url(…) 用（工具栏、原来那两段折射）。区域收回元素本身；色散版
- * 还要去掉那条边缘遮罩——原样放进 backdrop-filter，Chromium 出来的是没弯过的原样（实测：底下的条纹
- * 笔直）。那条链拿贴图的不透明度做遮罩，只在贴图外面（滤镜区域比元素大出去的那一圈）才起作用，贴图
- * 是不透明的 JPEG，元素里面处处是 1，在 filter 上它什么都不改。
+ * 两版的区域都是元素本身、贴图都铺满元素，弯法才一样。原来色散版照库里把区域放大到 170%（四周各多出
+ * 35%，给一条边缘遮罩链用），只弯一次那版是 100%：平板的 WebView 按滤镜区域去铺贴图，两版的弯法于是
+ * 差了一大截——手一碰、一停，玻璃在两版之间换，背后磨过的东西整块挪四五十像素（人录屏报的「背景模糊
+ * 突然跳跃」，机上两版截图对照过；桌面 Chromium 按元素铺，看不出来）。那条遮罩链拿贴图的不透明度做
+ * 遮罩，贴图是不透明的 JPEG，元素里面处处是 1，本来就什么都不改，一起拿掉；放大出去的那一圈也被 lens
+ * 的圆角裁掉，看不见。
+ *
+ * 给 backdrop-filter: url(…) 用的（工具栏、原来那两段折射，调用处写着 backdrop: true）和给 filter 用的，
+ * 现在是同一段：原来的区别就是区域和那条遮罩链，两样都统一了。
  *
  * fit：贴图怎么铺。库里是 'xMidYMid slice'（按短边铺满、长的那边裁掉）——给胶囊、按钮那种不太长的
  * 形状。浮在书页上的那条工具栏是 54×624 那样的细条，照这样铺，坡只在两个短头上，长边几乎不弯；
@@ -99,7 +110,7 @@ export function blurRadius(blurAmount) {
  * 一滴水：中间放大，边上往里弯。
  */
 export function glassFilterMarkup(id, { displacementScale, aberrationIntensity, mode = 'standard' }, {
-  backdrop = false, chromatic = false, fit = 'xMidYMid slice', box = false, convex = false,
+  chromatic = false, fit = 'xMidYMid slice', box = false, convex = false,
 } = {}) {
   const map = MAPS[mode] || MAPS.standard;
   const sign = mode === 'shader' || convex ? 1 : -1;
@@ -107,9 +118,10 @@ export function glassFilterMarkup(id, { displacementScale, aberrationIntensity, 
   const units = box ? ' primitiveUnits="objectBoundingBox"' : '';
   const extent = box ? 'x="0" y="0" width="1" height="1"' : 'x="0" y="0" width="100%" height="100%"';
   const image = `<feImage ${extent} result="DISPLACEMENT_MAP" href="${map}" preserveAspectRatio="${fit}"/>`;
+  // 区域就是元素本身，两版一样（见上面：两版区域不一样，平板上弯法就不一样，一换就跳）。
+  const region = 'x="0%" y="0%" width="100%" height="100%"';
   if (!chromatic) {
-    // 弯一次。区域就是元素本身：外面那一圈库里是给遮罩链留的，这里用不着（warp 外面有 lens 裁圆角）。
-    return `<filter id="${id}" x="0%" y="0%" width="100%" height="100%"${units} color-interpolation-filters="sRGB">${image}`
+    return `<filter id="${id}" ${region}${units} color-interpolation-filters="sRGB">${image}`
       + `<feDisplacementMap in="SourceGraphic" in2="DISPLACEMENT_MAP" scale="${r}" xChannelSelector="R" yChannelSelector="B"/>`
       + '</filter>';
   }
@@ -117,7 +129,6 @@ export function glassFilterMarkup(id, { displacementScale, aberrationIntensity, 
   const b = displacementScale * (sign - aberrationIntensity * 0.1);
   // 柔化那一下是按像素定的（0.3px 上下）；按边长算的时候按五十来像素的一块折过去。
   const soften = Math.max(0.1, 0.5 - aberrationIntensity * 0.1) / (box ? 50 : 1);
-  const region = backdrop ? 'x="0%" y="0%" width="100%" height="100%"' : 'x="-35%" y="-35%" width="170%" height="170%"';
   const split = `<feDisplacementMap in="SourceGraphic" in2="DISPLACEMENT_MAP" scale="${r}" xChannelSelector="R" yChannelSelector="B" result="RED_DISPLACED"/>`
     + '<feColorMatrix in="RED_DISPLACED" type="matrix" values="1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0" result="RED_CHANNEL"/>'
     + `<feDisplacementMap in="SourceGraphic" in2="DISPLACEMENT_MAP" scale="${g}" xChannelSelector="R" yChannelSelector="B" result="GREEN_DISPLACED"/>`
@@ -127,19 +138,7 @@ export function glassFilterMarkup(id, { displacementScale, aberrationIntensity, 
     + '<feBlend in="GREEN_CHANNEL" in2="BLUE_CHANNEL" mode="screen" result="GB_COMBINED"/>'
     + '<feBlend in="RED_CHANNEL" in2="GB_COMBINED" mode="screen" result="RGB_COMBINED"/>'
     + `<feGaussianBlur in="RGB_COMBINED" stdDeviation="${soften}" result="ABERRATED_BLURRED"/>`;
-  if (backdrop) {
-    return `<filter id="${id}" ${region}${units} color-interpolation-filters="sRGB">${image}${split}</filter>`;
-  }
-  return `<filter id="${id}" ${region}${units} color-interpolation-filters="sRGB">${image}`
-    + '<feColorMatrix in="DISPLACEMENT_MAP" type="matrix" values="0.3 0.3 0.3 0 0 0.3 0.3 0.3 0 0 0.3 0.3 0.3 0 0 0 0 0 1 0" result="EDGE_INTENSITY"/>'
-    + `<feComponentTransfer in="EDGE_INTENSITY" result="EDGE_MASK"><feFuncA type="discrete" tableValues="0 ${aberrationIntensity * 0.05} 1"/></feComponentTransfer>`
-    + '<feOffset in="SourceGraphic" dx="0" dy="0" result="CENTER_ORIGINAL"/>'
-    + split
-    + '<feComposite in="ABERRATED_BLURRED" in2="EDGE_MASK" operator="in" result="EDGE_ABERRATION"/>'
-    + '<feComponentTransfer in="EDGE_MASK" result="INVERTED_MASK"><feFuncA type="table" tableValues="1 0"/></feComponentTransfer>'
-    + '<feComposite in="CENTER_ORIGINAL" in2="INVERTED_MASK" operator="in" result="CENTER_CLEAN"/>'
-    + '<feComposite in="EDGE_ABERRATION" in2="CENTER_CLEAN" operator="over"/>'
-    + '</filter>';
+  return `<filter id="${id}" ${region}${units} color-interpolation-filters="sRGB">${image}${split}</filter>`;
 }
 
 /**
@@ -248,12 +247,19 @@ function filterFor(opts, variant = 'lean') {
  *     大小算（convex、box，见 glassFilterMarkup）：位移是边长的 0.16，底下那个图标在正中放大到一点
  *     三倍多、边上往里弯——浏览器里试过 0.3（放大将近一倍，图标撑满、被边裁掉）和库里那样凹的 40px
  *     （图标被缩小、推到下半边，认不出来）。
+ *   · lgr-sheet-*：挂不了那几层的「盖在内容上」的那几样（菜单、下拉、本栏内容那张单子、答案面板、
+ *     提示条……，见 TARGETS 下面那段），和 sheet 同一组数。挂不了的原因各有各的：自己就是滚动的
+ *     容器（层是绝对定位的，会跟着内容一起滚走），或者进出场靠淡入淡出（元素半透明的那一段，里面
+ *     那层 backdrop-filter 看不到背后，玻璃先空一下再一下子弯出来）。直接接在元素自己的
+ *     backdrop-filter 后面，这两样都不怕。
  */
 const TOOLBAR_GLASS = Object.freeze({ displacementScale: 32, aberrationIntensity: 2, mode: 'standard' });
 const DROP_GLASS = Object.freeze({ displacementScale: 0.16, aberrationIntensity: 2, mode: 'standard' });
 export const NAMED_FILTERS = Object.freeze({
   'lgr-cap-rich': [PRESETS.capsule, { backdrop: true, chromatic: true }],
   'lgr-cap-lean': [PRESETS.capsule, { backdrop: true }],
+  'lgr-sheet-rich': [PRESETS.sheet, { backdrop: true, chromatic: true }],
+  'lgr-sheet-lean': [PRESETS.sheet, { backdrop: true }],
   'lgr-bar-rich': [TOOLBAR_GLASS, { backdrop: true, chromatic: true, fit: 'none' }],
   'lgr-bar-lean': [TOOLBAR_GLASS, { backdrop: true, fit: 'none' }],
   'lgr-drop-rich': [DROP_GLASS, { backdrop: true, chromatic: true, box: true, convex: true }],
@@ -278,11 +284,26 @@ function ensureNamedFilters() {
  * 弯一样快。两版弯的地方一样，差的只是边上那圈彩边：手动的那一会儿它收起来，停下半秒再回来。
  */
 export const IDLE_MS = 500;
-/** 手已经离开了、东西还在动（松手以后翻完那一页、那一排滑到位、工具栏长开）：等它们演完再换回去。 */
+/**
+ * 手已经离开了、东西还在动（松手以后翻完那一页、那一排滑到位、工具栏长开、标签底下那块透镜落定）：
+ * 等它们演完再换回去。
+ *
+ * 这只管「什么时候换回去」。已经换回色散版以后才开始的动画（手按着不动时透镜停了、玻璃判定静止；松手它又
+ * 回弹），由动的那一方发一声 glassbusy（liquid-glass.js 的透镜），这边当作手又动了一下。
+ */
 const STILL_MOVING = '.pdf-page-leaf, .pdf-workspace.is-row-sliding, .ink-toolbar.is-dragging, '
-  + '.ink-toolbar.is-perch-animating, [data-role="toolbar-ghost"]';
+  + '.ink-toolbar.is-perch-animating, [data-role="toolbar-ghost"], [data-lens-moving]';
 let lastActivity = 0;
 let idleTimer = 0;
+/**
+ * 还按在屏幕上的手指、笔（pointerId）。按着的时候不算静止，哪怕停着不动：人录屏里一路按着慢慢划，停一下超过半秒
+ * 玻璃就换回色散版、一动又换回来，一次按住里来回换好几次。
+ */
+const downPointers = new Set();
+const onPointerPress = (e) => { downPointers.add(e.pointerId); };
+const onPointerLift = (e) => { downPointers.delete(e.pointerId); };
+/** 切走了（锁屏、切应用）：收不到抬起，当作都抬起了。 */
+const forgetPointers = () => { downPointers.clear(); };
 
 function markBusy() {
   // 别的皮肤里没有要换的玻璃：写字时每一下 pointermove 都进这里，读一个属性就走。
@@ -297,7 +318,7 @@ function checkIdle() {
   idleTimer = 0;
   const left = IDLE_MS - (now() - lastActivity);
   if (left > 8) { idleTimer = setTimeout(checkIdle, left); return; }
-  if (document.body?.classList.contains('is-top-moving') || document.querySelector(STILL_MOVING)) {
+  if (downPointers.size || document.body?.classList.contains('is-top-moving') || document.querySelector(STILL_MOVING)) {
     idleTimer = setTimeout(checkIdle, 200);
     return;
   }
@@ -583,22 +604,39 @@ function release() {
  * 走、收成球时的折射本来就是 #lg-refract，那一段已经换成库里的滤镜（见 LEGACY_FILTERS）。在工具上划着挑
  * 时手指底下那块玻璃也不挂这几层：它要看得清底下那个图标，不能磨（见 NAMED_FILTERS 的 lgr-drop-*）。
  *
- * 「删掉」那种红色的按钮也不在里面：一整块红是「这一下删了就回不来」的意思，不能变成透明的。
+ * 「删掉」那种按钮原来也不在里面（一整块红是「删了就回不来」）。人说「全面液态玻璃化」之后，它和别的按钮
+ * 一样是玻璃，红落在字上——iOS 26 的警告框就是这么做的：危险的那一项是红字，不是一块红。
+ *
+ * 人说的例外只有一处：「除了文件栏的边框」——两栏各自那张装内容的卡片（.pdf-ws-slot）照旧，它是纸的
+ * 托盘，不是浮在上面的东西。栏头那枚胶囊原来也被排除在外（人更早说过「文件栏里那条栏头除外」），这一次
+ * 它也是玻璃了。
+ *
+ * 下面这些挂的是「那几层」（玻璃在元素里面一层一层叠出来，边上那道光跟着指针转，和库里一样）。另有一批
+ * 挂不了这几层，玻璃直接接在元素自己的 backdrop-filter 后面（liquid-glass-react.css，滤镜是 NAMED_FILTERS
+ * 的 lgr-sheet-* / lgr-cap-*）：
+ *   · 栏头胶囊、本栏内容那张单子、答案面板——自己就是滚动的容器，绝对定位的层会跟着内容一起滚走；
+ *   · 顶上那两张单子、栏里的 ⋯ 单子、设置页的下拉、提示条、缩放比例、套索那一条、换边的圆钮——靠
+ *     淡入淡出进出场，半透明的那一段里层里的磨砂看不到背后；
+ *   · 分栏的握柄——6px 宽，挂几层没有意义。
  */
 export const TARGETS = Object.freeze([
   ['.pdf-page-bar .pdf-bar-group', 'capsule'],
   ['.app-nav', 'capsule'],
   // 胶囊里标出选中那一格的透镜：也是一块玻璃，不是一层白（见 PRESETS.lens）。
   ['.app-nav .nav-glass-lens', 'lens'],
+  // 顶上那一排里单子开着的那一格（导入、组合）、栏头里开着的那几颗（目录、专注……）：原来是一颗白泡，
+  // 现在是和透镜同一种玻璃，颜色在字上。
+  ['.pdf-page-bar .pdf-bar-btn[aria-expanded="true"]', 'lens'],
+  ['.pdf-slot-btn.is-active', 'lens'],
   // 空桌面正中那张卡片：人说「这个也做成库里展示那种液态玻璃」（见 PRESETS.panel）。它里面那两颗
   // 导入按钮本来就是玻璃，玻璃叠在玻璃上：按钮看得见卡片那一层（卡片自己不带 backdrop-filter，身子
   // 在它的 .lgr-warp 里）。
   ['.pdf-empty-card', 'panel'],
   ['.pdf-slot-btn.is-answer-action', 'button'],
   ['#settingsSave', 'button'],
-  ['.action-btn.secondary', 'button'],
+  ['.action-btn', 'button'],
   ['.set-select-btn', 'button'],
-  ['.deck-dialog-btn:not(.is-danger)', 'button'],
+  ['.deck-dialog-btn', 'button'],
   ['.pdf-empty-btn', 'button'],
   ['.pdf-library-header .pdf-library-btn', 'button'],
   ['.pdf-guide-header .pdf-library-btn', 'button'],
@@ -607,6 +645,44 @@ export const TARGETS = Object.freeze([
   // 0.96），只是它只有 30px：位移按个头收到 20——按钮那个 64 放在这么小一块上，背后的封面被整个挤到边上
   // 去。第三项是给这一种的参数改动（attachLiquidGlass 的 overrides）。
   ['.pdf-book-more', 'button', { displacementScale: 20 }],
+  // 文档库里「导入」那一格、进了文件夹以后顶上那一条和它的两颗按钮。
+  ['.pdf-book-block.is-add', 'panel'],
+  ['.pdf-folder-bar', 'panel'],
+  ['.pdf-folder-bar-back', 'button'],
+  ['.pdf-folder-bar-add', 'button'],
+  // 收起一栏以后留下的那颗「恢复」。
+  ['.pdf-ws-restore', 'button'],
+  // 对话框、选角色那张卡、更新说明、整理内容、本机 PDF 那张单子、工具栏弹出的卡片：盖在内容上的，
+  // 库里演示站那种玻璃（见 PRESETS.sheet）。对话框里那一列动作是叠在它上面的第二层玻璃。
+  ['.deck-dialog', 'sheet'],
+  ['.deck-actions', 'lens'],
+  // 单子里「挑一个」的那几格：打开在哪一栏、插在哪一项后面、草稿纸还是本子、纸样。每一格一块透镜，选中的
+  // 那一格描一圈主题色（liquid-glass-react.css）。
+  ['.deck-destination', 'lens'],
+  ['.deck-anchor', 'lens'],
+  ['.paper-mode', 'lens'],
+  ['.create-style-tile', 'lens'],
+  ['.pdf-role-dialog', 'sheet'],
+  ['.pdf-role-options button', 'button'],
+  ['.pdf-role-cancel', 'button'],
+  ['.update-dialog', 'sheet'],
+  ['.organizer', 'sheet'],
+  ['.pdf-picker', 'sheet'],
+  ['.ink-card', 'sheet'],
+  // 找页面板（目录 / 缩略图 / 书签）和它顶上那枚分段控件的透镜。
+  ['.pdf-outline-panel', 'sheet'],
+  ['.pdf-panel-tabs .segmented-glass-lens', 'lens'],
+  ['.pdf-outline-suggest', 'button'],
+  // 设置页的一组一组、说明书的卡片。
+  ['.set-group', 'sheet'],
+  ['.guide-card', 'sheet'],
+  // Agent：右边那颗圆钮、抽屉本身、关闭和发送、人问的那几句（Agent 答的那几段直接写在抽屉的玻璃上，
+  // 不另起一层——回答往往一长段，再垫一层玻璃只是让字离背后更远）。
+  ['.pdf-agent-fab', 'button'],
+  ['.pdf-agent-dialog', 'sheet'],
+  ['.pdf-agent-dialog-close', 'button', { displacementScale: 20 }],
+  ['.pdf-agent-submit', 'button'],
+  ['.pdf-agent-message.is-user', 'lens'],
 ]);
 
 const ANY_TARGET = TARGETS.map(([selector]) => selector).join(', ');
@@ -678,7 +754,10 @@ export function initLiquidGlassReact() {
     queued = true;
     requestAnimationFrame(() => { queued = false; syncLiquidGlass(); });
   });
-  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+  // aria-expanded：顶上那一排的单子开着的那一格靠它认（TARGETS 里那条 [aria-expanded="true"]）。
+  observer.observe(document.body, {
+    childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'aria-expanded'],
+  });
   const onSkin = () => syncLiquidGlass();
   window.addEventListener('skinchange', onSkin);
   window.addEventListener('pointermove', onPointerMove, { passive: true });
@@ -690,6 +769,14 @@ export function initLiquidGlassReact() {
   // 手在屏幕上（写字、翻页、滑、滚、敲键）：玻璃换成只弯一次的那一版，停下半秒换回色散（见 IDLE_MS）。
   const BUSY_EVENTS = ['pointerdown', 'pointermove', 'wheel', 'keydown', 'scroll'];
   for (const type of BUSY_EVENTS) window.addEventListener(type, markBusy, { passive: true, capture: true });
+  // 不是手、是东西自己又动起来了（见 STILL_MOVING 那段注释）。
+  window.addEventListener('glassbusy', markBusy);
+  // 哪些手指还按着（见 downPointers）。
+  window.addEventListener('pointerdown', onPointerPress, { passive: true, capture: true });
+  window.addEventListener('pointerup', onPointerLift, { passive: true, capture: true });
+  window.addEventListener('pointercancel', onPointerLift, { passive: true, capture: true });
+  window.addEventListener('blur', forgetPointers);
+  document.addEventListener('visibilitychange', forgetPointers);
   teardown = () => {
     observer.disconnect();
     window.removeEventListener('skinchange', onSkin);
@@ -700,6 +787,13 @@ export function initLiquidGlassReact() {
     document.documentElement.removeEventListener('pointerleave', onPointerGone);
     window.removeEventListener('blur', onPointerGone);
     for (const type of BUSY_EVENTS) window.removeEventListener(type, markBusy, { capture: true });
+    window.removeEventListener('glassbusy', markBusy);
+    window.removeEventListener('pointerdown', onPointerPress, { capture: true });
+    window.removeEventListener('pointerup', onPointerLift, { capture: true });
+    window.removeEventListener('pointercancel', onPointerLift, { capture: true });
+    window.removeEventListener('blur', forgetPointers);
+    document.removeEventListener('visibilitychange', forgetPointers);
+    forgetPointers();
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = 0;
     document.documentElement.classList.remove('lgr-busy');

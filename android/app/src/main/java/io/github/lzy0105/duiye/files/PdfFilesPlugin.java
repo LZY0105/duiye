@@ -17,7 +17,6 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -175,15 +174,28 @@ public class PdfFilesPlugin extends Plugin {
         call.resolve(result);
     }
 
+    // ── 读：一块一块地读 ──────────────────────────────────────────────────────
+
     /**
-     * 一份 PDF 的字节，base64 编码。
+     * 一次读多少字节。3 MiB 是 3 的倍数，编出来的 base64 中间不带填充，网页那边一块块解开就能直接接上。
+     * 导出那边（appendExport）是同一个数。
+     */
+    private static final int READ_CHUNK = 3 << 20;
+
+    /** 正在读的文件：凭据 → 打开着的流。 */
+    private final Map<String, InputStream> reads = new HashMap<>();
+
+    /**
+     * 开始读一份 PDF，回一个凭据和它多大（不知道就是 -1）。
      *
-     * base64 是因为 Capacitor 的桥只走 JSON。一份两百兆的教材编码之后是两百七十
-     * 兆的字符串，这条路不便宜——但它只在「人选中了这一份」时走一次，而导入本来就
-     * 要把整份字节读进 IndexedDB。
+     * 原来是一次 read() 把整份读进内存、编成 base64 再一次过桥：一份 315 兆的书，Java 那边缓冲要
+     * 翻倍扩到 512 兆，正撞上这台平板给应用的堆上限（largeHeap 也只有 512 兆）——抛出来的是
+     * OutOfMemoryError，不是 Exception，catch 接不住，整个应用就崩了（机上复现过：am_crash，
+     * 栈在 ByteArrayOutputStream.grow）。现在只开着一个流，网页那边一块一块地要（readChunk），
+     * 任何时刻桥上、内存里都只有一块。
      */
     @PluginMethod
-    public void read(PluginCall call) {
+    public void openRead(PluginCall call) {
         String uri = call.getString("uri");
         if (uri == null || uri.isEmpty()) {
             call.reject("BAD_REQUEST", "uri is required");
@@ -193,25 +205,87 @@ public class PdfFilesPlugin extends Plugin {
             call.reject("NO_PERMISSION", "all-files access has not been granted");
             return;
         }
-        InputStream in = null;
+        InputStream in;
         try {
             in = getContext().getContentResolver().openInputStream(Uri.parse(uri));
-            if (in == null) {
-                call.reject("NOT_FOUND", "could not open " + uri);
-                return;
-            }
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buffer = new byte[64 * 1024];
-            int read;
-            while ((read = in.read(buffer)) != -1) out.write(buffer, 0, read);
-            JSObject result = new JSObject();
-            result.put("data", Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP));
-            call.resolve(result);
         } catch (Exception e) {
             call.reject("READ_FAILED", e.getMessage());
-        } finally {
-            try { if (in != null) in.close(); } catch (Exception ignored) { }
+            return;
         }
+        if (in == null) {
+            call.reject("NOT_FOUND", "could not open " + uri);
+            return;
+        }
+        String token = UUID.randomUUID().toString();
+        synchronized (reads) {
+            reads.put(token, in);
+        }
+        JSObject result = new JSObject();
+        result.put("token", token);
+        result.put("size", sizeOf(Uri.parse(uri)));
+        call.resolve(result);
+    }
+
+    /**
+     * 接着读一块（最多 READ_CHUNK 字节），base64 编码。读到头时 done 为 true、流自己关掉。
+     *
+     * 连 OutOfMemoryError 也接住：读一块只要几兆，真到这一步说明整台机器的内存都很紧——那也只该是
+     * 「这一份没读成」，不该是整个应用没了。
+     */
+    @PluginMethod
+    public void readChunk(PluginCall call) {
+        String token = call.getString("token");
+        InputStream in;
+        synchronized (reads) {
+            in = token == null ? null : reads.get(token);
+        }
+        if (in == null) {
+            call.reject("BAD_REQUEST", "unknown read");
+            return;
+        }
+        try {
+            byte[] buffer = new byte[READ_CHUNK];
+            int filled = 0;
+            // 一次 read() 不一定读满（content provider 常常一次只给几十 K）：读满这一块或者读到头为止。
+            while (filled < READ_CHUNK) {
+                int n = in.read(buffer, filled, READ_CHUNK - filled);
+                if (n < 0) break;
+                filled += n;
+            }
+            boolean done = filled < READ_CHUNK;
+            JSObject result = new JSObject();
+            result.put("data", Base64.encodeToString(buffer, 0, filled, Base64.NO_WRAP));
+            result.put("done", done);
+            if (done) closeQuietly(token);
+            call.resolve(result);
+        } catch (Throwable e) {
+            closeQuietly(token);
+            call.reject("READ_FAILED", String.valueOf(e.getMessage()));
+        }
+    }
+
+    /** 不读了（读完、出错、或者人取消了）：关掉流。关过的、不认识的凭据什么都不做。 */
+    @PluginMethod
+    public void closeRead(PluginCall call) {
+        closeQuietly(call.getString("token"));
+        call.resolve();
+    }
+
+    private void closeQuietly(String token) {
+        InputStream in;
+        synchronized (reads) {
+            in = token == null ? null : reads.remove(token);
+        }
+        try { if (in != null) in.close(); } catch (Exception ignored) { }
+    }
+
+    /** 文件多大。问不出来（有的 provider 不给）就是 -1，网页那边边读边长。 */
+    private long sizeOf(Uri uri) {
+        try (android.content.res.AssetFileDescriptor fd =
+                 getContext().getContentResolver().openAssetFileDescriptor(uri, "r")) {
+            if (fd != null && fd.getLength() >= 0) return fd.getLength();
+        } catch (Exception ignored) { }
+        return -1;
     }
 
     // ── 导出 ────────────────────────────────────────────────────────────────

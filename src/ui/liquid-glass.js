@@ -16,9 +16,9 @@
 // lens now only *observes* the active class and follows it, and a drag ends by
 // dispatching one real click so the app's own handler does the routing.
 
+import { createLensMotion, LENS_MOTION, PLAIN_LENS_MOTION } from './lens-motion.js';
+
 const EASE = 'cubic-bezier(0.32, 0.72, 0, 1)';
-/** 透镜滑到新那一格用多久（点一下、拖完松手都是它）。 */
-const SLIDE_MS = 380;
 const DRAG_THRESHOLD = 4;
 /**
  * 横着的那几种（两个标签、分段控件）要走多远才定方向。和顶上那一排的收起手势
@@ -58,9 +58,6 @@ function isDrawingPointer(e) {
   const t = e.target;
   return !!(t && t.closest && t.closest('canvas, .ink-layer, .ink-surface, .hw-canvas'));
 }
-
-const transitionFor = (props, ms = 380) =>
-  props.map(p => `${p} ${ms}ms ${EASE}`).join(', ');
 
 // ── the sliding lens ────────────────────────────────────────────────────────
 
@@ -106,13 +103,23 @@ function setupSlidingLens(container, itemSelector, lensClass, opts = {}) {
   let capturedId = null;
   let startX = 0;
   let startY = 0;
-  let grabbedWidth = 0;
-  let grabbedHeight = 0;
 
   const activeItem = () => container.querySelector(activeSelector) || items[0];
 
-  // 透镜正滑向新那一格时（点了另一格、刚松开拖动），这一段滑完之前的时刻。
-  let slideEndsAt = 0;
+  // 怎么动归 lens-motion.js：人给的那段录屏（「照片 | 图集」那枚胶囊）逐帧量出来、拟合出来的几根
+  // 弹簧——按住缩一点、进了另一格浮起来弹过去、走的时候顺着方向拉长、松手像一滴水落定。这里每一帧
+  // 推它一步，把它给的位置和大小写到透镜上。样式表里 left / width 那几条过渡用不上了：留着它们会和
+  // 逐帧写的位置抢。
+  const motion = createLensMotion({ vertical: !!opts.vertical });
+  lens.style.transition = 'none';
+  // 纸里只是普通地滑：按住不缩、划的时候跟着手指走、松手（或者点了另一格）平平地滑到那一格上，不浮、不拉长。人说「纸的状态
+  // 下就不要那个按钮动画了，普通滑动即可」——纸上的透镜是钢笔划的一道线，压扁、拉长只像是画歪了。每次动之前现看一眼皮肤：
+  // 皮肤随时会换。
+  const plain = () => document.documentElement.getAttribute('data-skin') === 'minimal';
+  /** 透镜此刻去的那一格。 */
+  let homeItem = null;
+  /** 划着的时候手指在哪一格上：透镜跟着它一格一格地跳。 */
+  let dragItem = null;
 
   // ── 字的颜色跟着透镜走 ──
   //
@@ -132,31 +139,81 @@ function setupSlidingLens(container, itemSelector, lensClass, opts = {}) {
     } catch (_) { /* 没有 Range 的地方：退回整颗按钮 */ }
     return item.getBoundingClientRect();
   };
-  const paintCover = () => {
+  // 每一格的字在容器里横着占哪一段：开始动的时候量一次，动着的每一帧拿透镜此刻的位置（算出来的，
+  // 不是量出来的）去比——一帧里不读排版。
+  let coverBoxes = null;
+  const measureCover = (cRect) => {
     if (!tintFollows) return;
-    const l = lens.getBoundingClientRect();
-    for (const item of items) {
+    coverBoxes = items.map((item) => {
       const b = contentOf(item);
-      const covered = Math.max(0, Math.min(l.right, b.right) - Math.max(l.left, b.left));
+      return { left: b.left - cRect.left, right: b.right - cRect.left, width: b.width };
+    });
+  };
+  const paintCover = (r) => {
+    if (!tintFollows || !coverBoxes) return;
+    items.forEach((item, i) => {
+      const b = coverBoxes[i];
+      const covered = Math.max(0, Math.min(r.left + r.width, b.right) - Math.max(r.left, b.left));
       const cover = b.width > 0 ? Math.min(1, covered / b.width) : 0;
       item.style.setProperty('--lens-cover', String(Math.round(cover * 1000) / 1000));
-    }
+    });
   };
-  // 透镜靠过渡滑的那一段（点了另一格、松开拖动）没有事件可听：这段时间里逐帧量。
-  let coverFrame = 0;
-  let coverUntil = 0;
-  const followCover = (ms) => {
-    if (!tintFollows) return;
-    paintCover();
-    if (typeof requestAnimationFrame !== 'function') return;
-    coverUntil = Math.max(coverUntil, performance.now() + ms);
-    if (coverFrame) return;
-    const tick = () => {
-      coverFrame = 0;
-      paintCover();
-      if (performance.now() < coverUntil) coverFrame = requestAnimationFrame(tick);
-    };
-    coverFrame = requestAnimationFrame(tick);
+
+  // 按 0.1px 取整、没变就不写。平板上 WebView 每一帧都把整页的玻璃重画一遍（十几层磨砂和折射，一帧二三十毫秒），
+  // 透镜哪怕只挪了零点零几像素，那一帧也得整页重画——落定前那一截肉眼看不见的零头，少写一次就少画一帧。
+  const px = (v) => `${Math.round(v * 10) / 10}px`;
+  const draw = () => {
+    const r = motion.rect();
+    const next = [px(r.left), px(r.top), px(r.width), px(r.height)];
+    const s = lens.style;
+    if (s.left === next[0] && s.top === next[1] && s.width === next[2] && s.height === next[3]) return;
+    s.left = next[0];
+    s.top = next[1];
+    s.width = next[2];
+    s.height = next[3];
+    paintCover(r);
+  };
+
+  // 逐帧推，停下来就不再要帧：没在动的时候这里一帧都不花。动着的时候容器上挂 data-lens-moving——
+  // liquid-glass-react.js 等它摘掉才把玻璃换回静止时那一版（STILL_MOVING）。挂的是属性不是类：类一变，
+  // 盯着类的那几个 MutationObserver（这里的、液态玻璃挂层的）都要醒一次，一次动画两回，白花工夫。
+  let frame = 0;
+  let lastTime = 0;
+  const tick = () => {
+    frame = 0;
+    // 用 performance.now()，不用 rAF 递进来的那个时间戳：两个时钟起点不一定是同一个（测试里的 jsdom
+    // 就不是），混着减会差出几百毫秒。
+    const t = performance.now();
+    motion.step(Math.min(1 / 20, Math.max(1 / 240, (t - lastTime) / 1000)));
+    lastTime = t;
+    const r = motion.rect();
+    const broken = !Number.isFinite(r.left + r.top + r.width + r.height);
+    if (broken || motion.settled()) {
+      motion.snap();
+      draw();
+      container.removeAttribute('data-lens-moving');
+      return;
+    }
+    draw();
+    frame = requestAnimationFrame(tick);
+  };
+  const run = () => {
+    if (reduced) { motion.snap(); draw(); return; }
+    motion.setParams(plain() ? PLAIN_LENS_MOTION : LENS_MOTION);
+    container.setAttribute('data-lens-moving', '');
+    if (frame) return;
+    // 告诉液态玻璃「又在动了」：换成手在屏幕上时那一版（只弯一次），等透镜停了再换回色散版。不说的话——按着不动那半秒里
+    // 玻璃已经判定静止、换回了色散版，松手后透镜一回弹，平板上每一帧都用色散版整页重画，一帧 110ms（实测）。
+    window.dispatchEvent(new Event('glassbusy'));
+    lastTime = performance.now();
+    frame = requestAnimationFrame(tick);
+  };
+
+  /** 这一格在容器里的位置；还没排版（量出来是 0）就是 null。 */
+  const rectOf = (item, cRect) => {
+    const r = item.getBoundingClientRect();
+    if (cRect.width === 0 || r.width === 0) return null;
+    return { left: r.left - cRect.left, top: r.top - cRect.top, width: r.width, height: r.height };
   };
 
   const place = (target, immediate = false) => {
@@ -166,43 +223,38 @@ function setupSlidingLens(container, itemSelector, lensClass, opts = {}) {
     if (!item) return;
 
     const cRect = container.getBoundingClientRect();
-    const iRect = item.getBoundingClientRect();
     // Before first layout every rect is zero; placing then would stick the
-    // lens in the corner, and the transition would animate it out from there.
-    if (cRect.width === 0 || iRect.width === 0) return;
+    // lens in the corner, and the spring would fling it out from there.
+    const rect = rectOf(item, cRect);
+    if (!rect) return;
+    homeItem = item;
+    measureCover(cRect);
 
-    const left = `${iRect.left - cRect.left}px`;
-    const top = `${iRect.top - cRect.top}px`;
-    const width = `${iRect.width}px`;
-    const height = `${iRect.height}px`;
-
-    // 滑着的时候来一声「当场重摆」，不跳，接着滑、只把终点改到量出来的新位置上。
+    // 当场到位：头一次摆、减少动态、没在动的时候尺寸变了。
     //
-    // 人说「这个条点击选择时也做滑过去的动画」：从设置点回练习，透镜是一帧跳过去的。点下去
-    // 那一刻它确实开始滑了，可同一帧里顶上那一排从藏着变成露出来，top-bar-fit 量完就叫一声
-    // 重摆（_relayoutLens），过渡一关、当场落到终点。同样会来掐的还有工作区发的 resize、
-    // 哪一格尺寸变了（ResizeObserver）。重摆本来是给「没在动的时候尺寸变了」用的，那时照旧当场到位。
-    const now = performance.now();
-    const animate = !reduced && (!immediate || now < slideEndsAt);
-    const moves = lens.style.left !== left || lens.style.top !== top
-      || lens.style.width !== width || lens.style.height !== height;
-    if (animate && !immediate && moves) slideEndsAt = now + SLIDE_MS;
-
-    lens.style.transition = animate
-      ? transitionFor(['left', 'top', 'width', 'height', 'transform'], SLIDE_MS)
-      : 'none';
-    lens.style.left = left;
-    lens.style.top = top;
-    lens.style.width = width;
-    lens.style.height = height;
-    lens.style.removeProperty('scale');
-    // 字的颜色：滑着的那一段逐帧跟着量（多给一点，过渡的最后一帧也量到），当场到位的量一次。
-    if (animate) followCover(SLIDE_MS + 60); else paintCover();
+    // 动着的时候来一声「当场重摆」不跳：接着弹，只把终点改到量出来的新位置上。人说「这个条点击选择
+    // 时也做滑过去的动画」：从设置点回练习，同一帧里顶上那一排从藏着变成露出来，top-bar-fit 量完就
+    // 叫一声重摆（_relayoutLens）；原来那一声会把滑到一半的透镜一帧摁到终点。同样会来叫的还有工作区
+    // 发的 resize、哪一格尺寸变了（ResizeObserver）。
+    if (!motion.placed || reduced || (immediate && !frame)) {
+      motion.set(rect);
+      draw();
+      return;
+    }
+    motion.target(rect);
+    run();
   };
 
   // Follow the active item wherever it is set from — the app's own routing, a
   // keyboard activation, a restored session. The lens never sets it itself.
-  const observer = new MutationObserver(() => { if (!isSliding) place(); });
+  //
+  // 容器自己、透镜自己换类不算（液态玻璃给透镜挂上 lgr 那几个类、顶上那一排给胶囊挂的状态）：那不是
+  // 选中的换了。
+  const observer = new MutationObserver((records) => {
+    if (isSliding) return;
+    if (records.every((r) => r.target === container || r.target === lens)) return;
+    place();
+  });
   observer.observe(container, { subtree: true, attributes: true, attributeFilter: ['class'] });
 
   const relayout = () => place(null, true);
@@ -235,6 +287,16 @@ function setupSlidingLens(container, itemSelector, lensClass, opts = {}) {
     return best;
   };
 
+  /** 这一点在不在透镜上（透镜此刻画在哪，按算出来的）。 */
+  const onLens = (x, y) => {
+    if (!motion.placed) return false;
+    const cRect = container.getBoundingClientRect();
+    const r = motion.rect();
+    const lx = x - cRect.left;
+    const ly = y - cRect.top;
+    return lx >= r.left && lx <= r.left + r.width && ly >= r.top && ly <= r.top + r.height;
+  };
+
   container.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 && e.pointerType === 'mouse') return;
     isTracking = true;
@@ -242,10 +304,13 @@ function setupSlidingLens(container, itemSelector, lensClass, opts = {}) {
     capturedId = e.pointerId;
     startX = e.clientX;
     startY = e.clientY;
-    const item = activeItem();
-    const r = item ? item.getBoundingClientRect() : null;
-    grabbedWidth = r?.width || 64;
-    grabbedHeight = r?.height || 34;
+    dragItem = homeItem || activeItem();
+    // 按在透镜上：它开始缩（录屏里按住它，它就一点一点缩下去）。按在别的格上：透镜不在手指底下，
+    // 不缩——点一下，它等 app 换了选中再弹过去。纸里不缩。
+    if (!reduced && !plain() && onLens(e.clientX, e.clientY)) {
+      motion.press(true);
+      run();
+    }
     // Capture is NOT taken here. Capturing on press retargets every later
     // pointer event — and, in Chromium, the synthesised click — to the
     // container, so a plain tap on a tab stopped reaching the tab's own
@@ -266,37 +331,53 @@ function setupSlidingLens(container, itemSelector, lensClass, opts = {}) {
         if (Math.max(Math.abs(dx), Math.abs(dy)) < AXIS_DECIDE) return;
         // 竖着走的不是在挑：顶上那两个标签上是在拉那一排（initChromeHiding），面板里
         // 是在滚。放手，而且要在拿指针之前放——拿了，后面整段都改道到这里，松手还会
-        // 替人点一下最近的那一格（顶上那两个就是换页）。
+        // 替人点一下最近的那一格（顶上那两个就是换页）。按在透镜上缩下去的那一点也还回去。
         if (Math.abs(dy) > Math.abs(dx)) {
           isTracking = false;
           capturedId = null;
+          if (motion.pressed) { motion.press(false); run(); }
           return;
         }
       }
       isSliding = true;
       try { container.setPointerCapture(capturedId); } catch (_) { /* not capturable */ }
-      lens.style.transition = 'none';
-      // `scale`, not a transform: the lens is positioned with left/top and a
-      // transform here would be a second, competing source of position.
-      if (!reduced) lens.style.scale = '1.045';
     }
 
+    // 纸里：透镜跟着手指走（和选中那一格一样大，不出容器），松手再滑到最近的那一格上（onPointerEnd）。
+    if (plain()) {
+      const c = container.getBoundingClientRect();
+      const home = rectOf(homeItem || activeItem(), c);
+      if (!home) return;
+      const at = { ...home };
+      if (opts.vertical) {
+        at.top = Math.max(0, Math.min(c.height - home.height, e.clientY - c.top - home.height / 2));
+      } else {
+        at.left = Math.max(0, Math.min(c.width - home.width, e.clientX - c.left - home.width / 2));
+      }
+      motion.set(at);
+      draw();
+      return;
+    }
+
+    // 手指进了另一格：透镜浮起来，自己弹过去（录屏里手指快慢不一，它走的都是同一条曲线）。手指在
+    // 它自己那一格里挪，它不动——不跟着手指一寸一寸地走。
     const cRect = container.getBoundingClientRect();
-    const pointerX = e.clientX - cRect.left;
-    const pointerY = e.clientY - cRect.top;
-
-    lens.style.left = `${Math.max(0, Math.min(cRect.width - grabbedWidth, pointerX - grabbedWidth / 2))}px`;
-    lens.style.width = `${grabbedWidth}px`;
-    lens.style.height = `${grabbedHeight}px`;
-    if (opts.vertical) {
-      lens.style.top = `${Math.max(0, Math.min(cRect.height - grabbedHeight, pointerY - grabbedHeight / 2))}px`;
+    const item = nearestItem(e.clientX - cRect.left, e.clientY - cRect.top);
+    if (!item || item === dragItem) return;
+    const rect = rectOf(item, cRect);
+    if (!rect) return;
+    dragItem = item;
+    homeItem = item;
+    measureCover(cRect);
+    if (reduced) {
+      motion.set(rect);
+      draw();
+      return;
     }
-    // 按住划着：透镜在手指底下，字的颜色跟着它走——离开哪一格，那一格就灰下去。
-    paintCover();
-
-    // No `--glass-angle` is written here any more. The pill's rim is a fixed
-    // top-to-bottom Fresnel gradient now, so rotating a custom property nothing
-    // reads was just work done on every pointermove of a drag.
+    motion.press(true);
+    motion.lift(true);
+    motion.target(rect);
+    run();
   });
 
   const onPointerEnd = (e) => {
@@ -307,14 +388,14 @@ function setupSlidingLens(container, itemSelector, lensClass, opts = {}) {
     isSliding = false;
     try { container.releasePointerCapture(capturedId); } catch (_) { /* never taken */ }
     capturedId = null;
+    // 松手：浮起来时扁下去的、按住时缩下去的，都回去（高度 0.2 秒上下回来，宽度慢一点——落定时先窄
+    // 一点再回到原样）。
+    motion.press(false);
+    motion.lift(false);
 
     if (wasSliding) {
       const cRect = container.getBoundingClientRect();
       const target = nearestItem(e.clientX - cRect.left, e.clientY - cRect.top);
-      lens.style.transition = reduced
-        ? 'none'
-        : transitionFor(['left', 'top', 'width', 'height', 'transform'], 420);
-      lens.style.removeProperty('scale');
       // Exactly one click, and only for a drag. A tap is left entirely alone:
       // the browser's own click is already on its way to the item, and the
       // previous version's extra .click() here made every tap fire twice —
@@ -324,6 +405,7 @@ function setupSlidingLens(container, itemSelector, lensClass, opts = {}) {
     } else {
       place();
     }
+    if (motion.placed) run();
   };
 
   container.addEventListener('pointerup', onPointerEnd);

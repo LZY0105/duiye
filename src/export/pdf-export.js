@@ -17,7 +17,13 @@
 // 拼成一份新的 PDF。样子一样，只是字不能再选了。
 
 import { INK_TOOLS, TOOL_DEFAULTS } from '../ink/stroke.js';
-import { widthAt } from '../ink/ink-renderer.js';
+import { smoothSamples, widthAt } from '../ink/ink-renderer.js';
+
+/**
+ * 手写笔迹的中心线细分到离那条平滑曲线多近（笔迹自己的坐标，和书页同一个单位）。屏幕上按 0.25 个像素算
+ * （ink-renderer.js 的 smoothSamples）；PDF 会被放大着看、被打印，这里给细一点。
+ */
+const EXPORT_SMOOTH_TOLERANCE = 0.05;
 
 /** 做不出来时的原因。调用方按这个决定是换一条路，还是告诉人。 */
 export const EXPORT_ERRORS = Object.freeze({
@@ -264,8 +270,16 @@ function smoothLine(out, pts) {
  */
 const GRAIN_COVER = 0.73;
 
-/** 采样点：去掉落在同一处的，最后一个一定留着（那是这一笔停下的地方）。 */
+/**
+ * 采样点：去掉落在同一处的，最后一个一定留着（那是这一笔停下的地方）。手写的再沿和屏幕上同一条平滑曲线细分
+ * （smoothSamples）；形状的角是真的角，不削。
+ */
 function samplesOf(stroke) {
+  const raw = rawSamplesOf(stroke);
+  return stroke.shape ? raw : smoothSamples(raw, EXPORT_SMOOTH_TOLERANCE);
+}
+
+function rawSamplesOf(stroke) {
   const out = [];
   const pts = stroke.points;
   for (let i = 0; i < pts.length; i++) {
@@ -452,6 +466,64 @@ export async function buildBookPdf({ bytes, pages, onProgress }) {
   try {
     // 对象流不开：开了要把整本书的对象重新压一遍，一本几百兆的书在平板上要多等好
     // 一会儿；不开，原来那些大块的图原样拷过去。
+    return await doc.save({ useObjectStreams: false, objectsPerTick: 64 });
+  } catch (error) {
+    throw new Error(EXPORT_ERRORS.UNREADABLE, { cause: error });
+  }
+}
+
+/**
+ * 一本书里挑出来的几页，做成一份新的 PDF（书签成书）。
+ *
+ * 页照原样拷过去（pdf-lib 的 copyPages：页面内容、字体、图都跟着走，字还能选，页面大小和旋转也照旧），
+ * 按 `pages` 给的次序排。`stamp` 为真时把每一页的笔迹画上去——那是「导出」要的一份；「存成新书」不画，
+ * 笔迹另外按页拷成新书自己的、还能接着改的笔迹，画进去就成了擦不掉的底子。
+ *
+ * @param {{bytes: Uint8Array|ArrayBuffer,
+ *          pages: Array<{pageNumber: number, strokes?: Array}>,
+ *          stamp?: boolean, title?: string,
+ *          onProgress?: function(number, number)}} input
+ * @returns {Promise<Uint8Array>}
+ */
+export async function buildPagesPdf({ bytes, pages, stamp = false, title = '', onProgress }) {
+  const { PDFDocument } = await lib();
+  let source;
+  try {
+    source = await PDFDocument.load(bytes, {
+      ignoreEncryption: true,
+      updateMetadata: false,
+      throwOnInvalidObject: false,
+    });
+  } catch (error) {
+    throw new Error(EXPORT_ERRORS.UNREADABLE, { cause: error });
+  }
+  if (source.isEncrypted) throw new Error(EXPORT_ERRORS.ENCRYPTED);
+
+  const count = source.getPageCount();
+  const wanted = (pages || []).filter((p) => Number.isInteger(p?.pageNumber)
+    && p.pageNumber >= 1 && p.pageNumber <= count);
+  if (!wanted.length) throw new Error(EXPORT_ERRORS.EMPTY);
+
+  const doc = await PDFDocument.create();
+  doc.setProducer(PRODUCER);
+  doc.setCreator(PRODUCER);
+  if (title) doc.setTitle(title);
+  let copied;
+  try {
+    copied = await doc.copyPages(source, wanted.map((p) => p.pageNumber - 1));
+  } catch (error) {
+    throw new Error(EXPORT_ERRORS.UNREADABLE, { cause: error });
+  }
+  for (let i = 0; i < copied.length; i++) {
+    const page = doc.addPage(copied[i]);
+    const strokes = wanted[i].strokes;
+    if (stamp && strokes?.length) {
+      const { view, rotate } = pageViewOf(page);
+      stampInk(doc, page, strokes, invertTransform(viewportTransform(view, rotate)));
+    }
+    onProgress?.(i + 1, copied.length);
+  }
+  try {
     return await doc.save({ useObjectStreams: false, objectsPerTick: 64 });
   } catch (error) {
     throw new Error(EXPORT_ERRORS.UNREADABLE, { cause: error });

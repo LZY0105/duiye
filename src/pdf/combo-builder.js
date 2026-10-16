@@ -159,6 +159,8 @@ export function openComboBuilder({
       if (e.key !== 'Escape') return;
       // 上面还压着一张小单子：这一下是它的，不是这张的。
       if (busy) return;
+      // 切到了设置页，它跟着练习页收起来了（pdf.css）：这一下是设置页的。
+      if (getComputedStyle(overlay).display === 'none') return;
       e.preventDefault();
       e.stopPropagation();
       // 正拖着一行：这一下只是放弃这次拖动，和整理内容一样。
