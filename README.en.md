@@ -36,7 +36,7 @@ The engine used for side-by-side question and answer matching comes from a separ
 
 > **https://github.com/LZY0105/Math-answer-to-question-matching-model**
 
-**This application uses that engine.** The 21 modules under `src/pdf/` come directly from that repository and track its `main` branch, and the engine's regression tests have also been incorporated into `test/`.
+**This application uses that engine.** The 21 modules under `src/pdf/` come directly from that repository and track its `main` branch (last synced to `7673a20` on 2026-10-12), and the engine's regression tests have also been incorporated into `test/`. `answer-panel.js` and `matching-engine.js` carry changes of this application's own and are not overwritten by a sync.
 
 The engine solves this problem: when two PDFs share no identifier other than their printed content, determine which entry in the answer key belongs to each exercise, or refuse to answer. It evaluates the least expensive signals first: hierarchical question numbers from bookmarks, table-of-contents alignment, math-weighted similarity, and bounded sequence alignment. It will not return an automatic answer until the two books have been verified as a matching pair.
 

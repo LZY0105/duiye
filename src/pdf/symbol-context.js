@@ -92,8 +92,20 @@ function diceMultiset(a, b) {
  *   treating an absent signal as disagreement.
  */
 export function symbolContextSimilarity(normalizedA, normalizedB, radius = SYMBOL_RADIUS) {
-  const a = symbolContexts(normalizedA, radius);
-  const b = symbolContexts(normalizedB, radius);
+  return contextSetSimilarity(
+    symbolContexts(normalizedA, radius),
+    symbolContexts(normalizedB, radius),
+  );
+}
+
+/**
+ * The same verdict from two already-extracted context lists.
+ *
+ * A caller scoring one text against many can extract each side's contexts once
+ * and reuse them; symbolContextSimilarity re-derives them on every call, which
+ * on a page alignment or a pair-identity sample is most of the work.
+ */
+export function contextSetSimilarity(a, b) {
   if (a.length < MIN_ANCHORS || b.length < MIN_ANCHORS) return null;
   return diceMultiset(a, b);
 }

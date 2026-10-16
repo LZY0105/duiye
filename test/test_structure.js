@@ -19,7 +19,8 @@ import {
 } from '../src/pdf/decision.js';
 import { locateAnswerRegion, sectionRangeForPage } from '../src/pdf/region-locator.js';
 import { auditOcrMatches, headingPagesFrom } from '../src/pdf/ocr-audit.js';
-import { parseQuestionLine } from '../src/pdf/question-id.js';
+import { idFromOutlineTitle, parseQuestionLine } from '../src/pdf/question-id.js';
+import { documentSubject } from '../src/pdf/pair-verifier.js';
 import {
   buildContentsLocations, estimatePageOffset, extractContentsRows,
 } from '../src/pdf/contents-index.js';
@@ -511,6 +512,122 @@ check('headingPagesFrom reads printed labels out of recognised lines', () => {
   assert.deepEqual([...pages.get('1.1')], [7]);
   assert.deepEqual([...pages.get('1.2')], [8]);
   assert.equal(pages.has('极限与连续函数'), false);
+});
+
+// ═══════════════════════════════════════════════════════════════
+group('7. Bookmark conventions from the 2026-09 textbook corpus');
+
+check('a bookmark per page, titled with its page number, is not a question level', () => {
+  // Two scanned volumes in the textbook release carry exactly this tree: 213
+  // and 326 flat nodes, every title equal to its page minus a constant. Both
+  // read as "dense short-span identifier cohorts" and indexed as questions no
+  // book asks. The offset here is 8, as on the real book.
+  const items = [
+    { title: '封面', pageNumber: 1, children: [] },
+    { title: '目录', pageNumber: 7, children: [] },
+  ];
+  for (let n = 1; n <= 40; n++) items.push({ title: String(n), pageNumber: n + 8, children: [] });
+  const c = classifyOutline({ available: true, items }, { numPages: 50 });
+  assert.equal(c.questions.length, 0, 'page markers must not enter the question index');
+  assert.equal(c.sections.length, 0, 'nor anchor a region');
+  assert.equal(c.cohorts[0].kind, NODE_KIND.PAGE_MARKER);
+  assert.equal(c.hasQuestionLevel, false);
+});
+
+check('a bare numeric cohort that does not track the page counter is still read as questions', () => {
+  // The rule the page-marker test must not break: twenty-plus bare ids whose
+  // pages advance irregularly are what a question level looks like without
+  // markers, and that cohort was already accepted on its shape.
+  const items = [];
+  let page = 3;
+  for (let n = 1; n <= 24; n++) { items.push({ title: String(n), pageNumber: page, children: [] }); page += (n % 3 === 0) ? 2 : 1; }
+  const c = classifyOutline({ available: true, items }, { numPages: 60 });
+  assert.equal(c.questions.length, 24);
+});
+
+check('a hierarchical id never reads as a page number', () => {
+  const items = [];
+  for (let n = 1; n <= 30; n++) items.push({ title: `1.${n}`, pageNumber: n + 8, children: [] });
+  const c = classifyOutline({ available: true, items }, { numPages: 50 });
+  assert.equal(c.questions.length, 30);
+});
+
+check('every marker the classifier trusts yields an id', () => {
+  // The 绿皮书 exercise book carries 87 "习题 1.1" bookmarks. The classifier
+  // called the cohort questions; the id parser, which knew only 例题, gave every
+  // node an empty id, and the book indexed as nothing.
+  assert.equal(idFromOutlineTitle('例题 1.31'), '1.31');
+  assert.equal(idFromOutlineTitle('习题 1.1'), '1.1');
+  assert.equal(idFromOutlineTitle('习题1.2'), '1.2');
+  assert.equal(idFromOutlineTitle('练习题 3'), '3');
+  assert.equal(idFromOutlineTitle('第 12 题'), '12');
+  assert.equal(idFromOutlineTitle('Exercise 3.2'), '3.2');
+  assert.equal(idFromOutlineTitle('1.1 极限与连续函数'), '1.1', 'a leading id still counts');
+  assert.equal(idFromOutlineTitle('第一章 群'), '', 'a chapter marker is not an id');
+  assert.equal(idFromOutlineTitle('第 3 章 群'), '', 'nor is a numbered chapter');
+  assert.equal(idFromOutlineTitle('目录'), '');
+});
+
+check('exercise-set bookmarks index as questions once their ids are read', () => {
+  const tree = {
+    available: true,
+    items: [{
+      title: '第一章 行列式', pageNumber: 17, children: [
+        { title: '1.1 二阶行列式', pageNumber: 17, children: [{ title: '习题 1.1', pageNumber: 23, children: [] }] },
+        { title: '1.2 三阶行列式', pageNumber: 23, children: [{ title: '习题 1.2', pageNumber: 27, children: [] }] },
+      ],
+    }],
+  };
+  const c = classifyOutline(tree, { numPages: 40 });
+  assert.deepEqual(c.questions.map(q => q.questionId), ['1.1', '1.2']);
+});
+
+// ═══════════════════════════════════════════════════════════════
+group('8. Subject detection beyond the two 考研 subjects');
+
+const bookOf = (title, line, n = 30) => ({
+  outline: { available: true, items: [{ title, pageNumber: 1, children: [] }] },
+  lines: Array.from({ length: n }, (_, i) => ({ page: i + 1, text: line })),
+});
+
+check('the two original subjects classify as before', () => {
+  assert.equal(documentSubject(bookOf('第一章 2023 年数学分析真题分类', '求极限，并计算积分')).subject, 'MATH_ANALYSIS');
+  assert.equal(documentSubject(bookOf('第二章 矩阵', '求矩阵的特征值与行列式')).subject, 'ALGEBRA');
+});
+
+check('a subject named in its running heads is that subject, whatever its working vocabulary', () => {
+  // The defect: a differential-equations answer book, a PDE answer book and a
+  // probability textbook all read as MATH_ANALYSIS, because 极限 and 积分 are
+  // the tools of every analysis-family subject.
+  const pde = bookOf('数学物理方程', '数学物理方程 第一章 波动方程，由积分与极限可得');
+  assert.equal(documentSubject(pde).subject, 'PDE');
+  const prob = bookOf('概率论与数理统计教程', '概率论 随机变量的分布函数，其积分为');
+  assert.equal(documentSubject(prob).subject, 'PROBABILITY');
+  const abs = bookOf('近世代数', '近世代数 设 H 为 G 的正规子群，则商群');
+  assert.equal(documentSubject(abs).subject, 'ABSTRACT_ALGEBRA');
+});
+
+check('evidence that is not one-sided is MIXED, never a guess', () => {
+  // A generic calculus vocabulary and an unnamed subject: the old code called
+  // this MATH_ANALYSIS on a differential-equations book. MIXED cannot reject a
+  // pair, and a wrong confident subject on one side of a valid pair would.
+  const ode = bookOf('习题解答', '求该方程的通解与特解，其中积分与导数');
+  assert.equal(documentSubject(ode).subject, 'MIXED');
+  assert.equal(documentSubject({ outline: { available: false, items: [] }, lines: [] }).subject, 'MIXED');
+});
+
+check('a name mentioned in passing does not outvote the book', () => {
+  // Fewer than five mentions are not a running head. A 数学分析 exercise book
+  // whose section titles say 计算方法 three times is not a numerical-analysis
+  // book; that was the one wrong verdict in the first pass over the corpus.
+  const book = {
+    outline: { available: true, items: [
+      { title: '数值分析简介', pageNumber: 1, children: [] },
+      { title: '数值分析简介', pageNumber: 2, children: [] },
+    ] },
+    lines: Array.from({ length: 30 }, (_, i) => ({ page: i + 1, text: '求极限，并计算积分与级数' })),
+  };
+  assert.equal(documentSubject(book).subject, 'MATH_ANALYSIS');
 });
 
 console.log('\n═══════════════════════════════════════════════════════════════');

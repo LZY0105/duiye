@@ -88,7 +88,7 @@ export function sectionTitleForms(titles) {
  * Builds a cleaner that removes interleaved structure from a document's text.
  *
  * @param {{outline?: object, lines?: Array}} doc
- * @returns {(text: string, pages?: number[]) => string}
+ * @returns {(text: string) => string}
  */
 export function createTextCleaner({ sectionTitles, lines } = {}) {
   const { report } = findBoilerplate(lines ?? []);
@@ -105,15 +105,9 @@ export function createTextCleaner({ sectionTitles, lines } = {}) {
     })
     .filter(Boolean);
 
-  return (text, pages = []) => {
+  return (text) => {
     let s = String(text ?? '');
     for (const re of patterns) s = s.replace(re, ' ');
-    // The entry's own page numbers, which the extractor drops into the middle of
-    // expressions. Only these numbers: stripping digits generally would destroy
-    // the mathematics this exists to protect.
-    for (const page of pages) {
-      s = s.replace(new RegExp(`(?<![0-9])${page}(?![0-9])`, 'g'), ' ');
-    }
     return s.replace(/\s+/g, ' ').trim();
   };
 }
@@ -151,9 +145,18 @@ export function entryLines(lines, entry, next) {
  * @returns {{text: string, scoped: boolean}}
  */
 export function entryText(lines, entry, next, clean) {
-  const { lines: own, scoped } = entryLines(lines, entry, next);
-  const pages = [];
-  for (let p = entry.page; p <= (entry.endPage ?? entry.page); p++) pages.push(p);
+  const { lines: all, scoped } = entryLines(lines, entry, next);
+  // The printed page number is a line of its own, and that line is dropped.
+  //
+  // An earlier version instead deleted every isolated occurrence of the entry's
+  // page numbers from the joined text, meant for a footer the extractor had
+  // glued onto an expression. On pages 3 and 4 that deleted every lone 3 and 4
+  // in the question: "2x^3 − 5x^2 + 4x − 1" lost its cube and its 4, and
+  // "例题 2.3" lost the 3 of its own label. Measured on the 2024 algebra pair,
+  // that alone withheld more strict-policy matches than the extractor did.
+  const pageNumbers = new Set();
+  for (let p = entry.page; p <= (entry.endPage ?? entry.page); p++) pageNumbers.add(String(p));
+  const own = all.filter(l => !pageNumbers.has(String(l.text ?? '').trim()));
   const joined = own.map(l => l.text).join(' ').trim();
 
   // Vertical extent PER PAGE, when the adapter reports line geometry. This is
@@ -182,7 +185,7 @@ export function entryText(lines, entry, next, clean) {
   const spans = [...byPage.values()].sort((a, b) => a.page - b.page);
 
   return {
-    text: clean ? clean(joined, pages) : joined,
+    text: clean ? clean(joined) : joined,
     scoped,
     spans,
   };
