@@ -9,6 +9,9 @@
 //
 // 它曾经叫 latexsnipper-v1。那个缓存在跑过旧版本的人机器上可能压着几百兆的
 // ONNX 权重 —— 那套识别栈这个应用已经没有了。改名就是把那块空间还回去的办法。
+//
+// 但改名是整个缓存一起扔，攒下来的字符映射表、字体也跟着没了。只想清掉某一类
+// 条目时别动它，照 forgetDeviceFiles 那样在 activate 里挑出来删。
 const CACHE_NAME = 'duiye-v1';
 
 /**
@@ -38,6 +41,21 @@ const PRE_CACHE = [
   '/vendor/pdf.worker.min.js',
   '/vendor/katex.min.css',
 ];
+
+/**
+ * 设备存储上的文件换成同源网址之后的两个前缀。
+ *
+ * Capacitor 的 convertFileSrc 把 content:// 换成 /_capacitor_content_/…，把
+ * file:// 和绝对路径换成 /_capacitor_file_/…；本地服务器见到这两个前缀就去设备
+ * 存储上打开那个文件（WebViewLocalServer.isLocalFile），不在包里的网页资源里找。
+ * 浏览器那条路上不会出现这样的网址，绕开它们对 PWA 没有影响。
+ */
+const DEVICE_FILE_PREFIXES = ['/_capacitor_content_/', '/_capacitor_file_/'];
+
+/** 这个网址背后是不是设备上的文件。 */
+function isDeviceFile(url) {
+  return DEVICE_FILE_PREFIXES.some((prefix) => url.pathname.startsWith(prefix));
+}
 
 /** 这条响应值不值得留下来。
  *
@@ -87,6 +105,26 @@ async function networkFirst(request) {
   }
 }
 
+/** 把旧版本存下的设备文件副本从缓存里删掉。
+ *
+ * 旧版本没有绕开设备文件，用 fetch 导入过的每一本书都在缓存里躺着一份完整副本
+ * （见 fetch 处理器里那条规则）。这里只挑出那两个前缀下的条目删，不给缓存改名：
+ * 改名会把 168 张字符映射表、PDF 字体这些攒下来的东西一起扔掉，下次打开中文书
+ * 又得一张一张重新取。
+ *
+ * 和 remember() 一样，删不掉不算错：那几份副本无非多躺到下一次更新，不该因为
+ * 它们让后面的 clients.claim() 跑不到。
+ */
+async function forgetDeviceFiles() {
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    const copies = (await cache.keys()).filter((request) => isDeviceFile(new URL(request.url)));
+    await Promise.all(copies.map((request) => cache.delete(request)));
+  } catch (err) {
+    console.warn('SW: 没能清掉缓存里的设备文件副本 —', err.message);
+  }
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
@@ -105,6 +143,7 @@ self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const names = await caches.keys();
     await Promise.all(names.filter((n) => n !== CACHE_NAME).map((n) => caches.delete(n)));
+    await forgetDeviceFiles();
     await self.clients.claim();
   })());
 });
@@ -120,6 +159,17 @@ self.addEventListener('fetch', (event) => {
   // 让答案永远停在第一次问到的那个。
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+
+  // 设备上的文件也不管，原样交给 Capacitor 的本地服务器。导入一本书时，
+  // pdf-files.js 把 content:// 换成 /_capacitor_content_/… 再 fetch 流式读 ——
+  // 这是一条同源 GET，原来一路落到下面的网络优先，被 remember() 原样存了一份。
+  // 书本来就在设备存储上，这份副本没有一点用处：平板上量过，缓存里 173 条合计
+  // 3135 兆，最大的几条全是导入的书，901 兆、680 兆、369 兆……
+  //
+  // 也是为了内存。remember() 里的 response.clone() 把一条几百兆的流分成两路，
+  // 一路给页面、一路写缓存，两路快慢不一时，慢的那路没读到的都得在内存里攒着。
+  // 导入改走流式读，本来就是为了内存里只放一份书。
+  if (isDeviceFile(url)) return;
 
   // vendor/ 下面是钉死在仓库里的第三方构建产物：pdf.js、字符映射表、字体。
   // 它们不随应用版本变化，缓存里那份永远是对的，为它们走一趟网络是纯粹的延迟。

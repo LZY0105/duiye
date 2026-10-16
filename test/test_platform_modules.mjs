@@ -5,6 +5,7 @@
 // 这里用 JSDOM 跑真实的 DOM 交互，不看源码形状，只看行为。
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import vm from 'node:vm';
 import { JSDOM } from 'jsdom';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/', pretendToBeVisual: true });
@@ -177,7 +178,7 @@ await check('showSaveToast puts one status node on the page', () => {
 // ── service worker ──────────────────────────────────────────────────────────
 //
 // sw.js 不是 ES module，是经典 worker 脚本：它在顶层用 self / caches，import 不
-// 进来。所以这一组是接线测试 —— 读源码断言该在的东西在。
+// 进来。所以前三条是接线测试 —— 读源码断言该在的东西在。
 //
 // 预缓存表那条不在这里：test_ui_interactions.js 已经在管它了（那张表曾经 17 项
 // 里有 13 项指向不存在的文件）。这里只管重写时新加的三道闸。
@@ -199,6 +200,119 @@ await check('跨源请求不拦截', () => {
 
 await check('非 GET 不碰', () => {
   assert.match(swSource, /request\.method !== 'GET'/);
+});
+
+// 设备文件那道闸不能只看源码：源码里有那两个前缀，说明不了 fetch 处理器真的没
+// 接手、activate 真的删对了条目。所以后面几条换个做法 —— 用 node:vm 把 sw.js 当
+// 经典脚本跑起来，喂给它一个假的 self、一份放在内存里的 caches 和一个永远回 200
+// 的 fetch，再派发事件，看缓存里最后剩下什么。
+
+/** 跑一份 sw.js：回它注册的事件处理器、它用的那份假缓存，和它都干了些什么。 */
+function bootServiceWorker() {
+  const keyOf = (req) => new URL(typeof req === 'string' ? req : req.url, 'http://localhost/').href;
+  const stores = new Map();
+  const cacheOf = (store) => ({
+    add: async (req) => { store.set(keyOf(req), new Response('预缓存的')); },
+    put: async (req, res) => { store.set(keyOf(req), res); },
+    match: async (req) => store.get(keyOf(req)),
+    keys: async () => [...store.keys()].map((url) => new Request(url)),
+    delete: async (req) => store.delete(keyOf(req)),
+  });
+  const sw = { handlers: {}, fetched: [], warnings: [], claimed: false };
+  sw.caches = {
+    open: async (name) => {
+      if (!stores.has(name)) stores.set(name, new Map());
+      return cacheOf(stores.get(name));
+    },
+    keys: async () => [...stores.keys()],
+    delete: async (name) => stores.delete(name),
+    match: async (req) => [...stores.values()].find((store) => store.has(keyOf(req)))?.get(keyOf(req)),
+  };
+  const context = vm.createContext({
+    self: {
+      location: new URL('http://localhost/sw.js'),
+      addEventListener: (type, handler) => { sw.handlers[type] = handler; },
+      skipWaiting: async () => {},
+      clients: { claim: async () => { sw.claimed = true; } },
+    },
+    caches: sw.caches,
+    fetch: async (req) => { sw.fetched.push(keyOf(req)); return new Response('网络上的'); },
+    URL,
+    console: { ...console, warn: (...args) => sw.warnings.push(args.join(' ')) },
+  });
+  vm.runInContext(swSource, context, { filename: 'sw.js' });
+  sw.cacheName = vm.runInContext('CACHE_NAME', context);
+  return sw;
+}
+
+/** 派发一次 fetch，回 SW 有没有接手（调没调 respondWith）。 */
+async function dispatchFetch(sw, url) {
+  let answer = null;
+  sw.handlers.fetch({ request: new Request(url), respondWith: (promise) => { answer = promise; } });
+  if (answer) await answer;
+  await new Promise((resolve) => setImmediate(resolve));   // remember() 不等 put 落定，这里替它等
+  return answer !== null;
+}
+
+/** 派发 activate，等 waitUntil 里的活干完。 */
+async function dispatchActivate(sw) {
+  let work;
+  sw.handlers.activate({ waitUntil: (promise) => { work = promise; } });
+  await work;
+}
+
+// 平板上缓存里最大的两本书，加一本按文件路径换出来的。
+const DEVICE_FILES = [
+  'http://localhost/_capacitor_content_/media/external/file/1858',
+  'http://localhost/_capacitor_content_/media/external/file/14171',
+  'http://localhost/_capacitor_file_/storage/emulated/0/Download/book.pdf',
+];
+
+await check('设备上的文件 SW 不接手，也不进缓存', async () => {
+  // 原来这两类同源 GET 一路落到网络优先，被 remember() 原样存一份：平板上缓存里
+  // 173 条合计 3135 兆，最大的几条全是导入的书。
+  const sw = bootServiceWorker();
+  for (const url of DEVICE_FILES) {
+    assert.equal(await dispatchFetch(sw, url), false, `${url} 不该被 respondWith 接走`);
+  }
+  assert.deepEqual(sw.fetched, [], 'SW 也不该自己替它去取一遍');
+  assert.deepEqual(await sw.caches.keys(), [], '缓存里不该多出任何东西');
+
+  // 对照：同源的应用代码照旧网络优先、顺手留一份。没有这一段，上面几条在一个什么
+  // 都不缓存的 SW 上也会过。
+  const code = 'http://localhost/assets/index-abc123.js';
+  assert.equal(await dispatchFetch(sw, code), true);
+  assert.ok(await (await sw.caches.open(sw.cacheName)).match(code), '应用代码还是要进缓存');
+});
+
+await check('activate 清掉旧版存下的设备文件副本，别的留着', async () => {
+  // 不靠改缓存名来清：改名会把字符映射表这些运行时攒下的东西一起扔掉。
+  const sw = bootServiceWorker();
+  const cache = await sw.caches.open(sw.cacheName);
+  const kept = [
+    'http://localhost/',
+    'http://localhost/vendor/cmaps/UniGB-UCS2-H.bcmap',
+    'http://localhost/assets/index-abc123.js',
+  ];
+  for (const url of [...DEVICE_FILES, ...kept]) await cache.put(url, new Response('旧版存的'));
+  await sw.caches.open('latexsnipper-v1');
+
+  await dispatchActivate(sw);
+
+  const left = (await (await sw.caches.open(sw.cacheName)).keys()).map((request) => request.url);
+  assert.deepEqual(left.sort(), [...kept].sort(), '只删设备文件');
+  assert.deepEqual(await sw.caches.keys(), [sw.cacheName], '名字不对的旧缓存照旧整个删掉');
+  assert.ok(sw.claimed, '清完照旧 claim');
+});
+
+await check('设备文件副本删不掉也不挡 claim', async () => {
+  // 缓存打不开时记一句就算了：那几份副本无非多躺到下一次更新，activate 照样走到
+  // clients.claim()。
+  const sw = bootServiceWorker();
+  sw.caches.open = async () => { throw new Error('存储出错'); };
+  await dispatchActivate(sw);
+  assert.ok(sw.claimed);
+  assert.match(sw.warnings.join('\n'), /存储出错/);
 });
 
 console.log(`\n  ${PASS} passed, ${FAIL} failed`);
