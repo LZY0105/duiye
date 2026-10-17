@@ -299,6 +299,8 @@
 }
 /* 浮起来放大多少：纸不浮起来，把它设成 1（paper.css）。 */
 .ink-scrub-drop.is-on { opacity: 1; scale: var(--scrub-lift, 1.3); }
+/* 划出横杠外面待住了：玻璃回到原来那一支上、落回镜片那么大——松手什么都不换（脚本把它挪回去，见 _installScrub）。 */
+.ink-scrub-drop.is-on.is-away { scale: 1; }
 /* ── colour swatches ──────────────────────────────────────────────────────── */
 
 .ink-swatch {

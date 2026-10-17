@@ -379,7 +379,8 @@ html[data-glass="liquid"] .save-toast,
 html[data-glass="liquid"] .pdf-zoom-badge,
 html[data-glass="liquid"] .ink-selection-bar,
 html[data-glass="liquid"] .ink-recognize-pill,
-html[data-glass="liquid"] .ink-recognize-panel {
+html[data-glass="liquid"] .ink-recognize-panel,
+html[data-glass="liquid"] .ink-image-card {
   background: transparent !important;
   border-color: transparent !important;
   backdrop-filter: blur(20px) saturate(140%) url(#lgr-sheet-rich) !important;
@@ -394,7 +395,8 @@ html[data-glass="liquid"].lgr-busy .save-toast,
 html[data-glass="liquid"].lgr-busy .pdf-zoom-badge,
 html[data-glass="liquid"].lgr-busy .ink-selection-bar,
 html[data-glass="liquid"].lgr-busy .ink-recognize-pill,
-html[data-glass="liquid"].lgr-busy .ink-recognize-panel {
+html[data-glass="liquid"].lgr-busy .ink-recognize-panel,
+html[data-glass="liquid"].lgr-busy .ink-image-card {
   backdrop-filter: blur(20px) saturate(140%) url(#lgr-sheet-lean) !important;
 }
 html[data-glass="liquid"] .pdf-zoom-badge { box-shadow: var(--lgr-rim-still), var(--lgr-shadow-small) !important; }
@@ -506,6 +508,7 @@ html[data-glass="liquid"] .pdf-picker-search input:focus {
   html[data-glass="liquid"] .ink-selection-bar,
   html[data-glass="liquid"] .ink-recognize-pill,
   html[data-glass="liquid"] .ink-recognize-panel,
+  html[data-glass="liquid"] .ink-image-card,
   html[data-glass="liquid"] .pdf-slot-toolbar,
   html[data-glass="liquid"] .pdf-ws-swap,
   html[data-glass="liquid"] .pdf-ws-divider-grip {

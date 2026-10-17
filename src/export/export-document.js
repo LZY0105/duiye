@@ -7,6 +7,7 @@
 
 import { annotatedPages, loadLayer } from '../ink/ink-store.js';
 import { createTransform, drawStroke } from '../ink/ink-renderer.js';
+import { getImage, imageIdsOf, whenImagesReady } from '../ink/ink-image.js';
 import { getDocumentBytes, openStoredDocument } from '../pdf/pdf-library.js';
 import { getNotebook } from '../note/note-store.js';
 import { NOTE_PAGE, openNoteDocument } from '../note/note-document.js';
@@ -43,6 +44,20 @@ async function strokesOn(id, pageNumber) {
   return layer?.getAll?.() || [];
 }
 
+/**
+ * 这几笔里贴着的图片，取齐成 id → { bytes, type }，交给做 PDF 的那一段：后台线程打不开图片库，只能先取好递过去。
+ * 库里丢了的那张就没有——做的时候那一张不画，别的照画。
+ */
+async function imagesFor(strokes) {
+  const out = {};
+  for (const id of imageIdsOf(strokes)) {
+    const record = await getImage(id);
+    if (!record?.blob) continue;
+    out[id] = { bytes: new Uint8Array(await record.blob.arrayBuffer()), type: record.type || record.blob.type };
+  }
+  return out;
+}
+
 /** 画布 → 某种格式的字节。 */
 function canvasBytes(canvas, type, quality) {
   return new Promise((resolve, reject) => {
@@ -75,6 +90,8 @@ async function rasterBookPage(doc, pageNumber, strokes) {
   const wanted = RASTER_SCALE;
   const pixels = size.width * size.height * wanted * wanted;
   const scale = pixels > RASTER_MAX_PIXELS ? wanted * Math.sqrt(RASTER_MAX_PIXELS / pixels) : wanted;
+  // 贴着的图片先解好：下面是一口气画完的，画的时候还没解好的图就成了一块淡灰。
+  if (strokes?.length) await whenImagesReady(imageIdsOf(strokes));
   const { canvas } = await doc.renderPage(pageNumber, scale, { drawable: true });
   try {
     if (strokes?.length) {
@@ -182,6 +199,7 @@ export async function buildExport(target, { onProgress } = {}) {
       size: NOTE_PAGE,
       paper: await notePaper(record),
       strokesByPage,
+      images: await imagesFor(Object.values(strokesByPage).flat()),
     };
     const bytes = await inBackground('notebook', async () => input,
       (again) => buildNotebookPdf({
@@ -199,7 +217,7 @@ export async function buildExport(target, { onProgress } = {}) {
     const strokes = await strokesOn(id, SCRATCH_PAGE);
     const box = scratchPageBox(strokes);
     if (!box) throw new Error(EXPORT_ERRORS.EMPTY);
-    const input = { strokes, box, paper: await scratchPaper(record, box) };
+    const input = { strokes, box, paper: await scratchPaper(record, box), images: await imagesFor(strokes) };
     const bytes = await inBackground('scratch', async () => input, (again) => buildScratchPdf(again));
     return { bytes, raster: false };
   }
@@ -210,11 +228,13 @@ export async function buildExport(target, { onProgress } = {}) {
     const strokes = await strokesOn(id, pageNumber);
     if (strokes.length) pages.push({ pageNumber, strokes });
   }
-  // 原文件字节转手给后台线程（不复制：一本书几十上百兆）。退回主线程时重新读一份。
+  // 原文件字节转手给后台线程（不复制：一本书几十上百兆）。退回主线程时重新读一份。图片是复制过去的（不大），
+  // 退回主线程时还在。
+  const images = await imagesFor(pages.flatMap((p) => p.strokes));
   const bookInput = async () => {
     const original = await getDocumentBytes(id);
     if (!original) throw new Error(EXPORT_ERRORS.NOT_FOUND);
-    return { bytes: original, pages };
+    return { bytes: original, pages, images };
   };
   try {
     const bytes = await inBackground('book', bookInput,
@@ -261,10 +281,11 @@ export async function buildPagesExport({ id, pages, stamp, title = '' }, { onPro
   for (const pageNumber of chosen) {
     wanted.push({ pageNumber, strokes: stamp ? await strokesOn(id, pageNumber) : [] });
   }
+  const images = stamp ? await imagesFor(wanted.flatMap((p) => p.strokes)) : {};
   const pagesInput = async () => {
     const original = await getDocumentBytes(id);
     if (!original) throw new Error(EXPORT_ERRORS.NOT_FOUND);
-    return { bytes: original, pages: wanted, stamp: !!stamp, title };
+    return { bytes: original, pages: wanted, images, stamp: !!stamp, title };
   };
   try {
     const bytes = await inBackground('pages', pagesInput,

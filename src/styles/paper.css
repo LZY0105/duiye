@@ -263,6 +263,20 @@ html[data-skin="minimal"] .ink-recognize-btn.is-primary {
 }
 html[data-skin="minimal"] .ink-recognize-btn.is-primary:active:not(:disabled) { background: var(--lg-primary-press); }
 
+/* 「插入图片」：挑图的那张单子也是一张纸条；页上那个框是钢笔色的虚线、一层钢笔水（不用黄），方一点。 */
+html[data-skin="minimal"] .ink-image-card {
+  border-radius: 4px;
+  background: var(--p-paper);
+  box-shadow: var(--p-slip);
+}
+html[data-skin="minimal"] .ink-image-thumb { border-radius: 2px; }
+html[data-skin="minimal"] .ink-image-slot {
+  border-radius: 4px;
+  border-color: var(--p-pen-line);
+  background: var(--p-pen-wash);
+  color: var(--p-pen);
+}
+
 /* ── 两栏：平放的纸 ─────────────────────────────────────────────────────────── */
 
 html[data-skin="minimal"] .pdf-ws-slot {

@@ -55,6 +55,20 @@ export async function start() {
   initLiquidGlassReact();
 
   probeNativeProxy(Logger);
+  sweepImagesLater(Logger);
+}
+
+/**
+ * 开机过一会儿收拾一次图片库（一天最多一次）：贴过又删掉、撤销也回不来的图，库里那一份删掉。规矩见
+ * src/ink/ink-image.js 的 removeUnusedImages。等一会儿再做：开机那几秒留给恢复上次的书和页。
+ */
+function sweepImagesLater(Logger) {
+  setTimeout(() => {
+    Promise.all([import('../ink/ink-image.js'), import('../ink/ink-store.js')])
+      .then(([images, store]) => images.sweepUnusedImages(store.imageIdsInUse))
+      .then((removed) => { if (removed) Logger.info('INK', `图片库收拾掉 ${removed} 张没人用的图`); })
+      .catch(() => { /* 收拾不了下次再说 */ });
+  }, 20000);
 }
 
 /**

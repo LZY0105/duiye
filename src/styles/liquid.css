@@ -484,7 +484,7 @@ html[data-skin] .pdf-ws-slot.is-snugger .pdf-slot-zoom { min-width: 0; }
 /* 最窄那一级再收一点：一本书那一栏在平板上左右分栏时只有 472 宽，两级都收了还差 24px，最后那颗「⋯」
    被挤出胶囊。按钮各窄 2px、页码框窄 4px、「对答案」（这时只剩图标）的内边距收小，正好放下。 */
 html[data-skin] .pdf-ws-slot.is-snugger .pdf-slot-btn { min-width: 30px; padding-inline: 4px; }
-html[data-skin] .pdf-ws-slot.is-snugger .pdf-slot-btn.is-answer-action { padding-inline: 6px; }
+html[data-skin] .pdf-ws-slot.is-snugger .pdf-slot-btn.is-answer-action { padding-inline: 6px; margin-inline: 2px; }
 html[data-skin] .pdf-ws-slot.is-snugger .pdf-slot-page { width: 34px; }
 
 html[data-skin] .pdf-slot-sep {
@@ -501,7 +501,10 @@ html[data-skin] .pdf-slot-btn.is-answer-action {
   box-shadow: var(--lg-primary-shadow);
   border-radius: 999px;
   padding: 0 10px 0 8px;
-  margin-inline: 2px;
+  /* 右边多空一点。它自己有底色，看得见的边就是它的边；别的图标在 32px 宽的按钮里两边各留着 6.5px。
+     原来它离后面那道线只有 5px，线离后面的图标却有 9.5px，一边紧一边松。最窄那一级里线收没了，
+     那时候照旧两边各 2px（见上面）。 */
+  margin-inline: 2px 6px;
   gap: 4px;
   font-weight: 600;
 }
@@ -513,7 +516,7 @@ html[data-skin] .pdf-slot-btn.is-answer-action {
 }
 
 /* 草稿纸的「回原点」「适合全部」原来是两枚带字的灰胶囊，整条栏头因为它们宽出去一
-   大截。现在和书的「适合宽度」「整页」一样是图标（字在 aria-label 和 title 里）。
+   大截。现在和栏头上别的按钮一样是图标（字在 aria-label 和 title 里）。
    保存读数也收着：存好了只是一个小勾，存着、没存、存坏了才用字说。 */
 html[data-skin] .pdf-slot-toolbar .scratch-save {
   height: 28px;

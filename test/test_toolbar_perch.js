@@ -1212,23 +1212,98 @@ await test('横躺的那一条（贴底边）：左右划', () => {
   assert.equal(bar.state.tool, 'lasso');
 });
 
-await test('划到横杠外面老远再松手、系统把手势收走：算反悔，什么都不拿', () => {
+const awhile = (ms) => new Promise((r) => setTimeout(r, ms));
+
+await test('划到横杠外面老远、在外面待住：玻璃回到原来那一支、哪一格都不亮；这时松手算反悔；划回来接着挑', async () => {
   const { bar } = mount();
   const L = layoutBar(bar);
   const pen = { name: 'pen', ...L.tool('pen') };
   const marker = L.tool('marker');
   slide(bar, pen, marker);
-  touch('pointermove', marker.x + 120, marker.y);
-  touch('pointerup', marker.x + 120, marker.y); // 横杠右边 59，+44 之外
-  assert.equal(bar.state.tool, 'pen');
-  slide(bar, pen, marker, { id: 33 });
-  touch('pointercancel', marker.x, marker.y, dom.window, 33);
-  assert.equal(bar.state.tool, 'pen');
+  touch('pointermove', marker.x + 120, marker.y); // 横杠右边 59，+44 之外
+  assert.ok(bar.root.querySelector('[data-tool="marker"]').classList.contains('is-scrub-target'), '刚出去：还不算');
+  await awhile(230);
+  const [drop] = drops();
+  assert.ok(drop.classList.contains('is-away'), '待住了：算划出去');
+  assert.equal(drop.style.translate, `${32 - 19}px ${pen.y - 19}px`, '玻璃回到原来那一支上');
+  assert.equal(bar.root.querySelectorAll('.is-scrub-target').length, 0, '哪一格都不亮');
+  touch('pointerup', marker.x + 120, marker.y);
+  assert.equal(bar.state.tool, 'pen', '这时松手：什么都不拿');
   assert.ok(!bar.root.querySelector('.ink-tools').classList.contains('is-scrubbing'));
+  // 划出去待住以后才被系统收走：一样不拿。
+  slide(bar, pen, marker, { id: 33 });
+  touch('pointermove', marker.x + 120, marker.y, dom.window, 33);
+  await awhile(230);
+  touch('pointercancel', 0, 0, dom.window, 33);
+  assert.equal(bar.state.tool, 'pen');
+  // 划出去又划回来：玻璃重新浮起来跟手，接着挑。
+  const lasso = L.tool('lasso');
+  slide(bar, pen, marker, { id: 35 });
+  touch('pointermove', marker.x + 120, marker.y, dom.window, 35);
+  await awhile(230);
+  touch('pointermove', lasso.x, lasso.y, dom.window, 35);
+  assert.ok(!drops().at(-1).classList.contains('is-away'));
+  assert.ok(bar.root.querySelector('[data-tool="lasso"]').classList.contains('is-scrub-target'));
+  touch('pointerup', lasso.x, lasso.y, dom.window, 35);
+  assert.equal(bar.state.tool, 'lasso');
   // 在横杠边上一点点松手（44 以内）还算：手指没离开多远。
-  slide(bar, pen, marker, { id: 34 });
+  slide(bar, { name: 'lasso', ...lasso }, marker, { id: 34 });
   touch('pointerup', marker.x + 50, marker.y, dom.window, 34);
   assert.equal(bar.state.tool, 'marker');
+});
+
+await test('快甩着松手、抬手那一下甩出了横杠（录屏里那一下）：不算反悔，拿玻璃停着的那一格，玻璃落在那一格上', () => {
+  // 人录的屏：按住选中的「形状」（最后一格）往下拖进颜色那一排，再往上一甩松手；手顺势往右偏，抬手那一点在
+  // 横杠右边老远。玻璃跟到了最上面那一格，原来按抬手那一点判「划出去了」，又飞回「形状」，什么都没换。
+  const { bar } = mount();
+  const L = layoutBar(bar);
+  bar.root.querySelector('[data-tool="shape"]').click();
+  assert.equal(bar.state.tool, 'shape');
+  const shape = { name: 'shape', ...L.tool('shape') };
+  slide(bar, shape, L.swatch(3), { id: 39 });
+  assert.ok(bar.root.querySelector('[data-tool="shape"]').classList.contains('is-scrub-target'), '拖出工具那一组：停在最后一格上');
+  // WebView 一帧才给一下，一下比一下跳得远，越往上往右偏得越多。
+  const top = L.tool('pen');
+  for (const [dx, y] of [[8, L.swatch(1).y], [14, L.tool('eraser').y], [24, L.tool('marker').y], [40, top.y]]) {
+    touch('pointermove', shape.x + dx, y, dom.window, 39);
+  }
+  assert.ok(bar.root.querySelector('[data-tool="pen"]').classList.contains('is-scrub-target'));
+  touch('pointermove', shape.x + 130, top.y - 60, dom.window, 39); // 最后一下甩出了横杠
+  touch('pointerup', shape.x + 160, top.y - 90, dom.window, 39);
+  assert.equal(bar.state.tool, 'pen', '拿最上面那一格');
+  const drop = drops().at(-1);
+  assert.ok(!drop.classList.contains('is-on'));
+  assert.ok(!drop.classList.contains('is-away'));
+  assert.equal(drop.style.translate, `${32 - 19}px ${top.y - 19}px`, '玻璃落在拿到的那一格上，不飞回「形状」');
+});
+
+await test('系统把手势收走：和松手一样，拿玻璃停着的那一格，它自己带的坐标不作数；玻璃落在拿到的那一格上', () => {
+  // 同样一甩，这一回是被系统收走了（安卓上收走时带的坐标常常是 0）。
+  const { bar } = mount();
+  const L = layoutBar(bar);
+  bar.root.querySelector('[data-tool="shape"]').click();
+  assert.equal(bar.state.tool, 'shape');
+  const shape = { name: 'shape', ...L.tool('shape') };
+  slide(bar, shape, L.swatch(3), { id: 37 });
+  assert.ok(bar.root.querySelector('[data-tool="shape"]').classList.contains('is-scrub-target'), '拖出工具那一组：停在最后一格上');
+  // 往上一甩：WebView 一帧才给一下，一下比一下跳得远。
+  const top = L.tool('pen');
+  for (const y of [L.swatch(1).y, L.tool('eraser').y, L.tool('marker').y, top.y]) {
+    touch('pointermove', shape.x + 8, y, dom.window, 37);
+  }
+  assert.ok(bar.root.querySelector('[data-tool="pen"]').classList.contains('is-scrub-target'));
+  touch('pointercancel', 0, 0, dom.window, 37); // 安卓上收走时带的坐标常常是 0
+  assert.equal(bar.state.tool, 'pen', '按最后跟到的那一格算，和松在那儿一样');
+  assert.ok(!bar.root.querySelector('.ink-tools').classList.contains('is-scrubbing'));
+  assert.equal(bar.root.querySelectorAll('.is-scrub-target').length, 0);
+  const drop = drops().at(-1);
+  assert.ok(!drop.classList.contains('is-on'));
+  assert.equal(drop.style.translate, `${32 - 19}px ${top.y - 19}px`, '落回拿到的那一格');
+  // 横杠自己丢了捕获（也是被收走）：一样。
+  const lost = new dom.window.PointerEvent('lostpointercapture', { bubbles: true, pointerId: 38, pointerType: 'touch' });
+  slide(bar, { name: 'pen', ...top }, L.tool('lasso'), { id: 38 });
+  bar.root.dispatchEvent(lost);
+  assert.equal(bar.state.tool, 'lasso');
 });
 
 await test('颜色那一排也能划；「更多颜色」那一格是动作，不算', () => {
@@ -1245,7 +1320,7 @@ await test('颜色那一排也能划；「更多颜色」那一格是动作，�
   assert.equal(bar.state.openCard, null, '没有开颜色卡片');
 });
 
-await test('开始划时按下的那一格丢了隐式捕获：不是手势被收走，接着划；横杠自己丢了捕获才算反悔', () => {
+await test('开始划时按下的那一格丢了隐式捕获：不是手势被收走，接着划；横杠自己丢了捕获才算被收走', () => {
   // 平板上（WebView 138）的那一串：手指按在钢笔上，浏览器隐式地把指针交给钢笔；走过 10px、横杠接住
   // 指针的那一刻，钢笔收到 lostpointercapture。原来把它当成了被收走，划动刚开始就取消了。
   const { bar } = mount();
@@ -1261,11 +1336,13 @@ await test('开始划时按下的那一格丢了隐式捕获：不是手势被�
   touch('pointermove', L.tool('marker').x, L.tool('marker').y);
   touch('pointerup', L.tool('marker').x, L.tool('marker').y);
   assert.equal(bar.state.tool, 'marker', '松在哪一格拿哪一格');
-  // 横杠自己的捕获丢了（系统把手势收走）：反悔。
+  // 横杠自己的捕获丢了（系统把手势收走）：这一路到此为止，按最后跟到的那一格算；后面再来的松手不算。
   slide(bar, { name: 'marker', ...L.tool('marker') }, L.tool('eraser'), { id: 35 });
   lost(bar.root, 35);
-  touch('pointerup', L.tool('eraser').x, L.tool('eraser').y, dom.window, 35);
-  assert.equal(bar.state.tool, 'marker');
+  assert.equal(bar.state.tool, 'eraser');
+  assert.ok(!bar.root.querySelector('.ink-tools').classList.contains('is-scrubbing'));
+  touch('pointerup', L.tool('pen').x, L.tool('pen').y, dom.window, 35);
+  assert.equal(bar.state.tool, 'eraser');
 });
 
 await test('划起来就不再有动效：按下时的水波纹摘掉；划着时什么都不渐变（这一排玻璃里每动一帧都要重合成）', () => {
@@ -1303,7 +1380,7 @@ await test('松手、被收走这两下照样传到 window 的冒泡阶段：按
     assert.equal(bar.state.tool, 'marker');
     slide(bar, { name: 'marker', ...L.tool('marker') }, L.tool('eraser'), { id: 36 });
     touch('pointercancel', 0, 0, bar.root, 36);
-    assert.equal(bar.state.tool, 'marker');
+    assert.equal(bar.state.tool, 'eraser', '被收走：按最后跟到的那一格算');
   } finally {
     dom.window.removeEventListener('pointerup', onEnd);
     dom.window.removeEventListener('pointercancel', onEnd);

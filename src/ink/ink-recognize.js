@@ -2,9 +2,12 @@
 //
 // 识别要一会儿（本机跑模型，一两秒到十几秒）。这一会儿里人得一直知道三件事：它在认（没卡死）、认的是哪一块、
 // 不想等了怎么停。所以：
-//   - 扫描：只照亮圈里那一块（圈外一点不碰），一道光从上往下扫，圈线变成流动的虚线；圈下面一个小条，跳动的三个点、
-//     「正在识别…」、有进度就带百分比，右边「取消」。认得久了（4 秒）小条上补一句「内容多会久一点」。
-//   - 找到了：扫光淡出，认出来的那几处在图上依次框出来（「是这几处」），框完结果单子从下面浮上来。
+//   - 扫描：圈里的东西自己像水面一样起伏——书页的底色、字、笔迹、贴着的图，一竖条一竖条地上下错开（ripple）；不另外
+//     铺颜色（人说「识别动画的波浪不要有颜色，让下面的背景和字像波浪一样动就行」），圈外一点不碰；圈线变成流动的
+//     虚线。圈下面一个小条：三个点、「正在识别…」、有进度就带百分比，右边「取消」；点和字跟着同一个节拍一个接一个
+//     涌起来、亮一下，像浪从头传到尾。认得久了（4 秒）小条上补一句「内容多会久一点」。
+//   - 找到了：起伏慢慢平下去（认得再快也至少起伏 RIPPLE_HOLD_MS），认出来的那几处在图上依次框出来（「是这几处」），
+//     框完结果单子从下面浮上来。
 //   - 结果单子：一条一行，公式按排好的样子显示（KaTeX），文字照原样；默认全选，点一行选上 / 取消；认错的点 ✎ 改；
 //     底下「复制」「转为笔迹」。
 //   - 没认出、认失败、等太久：小条上说一句，失败的能「再试一次」。
@@ -26,6 +29,37 @@ const EDGE = 8;
 const SLOW_MS = 4000;
 /** 框框都框完再浮出单子：一个框 70ms，最多等这么久。 */
 const BOXES_MAX_MS = 420;
+
+/**
+ * 小条上的点和字：一个接一个涌起来，前后隔这么久；整个节拍这么长（样式表 ink-rec-crest 那一段用的是同一个数）。
+ * 三个点排在最前面，字从第四个起。
+ */
+const CREST_STAGGER_MS = 65;
+const CREST_PERIOD_MS = 1500;
+const CREST_DOTS = 3;
+
+const nowMs = () => (globalThis.performance?.now ? globalThis.performance.now() : Date.now());
+
+/**
+ * 圈里的东西起伏多大（CSS 像素，按圈高的 5% 算，夹在这中间）、一道浪走一个浪长要多久。另叠一道短一点、反着走、
+ * 小一点的浪（RIPPLE_SECOND），两道一合，起伏才像水面，不像一条正弦在平移。
+ */
+const RIPPLE_AMP_MIN = 2;
+const RIPPLE_AMP_MAX = 7;
+const RIPPLE_PERIOD_MS = 1200;
+const RIPPLE_SECOND = Object.freeze({ amp: 0.35, len: 0.53, period: 1.7 });
+/**
+ * 认得再快，圈里的东西也至少起伏这么久才平下去：机上一块小圈不到半秒就认完，浪刚起来就没了，看不出是在认。
+ * 只拖起伏，不拖结果——单子照常时候出来。
+ */
+const RIPPLE_HOLD_MS = 700;
+/**
+ * 起伏涨上来、平下去按时间走（时间常数，毫秒），不按帧：平板上认着的时候一帧三四十毫秒，按帧走要一秒多才平下去。
+ * 竖条按设备像素切（两个设备像素一条），一块再宽也最多切这么多条：按 CSS 像素切，平板上一条五个设备像素宽，相邻
+ * 两条错开的那一点在斜着的边上是一级一级的锯齿（机上录屏放大看得见）。
+ */
+const RIPPLE_EASE_MS = 150;
+const RIPPLE_SLICES = 600;
 
 export const RECOGNIZE_STATES = Object.freeze({
   IDLE: 'idle', SCANNING: 'scanning', RESULTS: 'results', EMPTY: 'empty', ERROR: 'error',
@@ -125,26 +159,21 @@ export class RecognizeOverlay {
     el.className = 'ink-recognize';
     el.dataset.state = RECOGNIZE_STATES.IDLE;
     el.innerHTML = `
+      <!-- 圈里那一块自己像水面一样起伏：截图（连同圈里的笔迹、贴着的图）一竖条一竖条地上下错开画，盖在原来的样子上（见 ripple）。 -->
+      <canvas class="ink-recognize-ripple" data-role="ripple" aria-hidden="true" hidden></canvas>
       <svg class="ink-recognize-scan" aria-hidden="true">
         <defs>
           <clipPath id="ink-rec-clip-${id}"><path data-role="clip"></path></clipPath>
-          <linearGradient id="ink-rec-band-${id}" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stop-color="currentColor" stop-opacity="0"></stop>
-            <stop offset="0.6" stop-color="currentColor" stop-opacity="0.22"></stop>
-            <stop offset="0.68" stop-color="currentColor" stop-opacity="0.42"></stop>
-            <stop offset="1" stop-color="currentColor" stop-opacity="0"></stop>
-          </linearGradient>
         </defs>
         <path class="ink-recognize-wash" data-role="wash"></path>
-        <g clip-path="url(#ink-rec-clip-${id})">
-          <rect class="ink-recognize-band" data-role="band" fill="url(#ink-rec-band-${id})"></rect>
-        </g>
         <path class="ink-recognize-outline" data-role="outline"></path>
         <g class="ink-recognize-boxes" data-role="boxes"></g>
       </svg>
       <div class="ink-recognize-pill" data-role="pill" role="status" aria-live="polite">
         <span class="ink-recognize-dots" aria-hidden="true"><i></i><i></i><i></i></span>
         <span class="ink-recognize-label" data-role="label"></span>
+        <!-- 认着的时候眼睛看的是这一份：同一句话，一个字一个 span，跟着浪起伏（见 _syncCrest）。读屏读上面那一份。 -->
+        <span class="ink-recognize-crest" data-role="crest" aria-hidden="true"></span>
         <button type="button" class="ink-recognize-pill-btn" data-role="retry" hidden></button>
         <button type="button" class="ink-recognize-pill-btn" data-role="pill-close"></button>
       </div>
@@ -202,32 +231,154 @@ export class RecognizeOverlay {
   scan(points, viewport) {
     this._build();
     this._clearTimers();
+    this._stopRipple();
     this._items = [];
     this._picked.clear();
     this._$('panel').hidden = true;
     this._$('boxes').replaceChildren();
     this.el.classList.toggle('is-reduced', reduceMotion());
     this._setState(RECOGNIZE_STATES.SCANNING);
+    // 小条上的点和字从这一刻起按一个节拍涌（三个点也是这一刻重新起跳：小条刚露出来，或者刚摘掉 is-still）。上一回
+    // 留下的那几个字的 span 按的是上一回的节拍，先清掉，和三个点一起从头来。
+    this._crestStart = nowMs();
+    this._$('crest').replaceChildren();
     this._pill(t('ocr.scanning'), { close: t('ocr.cancel') });
     this.place(points, viewport);
     this._later(() => {
-      if (this._state === RECOGNIZE_STATES.SCANNING) this._$('label').textContent = t('ocr.scanningSlow');
+      if (this._state === RECOGNIZE_STATES.SCANNING) this._setLabel(t('ocr.scanningSlow'));
     }, SLOW_MS);
   }
 
   /** 引擎报的进度（0..1）：小条上带一个百分比。 */
   progress(fraction) {
     if (this._state !== RECOGNIZE_STATES.SCANNING || !this.el || !Number.isFinite(fraction)) return;
-    const label = this._$('label');
-    const base = label.textContent.replace(/\s*\d+%$/, '');
-    label.textContent = `${base} ${Math.round(Math.min(1, Math.max(0, fraction)) * 100)}%`;
+    const base = this._$('label').textContent.replace(/\s*\d+%$/, '');
+    this._setLabel(`${base} ${Math.round(Math.min(1, Math.max(0, fraction)) * 100)}%`);
   }
 
-  /** 摆到圈上（缩放、平移、转屏之后再叫一次）。 */
-  place(points, viewport) {
+  /** 小条上那句话。读屏读的、测试量的都是 label 这一份；认着的时候眼睛看的是跟着浪起伏的那一份（_syncCrest）。 */
+  _setLabel(text) {
+    this._$('label').textContent = text;
+    this._syncCrest();
+  }
+
+  /**
+   * 认着的时候，小条上的字和圈里那片浪一个样子：前面三个点、后面一个字接一个字，依次涌起来、亮一下，像一道浪从头
+   * 传到尾（人说「下面的字也要有如此效果」）。
+   *
+   * 换字的时候（认得久了补的那句、进度的百分比）接着原来的节拍走，不从头来：已经在起伏的那几个 span 只换字、不换
+   * span——span 一换，它的动画就从头算起，而从头算起的那一刻是浏览器下一次排样式的时候，不是这里说的时候，节拍就
+   * 和三个点错开了（预览里量到差了四百多毫秒）。多出来的字才新排一个 span，animation-delay 往回拨掉「从开始扫到
+   * 现在」那一段，一出来就在它该在的那个起伏上。不认了、或者减少动态效果：这一份空着，眼睛看的就是 label 本身。
+   */
+  _syncCrest() {
+    const crest = this._$('crest');
+    if (this._state !== RECOGNIZE_STATES.SCANNING || this.el.classList.contains('is-reduced')) {
+      crest.replaceChildren();
+      return;
+    }
+    const chars = [...this._$('label').textContent];
+    const spans = crest.children;
+    while (spans.length > chars.length) spans[spans.length - 1].remove();
+    const elapsed = (nowMs() - (this._crestStart ?? nowMs())) % CREST_PERIOD_MS;
+    chars.forEach((ch, i) => {
+      let span = spans[i];
+      if (!span) {
+        span = document.createElement('span');
+        span.className = 'ink-recognize-ch';
+        span.style.animationDelay = `${Math.round((CREST_DOTS + i) * CREST_STAGGER_MS - elapsed)}ms`;
+        crest.appendChild(span);
+      }
+      if (span.textContent !== ch) span.textContent = ch;
+    });
+  }
+
+  /**
+   * 圈里的东西像水面一样起伏：source 是那一块的样子（截图连同圈里的笔迹、贴着的图），rect 是它在屏幕上的位置。
+   * 一竖条一竖条地上下错开画（两道浪叠着走，见 RIPPLE_SECOND），盖在原来那一块上、按圈裁着；不另铺颜色。起伏从 0
+   * 慢慢涨上来，接上那一刻和原来一模一样，看不出换过。不认了就慢慢落回 0 再收起——认得再快也至少起伏到开始扫以后
+   * RIPPLE_HOLD_MS。减少动态效果：不做。
+   */
+  ripple(source, rect) {
+    if (!this.el || !source || !rect || this._state !== RECOGNIZE_STATES.SCANNING
+      || this.el.classList.contains('is-reduced')) return;
+    this._ripple = { source, amp: 0 };
+    this._placeRipple(rect);
+    this._$('ripple').hidden = false;
+    if (!this._rippleFrame) this._rippleFrame = requestAnimationFrame(this._rippleTick);
+  }
+
+  _placeRipple(rect) {
+    const r = this._ripple;
+    if (!r || !rect || !(rect.width > 0) || !(rect.height > 0)) return;
+    r.rect = rect;
+    const canvas = this._$('ripple');
+    const dpr = globalThis.devicePixelRatio || 1;
+    const w = Math.max(1, Math.round(rect.width * dpr));
+    const h = Math.max(1, Math.round(rect.height * dpr));
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    canvas.style.width = `${rect.width}px`;
+    canvas.style.height = `${rect.height}px`;
+    canvas.style.transform = `translate(${rect.x}px, ${rect.y}px)`;
+    const d = pathOf((this._points || []).map((p) => ({ x: p.x - rect.x, y: p.y - rect.y })));
+    canvas.style.clipPath = d ? `path('${d}')` : '';
+  }
+
+  /**
+   * 一帧：起伏往目标值走（认着、或者还没起伏够 RIPPLE_HOLD_MS 是满的，不认了是 0），再画：先把原样整张垫在底下，
+   * 再一竖条一竖条地错开画在上面——错开露出的那一道缝里是原样，不会露出底下真的那一页、叠出两份。落回 0 就收起。
+   */
+  _rippleTick = (now) => {
+    this._rippleFrame = 0;
+    const r = this._ripple;
+    const canvas = this._$('ripple');
+    const ctx = r && canvas.getContext?.('2d');
+    if (!r || !ctx || !r.rect) { this._stopRipple(); return; }
+    const live = this._state === RECOGNIZE_STATES.SCANNING || nowMs() < (this._crestStart ?? 0) + RIPPLE_HOLD_MS;
+    const target = live ? Math.min(RIPPLE_AMP_MAX, Math.max(RIPPLE_AMP_MIN, r.rect.height * 0.05)) : 0;
+    const dt = r.last == null ? 16 : Math.min(64, Math.max(0, now - r.last));
+    r.last = now;
+    r.amp += (target - r.amp) * (1 - Math.exp(-dt / RIPPLE_EASE_MS));
+    if (!live && r.amp < 0.05) { this._stopRipple(); return; }
+    // 在设备像素里画：dy 按 CSS 像素算好再乘 dpr。
+    const W = canvas.width;
+    const H = canvas.height;
+    const dpr = W / r.rect.width;
+    const len = Math.min(280, Math.max(100, r.rect.width * 0.6));
+    const step = Math.max(2, Math.ceil(W / RIPPLE_SLICES));
+    const sw = r.source.width / W;
+    const tau = Math.PI * 2;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.drawImage(r.source, 0, 0, W, H);
+    for (let X = 0; X < W; X += step) {
+      const x = X / dpr;
+      const dy = r.amp * (Math.sin(((x / len) - now / RIPPLE_PERIOD_MS) * tau)
+        + RIPPLE_SECOND.amp * Math.sin(((x / (len * RIPPLE_SECOND.len)) + now / (RIPPLE_PERIOD_MS * RIPPLE_SECOND.period)) * tau));
+      ctx.drawImage(r.source, X * sw, 0, step * sw, r.source.height, X, dy * dpr, step + 0.5, H);
+    }
+    this._rippleFrame = requestAnimationFrame(this._rippleTick);
+  };
+
+  _stopRipple() {
+    if (this._rippleFrame) cancelAnimationFrame(this._rippleFrame);
+    this._rippleFrame = 0;
+    const r = this._ripple;
+    this._ripple = null;
+    if (!this.el) return;
+    const canvas = this._$('ripple');
+    canvas.hidden = true;
+    if (r) { canvas.width = 0; canvas.height = 0; }
+    if (r?.source) { r.source.width = 0; r.source.height = 0; }
+  }
+
+  /** 摆到圈上（缩放、平移、转屏之后再叫一次）。rippleRect：圈里那一块的样子在屏幕上的位置（有就跟着挪）。 */
+  place(points, viewport, rippleRect = null) {
     if (!this.el) return;
     if (points) this._points = points;
     if (viewport) this._viewport = viewport;
+    if (rippleRect && this._ripple) this._placeRipple(rippleRect);
     const pts = this._points;
     const v = this._viewport || { width: this.host.clientWidth || 0, height: this.host.clientHeight || 0 };
     const box = boundsOf(pts);
@@ -236,15 +387,6 @@ export class RecognizeOverlay {
     this._$('clip').setAttribute('d', d);
     this._$('wash').setAttribute('d', d);
     this._$('outline').setAttribute('d', d);
-    const band = this._$('band');
-    const h = box.maxY - box.minY;
-    const bandH = Math.max(28, h * 0.45);
-    band.setAttribute('x', String(box.minX));
-    band.setAttribute('y', String(box.minY));
-    band.setAttribute('width', String(Math.max(1, box.maxX - box.minX)));
-    band.setAttribute('height', String(bandH));
-    band.style.setProperty('--sweep-from', `${-bandH}px`);
-    band.style.setProperty('--sweep-to', `${h}px`);
     this._placeFloating(this._$('pill'), box, v);
     if (!this._$('panel').hidden) this._placeFloating(this._$('panel'), box, v);
   }
@@ -268,7 +410,7 @@ export class RecognizeOverlay {
     const pill = this._$('pill');
     pill.hidden = false;
     pill.classList.toggle('is-still', hideDots);
-    this._$('label').textContent = label;
+    this._setLabel(label);
     const retryBtn = this._$('retry');
     retryBtn.hidden = !retry;
     retryBtn.textContent = retry;
@@ -358,6 +500,7 @@ export class RecognizeOverlay {
   close() {
     this._clearTimers();
     if (!this.el) return;
+    this._stopRipple();
     this._setState(RECOGNIZE_STATES.IDLE);
     this._$('panel').hidden = true;
     this._$('panel').classList.remove('is-in');

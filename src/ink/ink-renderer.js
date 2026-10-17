@@ -8,7 +8,9 @@
 // The renderer only ever draws onto the canvas it is handed — the ink canvas —
 // and never receives the PDF canvas, so painting ink cannot disturb the page.
 
-import { INK_TOOLS, TOOL_DEFAULTS } from './stroke.js';
+import { INK_TOOLS, TOOL_DEFAULTS, isImageStroke } from './stroke.js';
+import { imageFor } from './ink-image.js';
+import { paintSketch, sketchFor } from './ink-image-sketch.js';
 
 /**
  * @typedef {{scale:number, offsetX:number, offsetY:number}} InkTransform
@@ -377,15 +379,59 @@ function drawPencil(ctx, stroke, pts, alpha, scale) {
 }
 
 /**
+ * 一张贴在页上的图片：拿它四个角里的三个（左上、右上、左下）搭一个仿射变换，把整张图画进那个平行四边形里。
+ * 搬、转、缩放都只动了这四个点，画出来自然跟着转、跟着缩。图还没解好（刚翻到这一页，正从库里读）就先画一块
+ * 淡灰占着位置，解好了画布会重画（ink-image.js 的 onImageReady）。
+ *
+ * opts.sketch：画它的简笔画，不画照片（拖到另一栏、还没松手的那一会儿，见 ink-image-sketch.js）；简笔画算不出来就
+ * 照常画。opts.alpha：再淡多少（松手以后简笔画在照片上面淡掉）。
+ */
+function drawImageStroke(ctx, stroke, transform, opts) {
+  const [a, b, , d] = stroke.points;
+  if (!a || !b || !d) return;
+  const tl = documentToScreen(transform, a.x, a.y);
+  const tr = documentToScreen(transform, b.x, b.y);
+  const bl = documentToScreen(transform, d.x, d.y);
+  const alpha = (Number.isFinite(stroke.opacity) ? stroke.opacity : 1) * (opts?.alpha ?? 1);
+  if (opts?.sketch) {
+    const sketch = sketchFor(stroke.image.id);
+    if (sketch) {
+      paintSketch(ctx, sketch, tl, tr, bl, alpha);
+      return;
+    }
+  }
+  const image = imageFor(stroke.image.id);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.transform(tr.x - tl.x, tr.y - tl.y, bl.x - tl.x, bl.y - tl.y, tl.x, tl.y);
+  if (image) {
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(image, 0, 0, 1, 1);
+  } else {
+    ctx.fillStyle = 'rgba(120, 120, 128, 0.14)';
+    ctx.fillRect(0, 0, 1, 1);
+  }
+  ctx.restore();
+}
+
+/**
  * Paints one stroke.
  *
  * A constant-width tool is one stroked path. A pressure-varying one is a union
  * of local pieces filled once — see traceStroke for why it is neither stroked
  * segment by segment nor traced as one long outline.
+ *
+ * @param {{sketch?: boolean, alpha?: number}} [opts] 只管图片：见 drawImageStroke
  */
-export function drawStroke(ctx, stroke, transform) {
+export function drawStroke(ctx, stroke, transform, opts = null) {
   const points = stroke.points;
   if (!points || points.length === 0) return;
+  if (isImageStroke(stroke)) {
+    drawImageStroke(ctx, stroke, transform, opts);
+    return;
+  }
 
   const defaults = TOOL_DEFAULTS[stroke.tool] || TOOL_DEFAULTS[INK_TOOLS.PEN];
   ctx.save();

@@ -10,6 +10,7 @@
 // PDF: this module has no reference to one.
 
 import {
+  isImageStroke,
   strokeHitByPoint,
   strokeIntersectsPolygon,
   pointInPolygon,
@@ -26,6 +27,9 @@ export const ERASER_MODES = Object.freeze({
 /**
  * Ids of strokes whose body is within `radius` of (x, y).
  * Coordinates are document-space, matching how strokes are stored.
+ *
+ * 贴在页上的图片不算：橡皮擦的是写上去的字。在图上写了又擦，擦的是那几笔，不是把图一起擦掉——要拿掉图，
+ * 用套索圈它、删掉。
  */
 export function strokeIdsAtPoint(layer, x, y, radius = 6) {
   const probe = {
@@ -33,7 +37,7 @@ export function strokeIdsAtPoint(layer, x, y, radius = 6) {
     maxX: x + radius, maxY: y + radius,
   };
   return layer.candidatesInBounds(probe)
-    .filter(stroke => strokeHitByPoint(stroke, x, y, radius))
+    .filter(stroke => !isImageStroke(stroke) && strokeHitByPoint(stroke, x, y, radius))
     .map(stroke => stroke.id);
 }
 
@@ -165,8 +169,9 @@ export function eraseArea(layer, history, head) {
     minX: x - radius, minY: y - radius,
     maxX: x + radius, maxY: y + radius,
   };
+  // 图片不切（见 strokeIdsAtPoint）。
   const candidates = layer.candidatesInBounds(probe)
-    .filter(stroke => strokeHitByPoint(stroke, x, y, radius));
+    .filter(stroke => !isImageStroke(stroke) && strokeHitByPoint(stroke, x, y, radius));
   if (candidates.length === 0) return false;
 
   const cuts = [];

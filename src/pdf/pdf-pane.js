@@ -314,7 +314,7 @@ export class PdfPane {
         // 化只认前者：拿 onFocus 当信号的话，人手指碰一下窗格工具栏就躲走了。
         this.handlers.onInkDraw?.();
       },
-      // 跨栏拖拽：这块画布不知道另一栏在哪，交给工作区去找。
+      // 跨栏拖拽：这块画布不知道另一栏在哪，交给工作区去找。回的是「探进对面了没有」。
       onDragOver: (at) => this.handlers.onInkDragOver?.(at),
       // 原样回传，不要折成布尔：落地的那一侧给的是一组把手，源那边要靠它把
       // 「撤销拖走」连到落下的那一份上。折成 true/false 的话，撤销之后两边
@@ -322,6 +322,9 @@ export class PdfPane {
       onDragDrop: (payload) => this.handlers.onInkDragDrop?.(payload) || null,
       // 套索上的「识别」：圈里那一块页面截给识别引擎（接了 OCR 才会用到，见 src/ocr/）。
       captureRegion: (request) => this._captureRegion(request),
+      // 跨栏拖到一半松手：落下来的那一片滑进页面里，不停在页外的灰边上（见 InkSurface._landingShift）。
+      pageBounds: () => (this.pageSize?.width > 0 && this.pageSize?.height > 0
+        ? { minX: 0, minY: 0, maxX: this.pageSize.width, maxY: this.pageSize.height } : null),
     });
     this.ink.setEnabled(false); // enabled once a document is loaded
     this.minZoom = ZOOM_MIN;
@@ -1739,8 +1742,8 @@ export class PdfPane {
     // Drawing the page is exactly what a pending zoom settle was waiting to do,
     // and whatever asked for this render has superseded it. Left armed it fires
     // mid-await, resets the preview scale and starts a second render of the
-    // same state — most visibly during a 整页 or 适合宽度 press that lands
-    // inside the settle window.
+    // same state — most visibly when a page turn, or the pane re-fitting
+    // itself to a new size, lands inside the settle window.
     clearTimeout(this._zoomSettleTimer);
     this._zoomSettleTimer = null;
     const token = ++this._renderToken;
@@ -2163,14 +2166,6 @@ export class PdfPane {
   previous() { if (this.doc) this._apply(previousPage(this.state), true); }
   zoomIn() { if (this.doc) this._zoomTo(zoomIn(this.state)); }
   zoomOut() { if (this.doc) this._zoomTo(zoomOut(this.state)); }
-  fitWidth() {
-    if (!this.doc) return;
-    this._apply(applyFit(this.state, FIT_MODES.WIDTH, this._viewport(), this.pageSize), true);
-  }
-  fitPage() {
-    if (!this.doc) return;
-    this._apply(applyFit(this.state, FIT_MODES.PAGE, this._viewport(), this.pageSize), true);
-  }
 
   canGoNext() { return !!this.doc && canGoNext(this.state); }
   canGoPrevious() { return !!this.doc && canGoPrevious(this.state); }

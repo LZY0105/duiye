@@ -14,14 +14,28 @@ import {
   INK_TOOLS,
   TOOL_DEFAULTS,
   appendPoint,
+  boundsIntersect,
   cloneStroke,
   createStroke,
   deserializeStroke,
   isDrawable,
+  isImageStroke,
   nearPolygon,
   recomputeBounds,
   serializeStroke,
 } from './stroke.js';
+import {
+  createImageStroke,
+  fitImageRect,
+  imageIdsOf,
+  imageInsertIndex,
+  imageVersion,
+  onImageReady,
+  putImage,
+  rememberDecoded,
+  whenImagesReady,
+} from './ink-image.js';
+import { warmSketches } from './ink-image-sketch.js';
 import {
   clipboardHasInk,
   putOnClipboard,
@@ -192,6 +206,23 @@ const SELECTION_SCALE_STEP = 1.25;
 const SELECTION_SCALE_MIN = 0.2;
 const SELECTION_SCALE_MAX = 5;
 
+/** 从另一栏探过来的那一片怎么画：图片画简笔画（见 showDragGhost）。 */
+const GHOST_DRAW = Object.freeze({ sketch: true });
+/** 图片落到这一栏以后，盖在照片上的简笔画多久淡完，毫秒（见 _startReveal）。 */
+const REVEAL_MS = 260;
+/**
+ * 跨栏拖到一半松手：探在外面的那一截滑进接住它的那一栏要多久（毫秒，见 _startGlide），滑进去以后离看得见的那一块
+ * 的边（书页上是离页边）留多少（屏幕像素，见 _landingShift）。
+ */
+const GLIDE_MS = 260;
+const LANDING_MARGIN = 8;
+
+const nowMs = () => (globalThis.performance?.now ? globalThis.performance.now() : Date.now());
+
+function prefersReducedMotion() {
+  try { return !!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches; } catch (_) { return false; }
+}
+
 /** 一组笔迹的点的外框（不含笔的粗细）。 */
 function pointsBounds(strokes) {
   let minX = Infinity;
@@ -233,6 +264,8 @@ function printStroke(out, stroke) {
     pointsIdOf(stroke.points), stroke.points?.length ?? 0,
     b ? b.minX : null, b ? b.minY : null, b ? b.maxX : null, b ? b.maxY : null,
     stroke.color, stroke.fill ?? null, stroke.width, stroke.opacity, stroke.tool,
+    // 图片：图解好之前缓存里画的是一块淡灰，解好了这张图就不再是这一层的样子。
+    stroke.image ? `${stroke.image.id}:${imageVersion(stroke.image.id)}` : null,
   );
   return out;
 }
@@ -317,6 +350,11 @@ export class InkSurface {
     this._grab = null;        // an in-progress move/rotate/scale of the selection
     /** 另一栏正拖过来的那一片。只画，不进层——见 showDragGhost。 */
     this._ghost = null;
+    /** 刚从另一栏落下来的那一片：图片的简笔画还盖在照片上，正在淡掉——见 _startReveal。 */
+    this._reveal = null;
+    this._revealFrame = 0;
+    /** 正在滑进来的那一片（跨栏拖到一半松手，见 _startGlide）。 */
+    this._glide = null;
     // 选完之后浮在套索线旁的那两个动作。挂在画布的父节点上——画布自己是 canvas，
     // 按钮不能长在它里面。
     this._swatches = [];
@@ -344,6 +382,17 @@ export class InkSurface {
     // 正在认的那一次：{ controller, loop, capture, result }。认着的时候套索那条小条收起来，换成识别那一套界面。
     this._recognition = null;
     this._recognizer = null;
+    // 刚放进来的图片还捏在手里：不管拿的是什么笔，按在它上面是搬、拖把手是转和缩放（见 insertImage）。
+    this._held = false;
+    // 这一层里有一张图刚解好：重画（之前那儿画的是一块淡灰）。用弱引用挂：画布没有销毁这一步，挂得住它的
+    // 只有这一个订阅。
+    const self = new WeakRef(this);
+    const offImage = onImageReady((id) => {
+      const surface = self.deref();
+      if (!surface) { offImage(); return; }
+      if (surface.layer.getAll().some((s) => s.image?.id === id)) surface.render();
+    });
+
     // 识别接上、断开了：「识别」那颗按钮跟着出现、消失；断开时识别区域也没意义了。
     onOcrAvailabilityChange(() => {
       if (!this.canRecognize()) {
@@ -379,6 +428,13 @@ export class InkSurface {
    * @param {'draw'|'erase'|'select'} mode
    */
   _setMode(mode) {
+    // 捏在手里的那张图片（insertImage）：换了一种工具就放开它；换成套索，它就成了套索的选区，接着能搬。
+    // 同一种工具再说一遍不算换——落笔时外面会把工具状态再推一遍，那一下不能把它放掉。
+    if (this._held) {
+      const was = this.erasing ? 'erase' : this.selecting ? 'select' : this.shaping ? 'shape' : 'draw';
+      if (mode === 'select') this._held = false;
+      else if (mode !== was) this.clearSelection();
+    }
     // Leaving the lasso drops the selection: a highlighted set that no gesture
     // can act on any more is just decoration on the page.
     if (this.selecting && mode !== 'select') this.clearSelection();
@@ -447,9 +503,12 @@ export class InkSurface {
   }
 
   clearSelection() {
+    // 还在滑进来的那一片先滑到位、记上撤销（见 _startGlide）：收尾要用到它的选区和套索线。
+    this._finishGlide();
     // 形状那几颗圆点和套索的选区是同一类东西：「这一片现在还听我的」。所以翻页、
     // 换工具、剪切之后统统该走，而那些地方叫的都是这一扇门。
     const hadShape = this._dropShapeSelection();
+    this._held = false;
     // 识别区域、正在认的那一次也是「这一片」：翻页、换工具时一起走（认了一半的就取消）。
     if (!this.selection.length && !this._loop && !this.regionLoop && !this._recognition) {
       if (hadShape) this.render();
@@ -529,6 +588,8 @@ export class InkSurface {
 
   /** Swaps in a page's ink; history starts clean for the new page. */
   loadLayer(layer) {
+    // 还在滑的那一片先滑到位，撤销记在它自己那一页的历史上。
+    this._finishGlide();
     // 选区是一串 id 加一圈线，两样都只对上一层成立。翻一页而不清掉它，那圈虚线
     // 会留在新的一页上，指着一批已经不在这里的笔画——而旁边那两个按钮会对着它们
     // 去复制和删除，什么也不会发生，看起来就是「按了没反应」。
@@ -709,10 +770,12 @@ export class InkSurface {
     if (this._active && isDrawable(this._active)) {
       drawStroke(this.ctx, this._active, this.transform);
     }
+    // 刚从另一栏落下来的图片：简笔画在照片上面淡掉（见 _startReveal）。
+    if (this._reveal) this._drawReveal();
     // 从另一栏探过来的那一片，画在自己这一层上面：它还没落地，但人得看见它到哪
-    // 儿了。见 showDragGhost。
+    // 儿了。图片画简笔画。见 showDragGhost。
     if (this._ghost) {
-      for (const stroke of this._ghost) drawStroke(this.ctx, stroke, this.transform);
+      for (const stroke of this._ghost) drawStroke(this.ctx, stroke, this.transform, GHOST_DRAW);
     }
     if (this._eraserDot) this._drawEraserDot();
     // The tip ring marks where a freehand loop will close back to. A dragged
@@ -751,7 +814,11 @@ export class InkSurface {
     // 识别区域（没套到笔迹的一圈）也走这里：同一种站住了的套索线，只是没有把手。
     if (this.selection.length || this.regionLoop) this._drawSelection();
     // 认着、或者结果单子开着：缩放、平移了，扫光和单子跟着圈走。
-    if (this._recognition && this._recognizer) this._recognizer.place(this._screenLoop(this._recognition.loop), this._viewport);
+    if (this._recognition && this._recognizer) {
+      const job = this._recognition;
+      this._recognizer.place(this._screenLoop(job.loop), this._viewport,
+        job.capture ? this._captureScreenRect(job.capture) : null);
+    }
     this._placeBar();
   }
 
@@ -803,14 +870,16 @@ export class InkSurface {
     // 拿来做这件事会得到一个看不出错的错结果。
     const a = documentToScreen(this.transform, docBox.minX, docBox.minY);
     const b = documentToScreen(this.transform, docBox.maxX, docBox.maxY);
-    const { canFill, current } = this._selectionPaint();
+    const { canFill, canColor, current } = this._selectionPaint();
     const openSize = this._openSizeOnce;
     this._openSizeOnce = false;
     this._bar.place(
       { minX: a.x, minY: a.y, maxX: b.x, maxY: b.y },
       this._viewport || { width: 0, height: 0 },
       {
-        mode: 'selection', colors: this._swatches, canFill, current, recognize: this.canRecognize(),
+        mode: 'selection', colors: this._swatches, canFill, canColor, current,
+        // 这一片里有没有可认的东西，主人也能说（草稿纸：圈住了图片才有）。
+        recognize: this.canRecognize() && (this.handlers.recognizable?.(this.selection) ?? true),
         scale: this._selectionScaleNow(), openSize,
       },
     );
@@ -872,6 +941,7 @@ export class InkSurface {
    */
   _selectionPaint() {
     let canFill = false;
+    let canColor = false;
     let color;
     let fill;
     let mixedColor = false;
@@ -879,7 +949,9 @@ export class InkSurface {
     const same = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
     for (const id of this.selection) {
       const stroke = this.layer.getById(id);
-      if (!stroke) continue;
+      // 图片没有「颜色」：换色换不到它，也不该让它把色排上的那一格说成「各不一样」。只圈了图片，「颜色」就不摆。
+      if (!stroke || isImageStroke(stroke)) continue;
+      canColor = true;
       if (color === undefined) color = stroke.color;
       else if (!same(color, stroke.color)) mixedColor = true;
       if (stroke.shape && isClosedShape(stroke.shape)) {
@@ -891,6 +963,7 @@ export class InkSurface {
     }
     return {
       canFill,
+      canColor,
       current: {
         color: mixedColor ? null : (color ?? null),
         fill: canFill && !mixedFill ? fill : undefined,
@@ -964,8 +1037,9 @@ export class InkSurface {
   // ── 识别（OCR）────────────────────────────────────────────────────────────
 
   /**
-   * 能不能识别：接了识别引擎（src/ocr/ocr-service.js），而且这块画布的主人会把圈里那一块页面截给我
-   * （handlers.captureRegion——书的那一栏有；草稿纸上没有「文件里的字」，现在没有）。
+   * 能不能识别：接了识别引擎（src/ocr/ocr-service.js），而且这块画布的主人会把圈里那一块截给我
+   * （handlers.captureRegion——书、本子的那一栏截的是书页；草稿纸截一张白底，可认的只有贴在上面的图片，
+   * 它另外用 regionHasContent / recognizable 说哪一圈、哪一片里有）。
    */
   canRecognize() {
     return ocrAvailable() && typeof this.handlers.captureRegion === 'function';
@@ -988,6 +1062,71 @@ export class InkSurface {
   /** 一圈文档坐标的点 → 屏幕上（相对画布的 CSS 像素）。 */
   _screenLoop(loop) {
     return (loop || []).map((p) => documentToScreen(this.transform, p.x, p.y));
+  }
+
+  /**
+   * 圈里贴着的图片画进截图（只画在圈里——截图圈外是白的，引擎只该看圈住的那一块）。图片按它在页上的位置、照
+   * 截图的比例画，盖在书页上面，和屏幕上一个样。图还没解好就先等它解好：认的是图里的东西，不能认一块淡灰。
+   */
+  async _paintImagesInto(capture, loop) {
+    const image = capture?.image;
+    const box = capture?.box;
+    if (typeof image?.getContext !== 'function' || !box || !(capture.scale > 0)) return;
+    const strokes = this.layer.getAll().filter((s) => isImageStroke(s) && boundsIntersect(s.bounds, box));
+    if (!strokes.length) return;
+    await whenImagesReady(imageIdsOf(strokes));
+    const ctx = image.getContext('2d');
+    if (!ctx) return;
+    ctx.save();
+    if (loop?.length >= 3) {
+      ctx.beginPath();
+      loop.forEach((p, i) => {
+        const x = (p.x - box.minX) * capture.scale;
+        const y = (p.y - box.minY) * capture.scale;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.closePath();
+      ctx.clip();
+    }
+    const transform = createTransform(capture.scale, box.minX, box.minY);
+    for (const stroke of strokes) drawStroke(ctx, stroke, transform);
+    ctx.restore();
+  }
+
+  /** 截图那一块在屏幕上的位置（相对画布的 CSS 像素）。 */
+  _captureScreenRect(capture) {
+    if (!capture?.box) return null;
+    const a = documentToScreen(this.transform, capture.box.minX, capture.box.minY);
+    const b = documentToScreen(this.transform, capture.box.maxX, capture.box.maxY);
+    return { x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y };
+  }
+
+  /**
+   * 圈里那一块屏幕上的样子：截图（只有书页）上再画上这一层的笔迹——认着的时候那一块整个换成它、像水面一样起伏，不画笔迹
+   * 的话圈里写的字会在那一会儿不见。没有 2D 画布（jsdom）就不做：圈里不动，只有流动的圈线和小条。
+   */
+  _rippleSource(capture) {
+    const image = capture?.image;
+    const doc = this.canvas.ownerDocument;
+    if (!image?.width || !(capture.scale > 0) || typeof doc?.defaultView?.CanvasRenderingContext2D !== 'function') return null;
+    const make = () => {
+      const c = doc.createElement('canvas');
+      c.width = image.width;
+      c.height = image.height;
+      return c;
+    };
+    const out = make();
+    const ink = make();
+    const ctx = out.getContext('2d');
+    const inkCtx = ink.getContext('2d');
+    if (!ctx || !inkCtx) return null;
+    ctx.drawImage(image, 0, 0);
+    renderLayer(inkCtx, this.layer, createTransform(capture.scale, capture.box.minX, capture.box.minY),
+      { width: ink.width, height: ink.height });
+    ctx.drawImage(ink, 0, 0);
+    ink.width = 0;
+    ink.height = 0;
+    return out;
   }
 
   /** 引擎给的框（截图上的像素）→ 屏幕上的框。 */
@@ -1029,7 +1168,12 @@ export class InkSurface {
         CAPTURE_TIMEOUT_MS, OCR_ERRORS.TIMEOUT,
       );
       if (job !== this._recognition) return false;
+      // 圈里贴着的图片画进截图：主人那边只画书页（笔迹另外给矢量），可图片里的字、公式也要认得出来。
+      await this._paintImagesInto(capture, job.loop);
+      if (job !== this._recognition) return false;
       job.capture = capture;
+      // 圈里的东西自己也跟着浪起伏（人说「不止识别提示字样，圈的内容动画也是」）：截图到了才有那一块的样子。
+      ui.ripple(this._rippleSource(capture), this._captureScreenRect(capture));
       // 书上印的东西有多大，现在就量：图刚画好，读得出像素。等人挑完、点「转为笔迹」再读，中间可能隔了好一阵。
       job.printed = printedExtent(capture);
       const result = await recognizeRegion(
@@ -1203,6 +1347,89 @@ export class InkSurface {
   }
 
   /**
+   * 「插入图片」先在页上占的那个框（文档坐标）：看得见的那一块正中，宽占四成多，4:3，不高过看得见的七成。
+   * limit 给了（书页的范围）就收在它里面：框落在页外面的灰边上，图放进去就在页外面了。
+   */
+  imageSlotBox(limit = null) {
+    let view = this._visibleDocRect();
+    if (!view) return null;
+    if (limit) {
+      const cut = {
+        minX: Math.max(view.minX, limit.minX), minY: Math.max(view.minY, limit.minY),
+        maxX: Math.min(view.maxX, limit.maxX), maxY: Math.min(view.maxY, limit.maxY),
+      };
+      if (cut.maxX - cut.minX > 1 && cut.maxY - cut.minY > 1) view = cut;
+    }
+    const vw = view.maxX - view.minX;
+    const vh = view.maxY - view.minY;
+    let w = vw * 0.44;
+    let h = w * 0.75;
+    if (h > vh * 0.7) { h = vh * 0.7; w = h / 0.75; }
+    const cx = (view.minX + view.maxX) / 2;
+    const cy = (view.minY + view.maxY) / 2;
+    return { minX: cx - w / 2, minY: cy - h / 2, maxX: cx + w / 2, maxY: cy + h / 2 };
+  }
+
+  /** 文档坐标的框 → 屏幕上（相对画布的 CSS 像素）。 */
+  screenRectOf(box) {
+    const a = documentToScreen(this.transform, box.minX, box.minY);
+    const b = documentToScreen(this.transform, box.maxX, box.maxY);
+    return { x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y };
+  }
+
+  /** 屏幕上（相对画布的 CSS 像素）的框 → 文档坐标。 */
+  docBoxOf(rect) {
+    const a = screenToDocument(this.transform, rect.x, rect.y);
+    const b = screenToDocument(this.transform, rect.x + rect.width, rect.y + rect.height);
+    return { minX: Math.min(a.x, b.x), minY: Math.min(a.y, b.y), maxX: Math.max(a.x, b.x), maxY: Math.max(a.y, b.y) };
+  }
+
+  /** 画布眼下多大（CSS 像素）。 */
+  viewportSize() {
+    return this._viewport ? { width: this._viewport.width, height: this._viewport.height } : null;
+  }
+
+  /**
+   * 放一张图片进来（栏头上「插入图片」那一颗，见 ink-image-picker.js）。
+   *
+   * 图存进库里，在 box 里等比放好，插在已有的图片上面、所有笔迹下面——图是垫在底下的纸，在它上面写的字都在它
+   * 上面。一步撤销。放好就是选中的：套索线圈着、选区条出来；不管手里拿的是什么笔，按在它上面就是搬，拖把手是
+   * 转和缩放（_held）；按在别处就放开它，照常写字。
+   *
+   * @param {{blob: Blob, width: number, height: number, canvas?: object}} prepared ink-image.js 的 prepareImage 给的
+   * @param {{minX: number, minY: number, maxX: number, maxY: number}} box 文档坐标
+   * @returns {Promise<Object|null>} 放进去的那一笔；等存图的这一会儿翻了页，就不放了（null）
+   */
+  async insertImage(prepared, box) {
+    if (!prepared?.blob || !box || !(prepared.width > 0) || !(prepared.height > 0)) return null;
+    const layer = this.layer;
+    const id = await putImage(prepared.blob, prepared);
+    if (prepared.canvas) rememberDecoded(id, prepared.canvas);
+    if (layer !== this.layer) return null;
+    const rect = fitImageRect(prepared.width, prepared.height, box);
+    const stroke = createImageStroke({ id, width: prepared.width, height: prepared.height }, rect);
+    this.clearSelection();
+    const index = this.layer.insertAt(imageInsertIndex(this.layer), stroke);
+    if (index < 0) return null;
+    this.history.recordAdd(stroke, index);
+    const pad = 4 / (this.transform.scale || 1);
+    this.selection = [stroke.id];
+    this.selectionLoop = [
+      { x: rect.x - pad, y: rect.y - pad },
+      { x: rect.x + rect.width + pad, y: rect.y - pad },
+      { x: rect.x + rect.width + pad, y: rect.y + rect.height + pad },
+      { x: rect.x - pad, y: rect.y + rect.height + pad },
+    ];
+    this._anchor = handleIndex(this.selectionLoop);
+    this._held = !this.selecting;
+    this._scaleKey = this.selection.join(',');
+    this._selectionScale = 1;
+    this.render();
+    this.handlers.onChange?.(this.layer);
+    return stroke;
+  }
+
+  /**
    * 把手里这一片放下。
    *
    * 落在当前看得见的那块地方的中间：粘贴之后人多半还要把它拖到确切的位置，而
@@ -1267,7 +1494,7 @@ export class InkSurface {
     const before = [];
     for (const id of this.selection) {
       const stroke = this.layer.getById(id);
-      if (!stroke || stroke.color === color) continue;
+      if (!stroke || isImageStroke(stroke) || stroke.color === color) continue;
       before.push({ id, color: stroke.color });
       stroke.color = color;
     }
@@ -1462,6 +1689,8 @@ export class InkSurface {
       // does not use would make the document immovable.
       if (!this._shouldDraw(e)) return;
       e.preventDefault();
+      // 上一片还在滑进来：一下滑到位，这一下从它停好的地方算起。
+      this._finishGlide();
 
       // Say so BEFORE the stroke is built.
       //
@@ -1485,6 +1714,16 @@ export class InkSurface {
       const pt = this._docPoint(e);
       // 笔又落到纸上了：认着的取消、结果单子收起——人已经去做下一件事了。（手指平移、缩放不走这里，那时界面跟着圈挪。）
       if (this._recognition) this._cancelRecognition();
+
+      // 刚放进来的图片还捏在手里：按在它上面（或把手上）就是搬它、转它、缩放它，不管手里拿的是什么笔；按在别处就
+      // 放开它，这一下照常写字、擦、画形状。
+      if (this._held && !this.selecting && this.selection.length) {
+        if (this._pressesSelection(pt)) {
+          this._beginSelectionGesture(pt);
+          return;
+        }
+        this.clearSelection();
+      }
 
       if (this.selecting) {
         this._beginSelectionGesture(pt);
@@ -1652,20 +1891,28 @@ export class InkSurface {
         // began is compared with where it ended, and that pair is the step.
         const before = this._grab.before;
         const loopBefore = this._grab.loopBefore;
+        const reaching = this._grab.mode === 'move' && !!this._grab.reaching;
         this._grab = null;
-        const after = snapshotStrokes(this.layer, this.selection);
-        if (before?.length && moved(before, after)) {
-          // The outline goes on the op with the ink. Undoing the points alone
-          // left the loop sitting where the ink no longer was, drawing a
-          // selection that had stopped existing — which is what the tablet
-          // run saw after undoing a rotate.
-          this.history?.recordTransform(before, after, {
-            loopBefore,
-            loopAfter: this.selectionLoop ? this.selectionLoop.map(p => ({ ...p })) : null,
-          });
-          this.handlers.onChange?.(this.layer);
-        }
-        this.render();
+        const settle = () => {
+          const after = snapshotStrokes(this.layer, this.selection);
+          if (before?.length && moved(before, after)) {
+            // The outline goes on the op with the ink. Undoing the points alone
+            // left the loop sitting where the ink no longer was, drawing a
+            // selection that had stopped existing — which is what the tablet
+            // run saw after undoing a rotate.
+            this.history?.recordTransform(before, after, {
+              loopBefore,
+              loopAfter: this.selectionLoop ? this.selectionLoop.map(p => ({ ...p })) : null,
+            });
+            this.handlers.onChange?.(this.layer);
+          }
+          this.render();
+        };
+        // 探进了另一栏、却松在这一栏（手指没过去）：探过去的那一截在这一栏的画布外面，看不见——人说「拖到一半如果
+        // 松手照片会被隐藏」。整片滑回这一栏里来（「滑动进入要做动画」），滑完才记成一步撤销。
+        const shift = reaching ? this._landingShift(pointsBounds(this._selectedStrokes())) : null;
+        if (shift) this._startGlide(this.selection, shift, settle);
+        else settle();
         return;
       }
       if (this._loop) {
@@ -1681,7 +1928,9 @@ export class InkSurface {
         this.selectionLoop = this.selection.length ? loop : null;
         // 接了识别：没套到笔迹的那一圈留下来当识别区域——人圈的多半是书上印的字和公式，要认的正是它。
         // 它不是选区：没有把手，不能搬。
-        this.regionLoop = !this.selection.length && loop.length >= 3 && this.canRecognize() ? loop : null;
+        // 主人能说这一圈里有没有可认的东西（草稿纸：圈住了图片才有）；没说就是有（书页上处处是印着的字）。
+        this.regionLoop = !this.selection.length && loop.length >= 3 && this.canRecognize()
+          && (this.handlers.regionHasContent?.(loop) ?? true) ? loop : null;
         this._anchor = this.selectionLoop ? handleIndex(loop) : -1;
         this.render();
         return;
@@ -1743,6 +1992,18 @@ export class InkSurface {
     c.addEventListener('pointercancel', finish);
   }
 
+  /** 这一下按在选区上：套索线里、线外一点（GRAB_MARGIN），或者那颗把手上。 */
+  _pressesSelection(pt) {
+    if (!this.selection.length || !this.selectionLoop) return false;
+    const handle = this._handleAt();
+    if (handle) {
+      const sx = (pt.x - this.transform.offsetX) * this.transform.scale;
+      const sy = (pt.y - this.transform.offsetY) * this.transform.scale;
+      if (Math.hypot(sx - handle.x, sy - handle.y) <= this._handleHitRadius()) return true;
+    }
+    return nearPolygon(pt.x, pt.y, this.selectionLoop, GRAB_MARGIN / (this.transform.scale || 1));
+  }
+
   /**
    * Decides what a press means while the lasso tool is active.
    *
@@ -1799,6 +2060,10 @@ export class InkSurface {
         before: snapshotStrokes(this.layer, this.selection),
         loopBefore: loop.map(p => ({ ...p })),
       };
+      // 搬的里面有图片、又可能拖到另一栏：趁空先把它的简笔画算好，探到对面的头一帧不用当场算（见 showDragGhost）。
+      if (this.handlers.onDragOver) {
+        warmSketches(imageIdsOf(this.selection.map(id => this.layer.getById(id))));
+      }
       return;
     }
 
@@ -2014,12 +2279,23 @@ export class InkSurface {
     const r = this.canvas.getBoundingClientRect();
     const outside = e.clientX < r.left || e.clientX > r.right
       || e.clientY < r.top || e.clientY > r.bottom;
-    this.handlers.onDragOver({
+    const reached = this.handlers.onDragOver({
       clientX: e.clientX,
       clientY: e.clientY,
       outside,
       ghost: this._ghostOnScreen(r),
     });
+    // 外面说这一片眼下探进了另一栏：松在这一栏的话，探过去的那一截要滑回来（见 finish）。
+    if (this._grab) this._grab.reaching = !!reached;
+  }
+
+  /**
+   * 选中的那几笔，按它们在层里的先后（先画的在前）。交给别的栏、给别的栏画预览都按这个次序：图片在写在它上面的字
+   * 前面，到了那边也是字压着图。
+   */
+  _selectedStrokes() {
+    const wanted = new Set(this.selection);
+    return this.layer.getAll().filter(s => wanted.has(s.id));
   }
 
   /** 手松开或者手势被打断：把探到别处的那一片收回来。 */
@@ -2041,9 +2317,7 @@ export class InkSurface {
     if (!this.selection.length) return null;
     const strokes = [];
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const id of this.selection) {
-      const stroke = this.layer.getById(id);
-      if (!stroke) continue;
+    for (const stroke of this._selectedStrokes()) {
       const points = stroke.points.map((pt) => {
         const at = documentToScreen(this.transform, pt.x, pt.y);
         const x = rect.left + at.x;
@@ -2061,6 +2335,8 @@ export class InkSurface {
         opacity: stroke.opacity,
         // 填了色的形状，路上也是填着色的——不带的话它一路是个空框，落地才突然填上。
         fill: stroke.fill || null,
+        // 图片：对面画它的简笔画（见 showDragGhost）。不带的话它一路是四个点连成的一个细框。
+        image: stroke.image ? { ...stroke.image } : null,
         points,
       });
     }
@@ -2073,6 +2349,9 @@ export class InkSurface {
    *
    * 只是画：不进层、不记历史、擦不到也选不中——它还在别人手里。松手那一下走的是
    * adoptStrokes，那才是真的收下。
+   *
+   * 里面的图片画的是简笔画（照片的色调和轮廓，见 ink-image-sketch.js），位置和笔迹一个换算；松手才换成照片（人说
+   * 「先根据照片的色调和轮廓先生成一张抽象的简笔画，用户放手才完整加载」）。
    */
   showDragGhost(ghost) {
     if (!ghost?.strokes?.length || !this._viewport) { this.clearDragGhost(); return; }
@@ -2119,9 +2398,7 @@ export class InkSurface {
     // （甩得快的时候更多），不补上的话，落下去的比指尖差那么一截。
     if (this._grab?.mode === 'move') this._dragSelection(this._docPoint(e));
 
-    const strokes = this.selection
-      .map(id => this.layer.getById(id))
-      .filter(Boolean);
+    const strokes = this._selectedStrokes();
     if (!strokes.length) return false;
 
     const landed = this.handlers.onDragDrop({
@@ -2188,6 +2465,7 @@ export class InkSurface {
    */
   adoptStrokes(serialized, clientX, clientY, sourceScale, origin) {
     if (!Array.isArray(serialized) || !serialized.length || !this._viewport) return null;
+    this._finishGlide();
     const r = this.canvas.getBoundingClientRect();
 
     // 屏幕上多大就多大。两栏缩放不同时，照搬文档坐标会让它在松手那一刻变个大小
@@ -2251,15 +2529,24 @@ export class InkSurface {
     // 掉，而不是指望调用方的顺序排得刚好。
     this._ghost = null;
 
+    // 拖到一半就松了手：这一片还有一截压在分隔线另一边、在这块画布外面，落下来那一截就看不见了——人说「拖到
+    // 一半如果松手照片会被隐藏」。先落在松手时的位置（和预览最后停着的一样），再整片滑进这一栏（书页上滑进
+    // 页面里，见 _landingShift），「滑动进入要做动画」。
+    const shift = this._landingShift({ minX, minY, maxX, maxY });
+
     this.history.beginBatch();
     for (const stroke of strokes) {
-      this.layer.add(stroke);
-      this.history.recordAdd(stroke, this.layer.strokes.length - 1);
+      const index = this._placeAdopted(stroke);
+      if (index >= 0) this.history.recordAdd(stroke, index);
     }
     this.history.endBatch();
 
     // 落下来就是选中的：人接着多半要再挪一下，而那需要它是被选中的那一个。
+    // 手里拿的不是套索（捏着刚放进来的图片拖过来的，见 insertImage）：在这边也捏着——按在它上面接着搬，按在别处放开。
     this.selection = strokes.map(s => s.id);
+    this._held = !this.selecting;
+    // 拖着的时候这边画的是图片的简笔画；落下来换成照片，简笔画在上面淡掉，不是一下子换掉。
+    this._startReveal(strokes);
     const pad = 6;
     const left = minX - pad;
     const right = maxX + pad;
@@ -2276,9 +2563,13 @@ export class InkSurface {
     this.handlers.onChange?.(this.layer);
 
     // 把手交回去。撤销走的不是这块画布自己的历史——那一步属于源那边（人是在那
-    // 边按的撤销），所以这里只提供动作，不记步。
+    // 边按的撤销），所以这里只提供动作，不记步。重做放回来的是滑进来以后的位置。
     const ids = strokes.map(st => st.id);
-    const taken = strokes.map(st => ({ ...st, points: st.points.map(pt2 => ({ ...pt2 })) }));
+    const sx = shift?.dx || 0;
+    const sy = shift?.dy || 0;
+    const taken = strokes.map(st => ({ ...st, points: st.points.map(pt2 => ({ ...pt2, x: pt2.x + sx, y: pt2.y + sy })) }));
+    // 滑完再存一次：上面那一次存的还是松手时的位置。
+    if (shift) this._startGlide(ids, shift, () => this.handlers.onChange?.(this.layer));
     return {
       ids,
       remove: () => {
@@ -2291,12 +2582,153 @@ export class InkSurface {
         for (const st of taken) {
           const copy = { ...st, points: st.points.map(pt2 => ({ ...pt2 })) };
           recomputeBounds(copy);
-          this.layer.add(copy);
+          this._placeAdopted(copy);
         }
         this.render();
         this.handlers.onChange?.(this.layer);
       },
     };
+  }
+
+  /**
+   * 别的栏交过来的一笔放进这一层：笔迹放在最上面；图片插在已有的图片上面、所有笔迹下面（和插入图片一个规矩，见
+   * ink-image.js 的 imageInsertIndex）——图是垫在底下的纸，这一页上原来写的字不能被它盖住。
+   * @returns {number} 放在了第几条；-1 是没放（这个 id 已经在了）
+   */
+  _placeAdopted(stroke) {
+    return isImageStroke(stroke)
+      ? this.layer.insertAt(imageInsertIndex(this.layer), stroke)
+      : this.layer.add(stroke);
+  }
+
+  /**
+   * 刚落下来的图片：拖着的时候这一栏画的是它的简笔画，松手那一刻照片已经在层里了，简笔画盖在上面 REVEAL_MS 里淡掉
+   * ——看着是简笔画慢慢「显影」成照片，不是一下子换了一张。一起拖过来的笔迹（写在图上的字）也跟着盖在上面一起淡：
+   * 不然简笔画刚盖上去的那一下，图上的字会被它遮住、再淡出来。系统开了「减少动态效果」、或者没有逐帧回调：直接换。
+   */
+  _startReveal(strokes) {
+    if (this._revealFrame) cancelAnimationFrame(this._revealFrame);
+    this._revealFrame = 0;
+    this._reveal = null;
+    const raf = globalThis.requestAnimationFrame;
+    if (typeof raf !== 'function' || prefersReducedMotion() || !strokes.some(isImageStroke)) return;
+    this._reveal = { strokes, start: nowMs() };
+    const tick = () => {
+      this._revealFrame = 0;
+      if (!this._reveal) return;
+      if (nowMs() - this._reveal.start >= REVEAL_MS) {
+        this._reveal = null;
+        this.render();
+        return;
+      }
+      // 这几帧之间层不变：对不上的那张缓存图当场重画一次，后面几帧都只是贴图，不必每帧整页重画。正在滑进来
+      // 的时候（_startGlide）那边每帧都重画，这里不再画一遍。
+      if (!this._glide) this._render(true);
+      this._revealFrame = raf(tick);
+    };
+    this._revealFrame = raf(tick);
+  }
+
+  /**
+   * 落在这一栏的一片要挪多少才整个看得见：收进这块画布眼下看得见的那一块，书页上再收进页面里（主人给的 pageBounds），
+   * 四边留 LANDING_MARGIN。放得下就挪最少的那一点；放不下（比看得见的那一块还大）就把探出去更多的那一边收进来。
+   * 不用挪回 null。
+   * @param {{minX: number, minY: number, maxX: number, maxY: number}} box 文档坐标
+   */
+  _landingShift(box) {
+    let region = this._visibleDocRect();
+    if (!box || !region) return null;
+    const page = this.handlers.pageBounds?.();
+    if (page) {
+      const cut = {
+        minX: Math.max(region.minX, page.minX), minY: Math.max(region.minY, page.minY),
+        maxX: Math.min(region.maxX, page.maxX), maxY: Math.min(region.maxY, page.maxY),
+      };
+      if (cut.maxX - cut.minX > 1 && cut.maxY - cut.minY > 1) region = cut;
+    }
+    const m = LANDING_MARGIN / (this.transform.scale || 1);
+    const axis = (lo, hi, min, max) => {
+      const start = min + m - lo;
+      const end = hi - (max - m);
+      if (hi - lo <= max - min - 2 * m) return start > 0 ? start : end > 0 ? -end : 0;
+      return start > end ? start : -end;
+    };
+    const dx = axis(box.minX, box.maxX, region.minX, region.maxX);
+    const dy = axis(box.minY, box.maxY, region.minY, region.maxY);
+    return Math.abs(dx) > 1e-6 || Math.abs(dy) > 1e-6 ? { dx, dy } : null;
+  }
+
+  /**
+   * 这几笔顺着滑过去（shift 是文档坐标的位移）：GLIDE_MS 里先快后慢，套索线跟着走；滑到了叫 done（记撤销、存盘）。
+   * 中途又落笔、翻页、撤销重做、清掉选区、又有东西落过来：先一下滑到位、照常收尾（_finishGlide），不会停在半路。
+   * 系统开了「减少动态效果」、或者没有逐帧回调：直接到位。
+   */
+  _startGlide(ids, shift, done = null) {
+    this._finishGlide();
+    const same = this.selection.length === ids.length && ids.every(id => this.selection.includes(id));
+    const g = {
+      ids: [...ids],
+      dx: shift.dx,
+      dy: shift.dy,
+      // 每一帧都从起点按比例算，不一帧一帧往上加：加出来的终点差一点点（浮点），撤销、重做对不上。
+      layer: this.layer,
+      from: snapshotStrokes(this.layer, ids),
+      loopFrom: same && this.selectionLoop ? this.selectionLoop.map(p => ({ ...p })) : null,
+      start: nowMs(),
+      done,
+      frame: 0,
+    };
+    this._glide = g;
+    const raf = globalThis.requestAnimationFrame;
+    if (typeof raf !== 'function' || prefersReducedMotion()) { this._finishGlide(); return; }
+    const tick = () => {
+      g.frame = 0;
+      if (this._glide !== g) return;
+      const t = (nowMs() - g.start) / GLIDE_MS;
+      if (t >= 1) { this._finishGlide(); return; }
+      this._glideTo(g, 1 - (1 - t) ** 3);
+      g.frame = raf(tick);
+    };
+    g.frame = raf(tick);
+  }
+
+  /** 滑到全程的 k（0..1）：每一笔放回起点再挪 k 成；套索线还圈着这几笔就跟着挪。 */
+  _glideTo(g, k) {
+    const ox = g.dx * k;
+    const oy = g.dy * k;
+    const byId = new Map(g.from.map(s => [s.id, s]));
+    for (const stroke of g.layer.strokes) {
+      const snap = byId.get(stroke.id);
+      if (!snap) continue;
+      stroke.points = snap.points.map(p => ({ ...p, x: p.x + ox, y: p.y + oy }));
+      recomputeBounds(stroke);
+    }
+    const same = this.selection.length === g.ids.length && g.ids.every(id => this.selection.includes(id));
+    if (same && g.loopFrom) this.selectionLoop = g.loopFrom.map(p => ({ ...p, x: p.x + ox, y: p.y + oy }));
+    this.render();
+  }
+
+  /** 正在滑的那一片一下滑到位，再收尾。没在滑就什么都不做。 */
+  _finishGlide() {
+    const g = this._glide;
+    if (!g) return;
+    this._glide = null;
+    if (g.frame) cancelAnimationFrame(g.frame);
+    this._glideTo(g, 1);
+    g.done?.();
+  }
+
+  /** 淡掉的那一层：图片画简笔画，笔迹照原样，都按还剩多少淡。不在这一层里的（撤销了、翻页了）不画。 */
+  _drawReveal() {
+    const r = this._reveal;
+    const t = Math.min(1, Math.max(0, (nowMs() - r.start) / REVEAL_MS));
+    const alpha = 1 - t * t * (3 - 2 * t);
+    if (alpha <= 0) return;
+    for (const stroke of r.strokes) {
+      if (!this.layer.has(stroke.id)) continue;
+      if (isImageStroke(stroke)) drawStroke(this.ctx, stroke, this.transform, { sketch: true, alpha });
+      else drawStroke(this.ctx, { ...stroke, opacity: (Number.isFinite(stroke.opacity) ? stroke.opacity : 1) * alpha }, this.transform);
+    }
   }
 
   _dragSelection(pt) {
@@ -2369,6 +2801,8 @@ export class InkSurface {
   // ── commands ──────────────────────────────────────────────────────────────
 
   undo() {
+    // 滑到一半就撤销：先滑到位、记上那一步，撤销撤的就是它。
+    this._finishGlide();
     const op = this.history.undo();
     if (!op) return false;
     this._scaleKey = '';
@@ -2379,6 +2813,7 @@ export class InkSurface {
   }
 
   redo() {
+    this._finishGlide();
     const op = this.history.redo();
     if (!op) return false;
     this._scaleKey = '';

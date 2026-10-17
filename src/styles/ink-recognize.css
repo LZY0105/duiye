@@ -1,4 +1,5 @@
-/* 套索「识别」那一整段界面（src/ink/ink-recognize.js）：扫描时的光、流动的圈线、进度小条、认出来的框、结果单子。
+/* 套索「识别」那一整段界面（src/ink/ink-recognize.js）：认着时圈里的东西像水面一样起伏、流动的圈线、进度小条（字
+ * 跟着浪起伏）、认出来的框、结果单子。
  *
  * 小条和套索那条小条一个样子（深色、圆头）；结果单子和「导入」那张弹出的单子同一种材质（--lg-glass-thick、
  * --lg-blur、--lg-rim/--lg-edge/--lg-lift，liquid.css 定的那几个），三套皮肤各自的变量会把它染对。纸里单子是一张纸条
@@ -6,7 +7,7 @@
  *
  * 动画只动 transform / translate / opacity / stroke-dashoffset：不碰排版。扫的时候整块界面挂着 data-lens-moving，液态玻璃
  * 那边会换成便宜的那一版（第 53 节量过：静止那一版每帧几十毫秒）。
- * 系统开了「减少动态效果」：不扫、不流动、不弹，只留静态的提示（最底下那一段）。 */
+ * 系统开了「减少动态效果」：不涌、不流动、不弹，只留静态的提示（最底下那一段）。 */
 
 .ink-recognize {
   position: absolute;
@@ -27,25 +28,23 @@
   pointer-events: none;
 }
 
-/* 圈里那一块淡淡一层主题色：认着的时候亮一点，出结果以后褪下去，让给框框。圈外一点不碰。 */
+/* 圈里那一块平常不铺颜色（人说「识别动画的波浪不要有颜色，让下面的背景和字像波浪一样动就行」）：动的是圈里的东西
+   自己（下面的 ripple）。只有「减少动态效果」的时候什么都不动，才铺一层淡淡的主题色，告诉人认的是哪一块（最底下）。 */
 .ink-recognize-wash {
   fill: currentColor;
   fill-opacity: 0;
   transition: fill-opacity 0.25s ease;
 }
-.ink-recognize[data-state="scanning"] .ink-recognize-wash { fill-opacity: 0.08; }
-.ink-recognize[data-state="results"] .ink-recognize-wash { fill-opacity: 0.035; }
 
-/* 一道光从圈的上沿扫到下沿，只照在圈里（被圈线裁着）。 */
-.ink-recognize-band { opacity: 0; transition: opacity 0.2s ease; }
-.ink-recognize[data-state="scanning"] .ink-recognize-band {
-  opacity: 1;
-  animation: ink-rec-sweep 1.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+/* 圈里的东西像水面一样起伏（人说「不止识别提示字样，圈的内容动画也是」）：书页的底色、字、笔迹、贴着的图，JS 一帧
+   一帧错开画在这块画布上，位置、按圈裁的 clip-path 也是 JS 给的。它压在原来那一块上，上面只有圈线。 */
+.ink-recognize-ripple {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
 }
-@keyframes ink-rec-sweep {
-  from { transform: translateY(var(--sweep-from, -40px)); }
-  to { transform: translateY(var(--sweep-to, 120px)); }
-}
+.ink-recognize-ripple[hidden] { display: none; }
 
 /* 圈线：认着的时候是流动的虚线（「它在动」），和套索线同一个虚线节奏。 */
 .ink-recognize-outline {
@@ -106,20 +105,45 @@
 
 .ink-recognize-label { font-variant-numeric: tabular-nums; }
 
+/* 认着的时候，字和圈里的浪一个样子（人说「下面的字也要有如此效果」）：前面三个点、后面一个字接一个字，依次涌起来、
+   亮一下，像一道浪从头传到尾——三个点和字是同一个节拍（ink-rec-crest，1.5 秒；一个接一个隔 65ms，和
+   ink-recognize.js 的 CREST_PERIOD_MS、CREST_STAGGER_MS 是同一对数）。眼睛看的是 crest 那一份（一个字一个 span，
+   JS 排好节拍）；label 那一份挪出视野，只给读屏读——一个字一个 span 读出来是一个字一个字地念。 */
+.ink-recognize-crest {
+  display: none;
+  white-space: pre;
+  font-variant-numeric: tabular-nums;
+}
+.ink-recognize[data-state="scanning"]:not(.is-reduced) .ink-recognize-crest { display: inline-block; }
+.ink-recognize[data-state="scanning"]:not(.is-reduced) .ink-recognize-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.ink-recognize-ch {
+  display: inline-block;
+  opacity: 0.6;
+  animation: ink-rec-crest 1.5s ease-in-out infinite;
+}
+
 .ink-recognize-dots { display: inline-flex; gap: 3px; }
 .ink-recognize-dots i {
+  --lift: -3px;
+  --rest: 0.45;
   width: 5px;
   height: 5px;
   border-radius: 50%;
   background: currentColor;
   opacity: 0.45;
-  animation: ink-rec-dot 1s ease-in-out infinite;
+  animation: ink-rec-crest 1.5s ease-in-out infinite;
 }
-.ink-recognize-dots i:nth-child(2) { animation-delay: 0.15s; }
-.ink-recognize-dots i:nth-child(3) { animation-delay: 0.3s; }
-@keyframes ink-rec-dot {
-  0%, 100% { transform: translateY(0); opacity: 0.45; }
-  40% { transform: translateY(-3px); opacity: 1; }
+.ink-recognize-dots i:nth-child(2) { animation-delay: 65ms; }
+.ink-recognize-dots i:nth-child(3) { animation-delay: 130ms; }
+@keyframes ink-rec-crest {
+  0%, 44%, 100% { transform: translateY(0); opacity: var(--rest, 0.6); }
+  16% { transform: translateY(var(--lift, -2px)); opacity: 1; }
 }
 /* 没认出、没认成：不再跳了，说完就等人点。 */
 .ink-recognize-pill.is-still .ink-recognize-dots { display: none; }
@@ -354,11 +378,20 @@
 /* 复制完那一下：字换成「已复制 n 条」，颜色跟着主题色走一下。 */
 .ink-recognize-btn.is-done:not(.is-primary) { color: var(--accent, #2563eb); }
 
-/* ── 减少动态效果：不扫、不流动、不弹，只留静态的提示 ───────────────────── */
+/* ── 减少动态效果：不起伏、不流动、不弹，只留静态的提示 ─────────────────────
+ * 圈里不动，铺一层淡淡的底色（wash）认出是哪一块；小条上的字就是 label 本身、不起伏。 */
 @media (prefers-reduced-motion: reduce) {
-  .ink-recognize-band,
-  .ink-recognize[data-state="scanning"] .ink-recognize-band { animation: none; opacity: 0; }
+  .ink-recognize[data-state="scanning"] .ink-recognize-wash { fill-opacity: 0.06; }
+  .ink-recognize-ch { animation: none; }
   .ink-recognize[data-state="scanning"] .ink-recognize-outline { animation: none; }
+  .ink-recognize[data-state="scanning"] .ink-recognize-crest { display: none; }
+  .ink-recognize[data-state="scanning"] .ink-recognize-label {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+  }
   .ink-recognize-box,
   .ink-recognize-row,
   .ink-recognize-pill,
@@ -366,8 +399,11 @@
   .ink-recognize-panel { transition: none; translate: none; }
   .ink-recognize-btn { transition: none; }
 }
-.ink-recognize.is-reduced .ink-recognize-band { animation: none; opacity: 0; }
+.ink-recognize.is-reduced .ink-recognize-ripple { display: none; }
+@media (prefers-reduced-motion: reduce) { .ink-recognize-ripple { display: none; } }
+.ink-recognize.is-reduced[data-state="scanning"] .ink-recognize-wash { fill-opacity: 0.06; }
 .ink-recognize.is-reduced .ink-recognize-outline { animation: none; }
+.ink-recognize.is-reduced .ink-recognize-dots i { animation: none; opacity: 1; }
 
 /* 系统开了「降低透明度」：单子不磨，一块实在的白（纸本来就是实的，paper.css 那条更具体，压得住这条）。 */
 @media (prefers-reduced-transparency: reduce) {

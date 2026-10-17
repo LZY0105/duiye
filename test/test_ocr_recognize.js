@@ -680,7 +680,7 @@ await test('草稿纸（没有「文件里的字」可截）：接了识别也�
   assert.ok(!barActions(env.surface).includes(SELECTION_ACTIONS.RECOGNIZE));
 });
 
-await test('点「识别」：截圈里那一块交给引擎；扫光、流动的圈线、小条上「正在识别…」和「取消」；套索那条让位', async () => {
+await test('点「识别」：截圈里那一块交给引擎；流动的圈线、小条上「正在识别…」和「取消」；套索那条让位', async () => {
   resetOcrProviders();
   const p = controlledProvider();
   registerOcrProvider(p.provider);
@@ -699,17 +699,147 @@ await test('点「识别」：截圈里那一块交给引擎；扫光、流动�
   assert.equal(el.dataset.state, 'scanning');
   assert.ok(el.hasAttribute('data-lens-moving'), '告诉液态玻璃「有东西在动」，换便宜的那一版');
   assert.ok($o(env.host, 'outline').getAttribute('d').startsWith('M'));
-  assert.ok(Number($o(env.host, 'band').getAttribute('height')) >= 28);
+  // 圈里不另铺颜色、也没有那几层彩色的浪（人说「识别动画的波浪不要有颜色」）：动的是圈里的东西自己，画在 ripple
+  // 那块画布上（jsdom 没有 2D 画布，这里不画；怎么画见下一条）。
+  assert.equal(el.querySelector('[data-role="waves"], .ink-recognize-wave, linearGradient'), null, '没有彩色的浪');
+  assert.ok($o(env.host, 'ripple'), '起伏画在这块画布上');
   assert.equal($o(env.host, 'label').textContent, '正在识别…');
+  // 眼睛看的那一份：同一句话，一个字一个，接在三个点后面一个接一个起伏；读屏不读它。
+  const crest = $o(env.host, 'crest');
+  assert.equal(crest.getAttribute('aria-hidden'), 'true');
+  assert.equal(crest.textContent, '正在识别…');
+  const delays = () => [...crest.querySelectorAll('.ink-recognize-ch')].map((c) => parseFloat(c.style.animationDelay));
+  const first = delays();
+  assert.equal(first.length, [...'正在识别…'].length, '一个字一个');
+  assert.ok(first.every((d, i) => i === 0 || d - first[i - 1] === 65), `一个接一个隔 65ms：${first}`);
+  assert.ok(first[0] <= 3 * 65 && first[0] > 3 * 65 - 40, `排在三个点后面：${first[0]}`);
   assert.equal($o(env.host, 'pill-close').textContent, '取消');
   assert.equal($o(env.host, 'retry').hidden, true);
   assert.equal($o(env.host, 'panel').hidden, true);
   assert.equal(barVisible(env.surface), false, '两样东西不挤在圈旁边');
+  const spansBefore = [...crest.children];
+  await new Promise((r) => setTimeout(r, 80));
   p.last().ctx.onProgress(0.42);
   assert.equal($o(env.host, 'label').textContent, '正在识别… 42%');
+  assert.equal(crest.textContent, '正在识别… 42%', '眼睛看的那一份跟着换');
+  // 换字接着原来的节拍走：已经在起伏的字不换 span（一换动画就从头算）；多出来的字，延迟往回拨掉过去的那一段。
+  const spansAfter = [...crest.children];
+  assert.ok(spansBefore.every((s, i) => spansAfter[i] === s), '原来那几个字还是原来那几个 span');
+  const k = spansBefore.length;
+  const lag = (3 + k) * 65 - delays()[k];
+  assert.ok(lag >= 60 && lag < 400, `新来的字接在节拍上：往回拨了 ${lag}ms`);
   p.last().ctx.onProgress(0.6);
   assert.equal($o(env.host, 'label').textContent, '正在识别… 60%', '百分比换掉，不是越接越长');
+  assert.ok(spansBefore.every((s, i) => crest.children[i] === s));
+  assert.equal(crest.textContent, '正在识别… 60%');
   env.surface.clearSelection();
+});
+
+await test('圈里的东西像水面一样起伏、不另铺颜色：先垫一张原样，再一竖条一竖条错开画；浪在走；认完也要起伏够一会儿才慢慢平', async () => {
+  const { RecognizeOverlay } = await import('../src/ink/ink-recognize.js');
+  document.body.innerHTML = '<div class="host"></div>';
+  const host = document.querySelector('.host');
+  const ui = new RecognizeOverlay(host);
+  const frames = [];
+  const saved = [globalThis.requestAnimationFrame, globalThis.cancelAnimationFrame];
+  globalThis.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length; };
+  globalThis.cancelAnimationFrame = () => {};
+  try {
+    ui.scan([{ x: 10, y: 20 }, { x: 210, y: 20 }, { x: 210, y: 120 }, { x: 10, y: 120 }], { width: 800, height: 600 });
+    const canvas = $o(host, 'ripple');
+    let calls = [];
+    const ctx = new Proxy({}, {
+      get: (target, key) => (...args) => { calls.push([String(key), ...args]); },
+      set: (target, key, value) => { calls.push([`=${String(key)}`, value]); return true; },
+    });
+    canvas.getContext = () => ctx;
+    const source = { width: 400, height: 200 };
+    ui.ripple(source, { x: 10, y: 20, width: 200, height: 100 });
+    assert.equal(canvas.hidden, false);
+    assert.equal(canvas.style.transform, 'translate(10px, 20px)', '盖在圈里那一块原来的位置上');
+    let clock = 1000;
+    /** 走一帧：回每一竖条往下错开了多少；这一帧没画（收起了）回 null。 */
+    const tick = () => {
+      calls = [];
+      frames.shift()(clock += 16);
+      const draws = calls.filter(([k]) => k === 'drawImage');
+      if (!draws.length) return null;
+      assert.deepEqual(draws[0], ['drawImage', source, 0, 0, 200, 100], '先把原样整张垫在底下：错开露出的缝里不露底下那一页');
+      assert.ok(!calls.some(([k]) => /fill|stroke|Style|Alpha|filter|composite/i.test(k)),
+        `不另铺颜色：${[...new Set(calls.map(([k]) => k))]}`);
+      return draws.slice(1).map((d) => d[7]);
+    };
+    const first = tick();
+    assert.equal(first.length, 100, '两个像素一竖条');
+    assert.ok(Math.max(...first.map(Math.abs)) < 1, '从 0 慢慢涨上来：接上那一刻和原来一个样');
+    let dys = first;
+    for (let i = 0; i < 40; i++) dys = tick();
+    const amp = Math.max(...dys.map(Math.abs));
+    assert.ok(amp > 3 && amp < 10, `起伏看得出来：${amp.toFixed(2)}px`);
+    const next = tick();
+    assert.ok(next.some((dy, i) => Math.abs(dy - dys[i]) > 0.05), '浪在走');
+    // 机上一小块不到半秒就认完：起伏不马上停，起伏够 RIPPLE_HOLD_MS 才慢慢平下去（结果照常出）。
+    ui.empty();
+    assert.ok(Math.max(...tick().map(Math.abs)) > 3, '还没起伏够，接着起伏');
+    ui._crestStart -= 10000;
+    const amps = [];
+    while (frames.length && amps.length < 300) {
+      const d = tick();
+      if (d) amps.push(Math.max(...d.map(Math.abs)));
+    }
+    assert.equal(frames.length, 0, '平下去就不再一帧一帧画');
+    assert.ok(amps.length > 10, `慢慢平下去，不是一下子没了：${amps.length} 帧`);
+    assert.ok(amps.at(-1) < 0.2);
+    assert.equal(canvas.hidden, true, '收起');
+    // 减少动态效果：不起伏。
+    ui.scan([{ x: 10, y: 20 }, { x: 210, y: 20 }, { x: 210, y: 120 }], { width: 800, height: 600 });
+    ui.el.classList.add('is-reduced');
+    ui.ripple(source, { x: 10, y: 20, width: 200, height: 100 });
+    assert.equal(canvas.hidden, true);
+    assert.equal(frames.length, 0);
+  } finally {
+    ui.destroy();
+    [globalThis.requestAnimationFrame, globalThis.cancelAnimationFrame] = saved;
+  }
+});
+
+await test('起伏在设备像素里切竖条（平板 dpr 2.5 上不出一级一级的锯齿）；涨落按时间走：一帧 40ms 也是半秒多就平下去', async () => {
+  const { RecognizeOverlay } = await import('../src/ink/ink-recognize.js');
+  document.body.innerHTML = '<div class="host"></div>';
+  const host = document.querySelector('.host');
+  const ui = new RecognizeOverlay(host);
+  const frames = [];
+  const saved = [globalThis.requestAnimationFrame, globalThis.cancelAnimationFrame, globalThis.devicePixelRatio];
+  globalThis.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length; };
+  globalThis.cancelAnimationFrame = () => {};
+  globalThis.devicePixelRatio = 2.5;
+  try {
+    ui.scan([{ x: 10, y: 20 }, { x: 210, y: 20 }, { x: 210, y: 120 }, { x: 10, y: 120 }], { width: 800, height: 600 });
+    const canvas = $o(host, 'ripple');
+    let calls = [];
+    const ctx = new Proxy({}, { get: (target, key) => (...args) => { calls.push([String(key), ...args]); }, set: () => true });
+    canvas.getContext = () => ctx;
+    const source = { width: 400, height: 200 };
+    ui.ripple(source, { x: 10, y: 20, width: 200, height: 100 });
+    assert.equal(canvas.width, 500, '画布按设备像素');
+    let clock = 1000;
+    const tick = () => { calls = []; frames.shift()(clock += 40); return calls.filter(([k]) => k === 'drawImage'); };
+    const draws = tick();
+    assert.deepEqual(draws[0], ['drawImage', source, 0, 0, 500, 250], '原样垫底，铺满设备像素');
+    const slices = draws.slice(1);
+    assert.equal(slices.length, 250, '两个设备像素一竖条（按 CSS 像素切是一百条、一条五个设备像素宽）');
+    assert.deepEqual(slices.slice(0, 2).map((d) => d[6]), [0, 2]);
+    for (let i = 0; i < 20; i++) tick();
+    ui._crestStart -= 10000;
+    ui.empty();
+    let n = 0;
+    while (frames.length && n < 200) { tick(); n++; }
+    assert.equal(frames.length, 0);
+    assert.ok(n < 25, `一帧 40ms 也只要 ${n} 帧（${n * 40}ms）就平下去；按帧走要四十多帧、一秒七八`);
+  } finally {
+    ui.destroy();
+    [globalThis.requestAnimationFrame, globalThis.cancelAnimationFrame, globalThis.devicePixelRatio] = saved;
+  }
 });
 
 await test('出结果：先在图上依次框出来，框完单子才浮上来；默认全选；没把握的打「?」', async () => {
@@ -968,6 +1098,7 @@ await test('没认出：小条上说一句，不跳了，按钮是「知道了�
   await flush();
   assert.equal(overlay(env.host).dataset.state, 'empty');
   assert.equal($o(env.host, 'label').textContent, '这一块没认出文字或公式');
+  assert.equal($o(env.host, 'crest').childElementCount, 0, '不认了，字不再起伏：看的就是 label 本身');
   assert.ok($o(env.host, 'pill').classList.contains('is-still'));
   assert.equal($o(env.host, 'pill-close').textContent, '知道了');
   assert.equal($o(env.host, 'retry').hidden, true);
@@ -1080,14 +1211,42 @@ await test('动画只动 transform / translate / opacity / stroke-dashoffset：�
   }
 });
 
-await test('减少动态效果：扫光、圈线、框、行、小圆点都停', async () => {
+await test('减少动态效果：圈里的起伏、起伏的字、圈线、框、行、小圆点都停；字就是 label 本身；圈里改铺一层淡底色', async () => {
   const body = noComments(css);
   const reduced = body.slice(body.indexOf('@media (prefers-reduced-motion: reduce)'));
-  for (const sel of ['.ink-recognize-band', '.ink-recognize-outline', '.ink-recognize-box', '.ink-recognize-row',
-    '.ink-recognize-dots i', '.ink-recognize-panel']) {
+  for (const sel of ['.ink-recognize-ripple', '.ink-recognize-wash', '.ink-recognize-ch', '.ink-recognize-crest',
+    '.ink-recognize-outline', '.ink-recognize-box', '.ink-recognize-row', '.ink-recognize-dots i', '.ink-recognize-panel']) {
     assert.ok(reduced.includes(sel), `${sel} 没管`);
   }
-  assert.ok(body.includes('.ink-recognize.is-reduced .ink-recognize-band'), '系统设置读得到时 JS 也挂一个类');
+  assert.ok(body.includes('.ink-recognize.is-reduced .ink-recognize-ripple'), '系统设置读得到时 JS 也挂一个类');
+  assert.ok(body.includes('.ink-recognize.is-reduced[data-state="scanning"] .ink-recognize-wash'));
+  // 挂了那个类，JS 也不去排一个字一个 span 的那一份。
+  const src = $read('src/ink/ink-recognize.js');
+  assert.match(src, /_syncCrest\(\) \{[\s\S]*?classList\.contains\('is-reduced'\)[\s\S]*?replaceChildren\(\);/);
+});
+
+await test('圈里不铺颜色（只有减少动态效果时铺一层淡底色）；小条上的点和字是同一个节拍', async () => {
+  const body = noComments(css);
+  // 去掉「减少动态效果」那几段，剩下的规则里圈里那一块一点颜色都不铺。
+  let plain = body;
+  for (let at; (at = plain.indexOf('@media (prefers-reduced-motion: reduce)')) >= 0;) {
+    let depth = 0;
+    let end = plain.indexOf('{', at);
+    do { depth += plain[end] === '{' ? 1 : plain[end] === '}' ? -1 : 0; end++; } while (depth > 0);
+    plain = plain.slice(0, at) + plain.slice(end);
+  }
+  for (const [, sel, value] of plain.matchAll(/([^{}]*)\{[^}]*fill-opacity:\s*([\d.]+)/g)) {
+    if (sel.includes('ink-recognize-wash') && Number(value) > 0) assert.ok(sel.includes('is-reduced'), `圈里铺了颜色：${sel.trim()}`);
+  }
+  assert.ok(!/ink-recognize-wave|ink-rec-surge|ink-rec-flow/.test(body), '那几层彩色的浪整个去掉');
+  // 小条上的点和字是同一个节拍，和 JS 里排延迟用的是同一对数。
+  const src = $read('src/ink/ink-recognize.js');
+  const period = Number(src.match(/const CREST_PERIOD_MS = (\d+);/)[1]);
+  const stagger = Number(src.match(/const CREST_STAGGER_MS = (\d+);/)[1]);
+  assert.match(body, new RegExp(`\\.ink-recognize-ch \\{[^}]*animation: ink-rec-crest ${period / 1000}s`));
+  assert.match(body, new RegExp(`\\.ink-recognize-dots i \\{[^}]*animation: ink-rec-crest ${period / 1000}s`));
+  assert.match(body, new RegExp(`\\.ink-recognize-dots i:nth-child\\(2\\) \\{ animation-delay: ${stagger}ms; \\}`));
+  assert.match(body, new RegExp(`\\.ink-recognize-dots i:nth-child\\(3\\) \\{ animation-delay: ${stagger * 2}ms; \\}`));
 });
 
 await test('液态玻璃：小条和单子和套索那条一起是透明的玻璃，只按 data-glass 挑；纸里单子是一张纸条', async () => {

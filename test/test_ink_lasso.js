@@ -292,7 +292,10 @@ await test('按钮认的是 pointerdown，不是 click', async () => {
   const src = await import('node:fs').then(fs => fs.readFileSync(
     new URL('../src/ink/ink-selection-bar.js', import.meta.url), 'utf-8'));
   assert.ok(/addEventListener\('pointerdown'/.test(src));
-  assert.ok(!/addEventListener\('click'/.test(src));
+  // 按钮自己不听 click。整份文件里唯一一处 click 监听是把按下之后补来的那一下吞掉（_swallowClickOf），挂在 document 上。
+  assert.ok(!/el\.addEventListener\('click'|button\.addEventListener\('click'/.test(src));
+  assert.equal((src.match(/addEventListener\('click'/g) || []).length, 1);
+  assert.ok(/doc\.addEventListener\('click', swallow, true\)/.test(src));
   assert.ok(/stopPropagation/.test(src), '这一下不能再穿到画布上去');
 });
 

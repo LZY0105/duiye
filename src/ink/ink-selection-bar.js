@@ -105,6 +105,7 @@ export class SelectionBar {
     el.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      this._swallowClickOf(e.pointerId);
       if (action === SELECTION_ACTIONS.COLOR) { this._togglePalette(); return; }
       if (action === SELECTION_ACTIONS.SIZE) { this._toggleSize(); return; }
       // 放大缩小常常连着按好几下：那一排开着不收。
@@ -116,6 +117,31 @@ export class SelectionBar {
       this._closeSize();
       this.onAction?.(action, value);
     });
+  }
+
+  /**
+   * 按下去那一下已经把事做完了；同一根手指抬起来时浏览器补的那一下 click 不许再落到别处。
+   *
+   * 按「识别」：条收起来，识别那一套界面的小条正好出在原来那颗按钮底下——那一下 click 落在小条的「取消」上，
+   * 刚开始认就被取消了（机上 10-17 用手指点出来的；测试和 CDP 发的按下没有后面那一下 click，看不出来）。只吞这根
+   * 指针的那一下（click 也带 pointerId），过一会儿还没来就不等了。
+   */
+  _swallowClickOf(pointerId) {
+    const doc = this.host?.ownerDocument;
+    if (!doc || pointerId == null) return;
+    let timer = 0;
+    const done = () => {
+      clearTimeout(timer);
+      doc.removeEventListener('click', swallow, true);
+    };
+    const swallow = (e) => {
+      if (e.pointerId !== pointerId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      done();
+    };
+    doc.addEventListener('click', swallow, true);
+    timer = setTimeout(done, 800);
   }
 
   _button(spec) {
@@ -289,10 +315,10 @@ export class SelectionBar {
   }
 
   /** 按当下该是哪一副面孔重建。几种面孔的按钮完全不同，所以是重建而不是切换。 */
-  _build(mode, colors, canFill = false, recognize = false) {
+  _build(mode, colors, canFill = false, recognize = false, canColor = true) {
     // 面孔一样还不够：圈里有没有闭合形状、用的哪排色变了，色排也得跟着变。原来只
     // 认面孔，工具栏的色换了，这里还是旧的那排。识别接上、断开了，那颗按钮也跟着变。
-    const key = `${mode}|${canFill ? 1 : 0}|${recognize ? 1 : 0}|${(colors || []).join(',')}`;
+    const key = `${mode}|${canFill ? 1 : 0}|${recognize ? 1 : 0}|${canColor ? 1 : 0}|${(colors || []).join(',')}`;
     if (this.el && this._key === key) return;
     this.el?.remove();
     this._palette = null;
@@ -324,11 +350,15 @@ export class SelectionBar {
       for (const spec of BUTTONS) {
         // 「识别」排在「删除」前面：危险的那一颗永远在最后。
         if (spec.danger && recognize) row.appendChild(this._button(recognizeSpec()));
+        // 圈里只有图片：换色换不到它，「颜色」那一颗和色排都不摆。
+        if (spec.action === SELECTION_ACTIONS.COLOR && !canColor) continue;
         row.appendChild(this._button(spec));
       }
       bar.appendChild(row);
-      this._palette = this._buildPalette(colors, canFill);
-      bar.appendChild(this._palette);
+      if (canColor) {
+        this._palette = this._buildPalette(colors, canFill);
+        bar.appendChild(this._palette);
+      }
       this._sizeRow = this._buildSizeRow();
       bar.appendChild(this._sizeRow);
     }
@@ -351,14 +381,15 @@ export class SelectionBar {
    *   mode：'selection'（套到了笔迹）、'paste'（只剩粘贴）、'region'（识别区域，只有「识别」）；
    *   canFill：圈里有闭合的形状，换色那排分成边框、填充两排；current：这一片眼下
    *   的颜色，标在色排上；recognize：接了识别，套到笔迹时也多一颗「识别」；
-   *   scale：这一片眼下是原来的几倍（「大小」那一排上的百分比）；openSize：这一次把「大小」那一排打开
+   *   scale：这一片眼下是原来的几倍（「大小」那一排上的百分比）；openSize：这一次把「大小」那一排打开；
+   *   canColor：圈里有能换色的东西（只圈了图片时没有，「颜色」不摆）
    */
   place(box, viewport, {
     mode = 'selection', colors = [], canFill = false, current = null, recognize = false,
-    scale = 1, openSize = false,
+    scale = 1, openSize = false, canColor = true,
   } = {}) {
     if (!box || !viewport || !this.host) { this.hide(); return; }
-    this._build(mode, colors, canFill, recognize);
+    this._build(mode, colors, canFill, recognize, canColor);
     if (!this.el) return;
     this._markCurrent(current);
     this._markScale(scale);

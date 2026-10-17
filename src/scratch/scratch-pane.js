@@ -21,6 +21,8 @@
 // allocation.
 
 import { InkSurface } from '../ink/ink-surface.js';
+import { boundsIntersect, isImageStroke } from '../ink/stroke.js';
+import { polygonBounds } from '../ink/ink-selection.js';
 import { loadLayer, saveLayer } from '../ink/ink-store.js';
 import { notifyPeers, releaseLayer, shareLayer } from '../ink/ink-shared.js';
 import {
@@ -63,6 +65,9 @@ const CAMERA_SETTLE = 400;
 
 /** Travel before a one-finger drag becomes a pan rather than a wandering tap. */
 const PAN_GRAB = 4;
+
+/** 截给识别的那张图：圈的长边画到多少像素（和书页那一路一样，见 pdf-pane.js）。 */
+const CAPTURE_LONG_SIDE = 1600;
 
 export class ScratchPane {
   /**
@@ -116,6 +121,11 @@ export class ScratchPane {
       // 「撤销拖走」连到落下的那一份上。折成 true/false 的话，撤销之后两边
       // 各留一份。
       onDragDrop: (payload) => this.handlers.onInkDragDrop?.(payload) || null,
+      // 草稿纸上贴的图片里的字也能认（人说「图片中的公式OCR也要能识别」）。草稿纸上只有图片里有「印着的字」：
+      // 圈住了图片才留识别区域、条上才摆「识别」；圈在空白处、只圈了手写的字，都不摆。
+      captureRegion: (request) => this._captureRegion(request),
+      regionHasContent: (loop) => this._loopTouchesImage(loop),
+      recognizable: (ids) => ids.some((id) => isImageStroke(this.ink.layer.getById(id))),
     });
     this.ink.setEnabled(false);
 
@@ -140,6 +150,38 @@ export class ScratchPane {
   }
 
   isLoaded() { return !!this.pad; }
+
+  /**
+   * 圈里那一块截成一张图，给识别用（InkSurface 的 captureRegion）。草稿纸没有底下的「书页」：截的是一张白底，
+   * 圈里贴着的图片由 InkSurface 画上去（_paintImagesInto，和书页那一路同一段）。圈的长边画到 CAPTURE_LONG_SIDE
+   * 上下，太小的圈放大到 4 倍为止。
+   */
+  async _captureRegion({ polygon } = {}) {
+    const box = polygonBounds(polygon);
+    if (!box || box.maxX - box.minX < 1 || box.maxY - box.minY < 1) throw new Error('CAPTURE_OUTSIDE_PAGE');
+    const longest = Math.max(box.maxX - box.minX, box.maxY - box.minY);
+    const scale = Math.min(4, Math.max(1, CAPTURE_LONG_SIDE / longest));
+    const w = Math.max(1, Math.ceil((box.maxX - box.minX) * scale));
+    const h = Math.max(1, Math.ceil((box.maxY - box.minY) * scale));
+    const crop = document.createElement('canvas');
+    crop.width = w;
+    crop.height = h;
+    const ctx = crop.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, w, h);
+    return {
+      image: crop,
+      scale,
+      box: { minX: box.minX, minY: box.minY, maxX: box.minX + w / scale, maxY: box.minY + h / scale },
+      pageNumber: SCRATCH_PAGE,
+    };
+  }
+
+  /** 这一圈碰到了贴着的图片没有（只看外框：圈的外框和图的外框有重叠）。 */
+  _loopTouchesImage(loop) {
+    const box = polygonBounds(loop);
+    return !!box && this.ink.layer.getAll().some((s) => isImageStroke(s) && boundsIntersect(s.bounds, box));
+  }
 
   /** The pad's name, for the switching strip and the style panel's title. */
   get name() { return this.pad?.name || ''; }

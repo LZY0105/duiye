@@ -4,6 +4,7 @@ import android.os.Bundle;
 
 import com.getcapacitor.BridgeActivity;
 import io.github.lzy0105.duiye.files.PdfFilesPlugin;
+import io.github.lzy0105.duiye.files.PhotosPlugin;
 import io.github.lzy0105.duiye.proxy.NativeProxyPlugin;
 
 /**
@@ -32,6 +33,8 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(NativeProxyPlugin.class);
         registerPlugin(PdfFilesPlugin.class);
+        // 「插入图片」那张单子上的最近照片（见 files/PhotosPlugin.java）。
+        registerPlugin(PhotosPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

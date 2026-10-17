@@ -1974,6 +1974,17 @@ check('no rung ever hides something you can press', () => {
   assert.ok(/is-snug \.pdf-slot-btn-text/.test(block), 'the captions are what goes first');
 });
 
+check('栏头里没有「适合宽度」「整页」了；书的翻页那一组后面隔一道线（在那一组里面，草稿纸跟着那一组一起藏）', () => {
+  const ws = $read('src/pdf/pdf-workspace.js').replace(/\r\n/g, '\n');
+  const chrome = ws.slice(ws.indexOf('function slotChrome('), ws.indexOf('${deckStripHtml()}'));
+  assert.ok(chrome.includes('data-role="zoom-in"'), '量的是栏头那一段');
+  assert.ok(!/data-role="fit-(width|page)"/.test(chrome), '人说「去掉右边两个按钮」');
+  assert.ok(!/on\('fit-(width|page)'/.test(ws), '接线一起拿掉');
+  assert.ok(!/\bfit(Width|Page)\(\)/.test($read('src/pdf/pdf-pane.js')), '没人再叫的两条命令也拿掉');
+  assert.match(chrome, /<span class="pdf-slot-sep"><\/span>\n\s*<\/span>\n(\s*<!--[^]*?-->\n)?\s*<button[^>]*data-role="zoom-out"/,
+    '翻页那一组的最后一样是一道线，紧接着是缩放');
+});
+
 check('every size on the bar goes through the one multiplier', () => {
   const css = $read('src/styles/ink-toolbar.css');
   assert.ok(/--ink-hit: calc\(44px \* var\(--ink-scale\)\)/.test(css));

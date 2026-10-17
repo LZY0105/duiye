@@ -17,6 +17,8 @@ import './styles/deck.css';
 import './styles/ink-toolbar.css';
 // 套索「识别」那一段界面：扫描动画、进度小条、结果单子（接了 OCR 才用得到，见 src/ocr/）。
 import './styles/ink-recognize.css';
+// 「插入图片」：页上那个虚线框、旁边挑图的那张单子（见 src/ink/ink-image-picker.js）。
+import './styles/ink-image.css';
 import './styles/mobile.css';
 // Last: the material tier system is the authority on which layer a surface
 // belongs to (chrome = glass, content = sharp, controls = fills).

@@ -132,6 +132,8 @@ import { verifyPair } from './pair-verifier.js';
 import { PAIR_STATUS } from './decision.js';
 import { renderAnswerMatches, renderAnswerNotice, renderAnswerLoading } from './answer-panel.js';
 import { InkToolbar, overlaps } from '../ink/ink-toolbar.js';
+import { ImagePicker } from '../ink/ink-image-picker.js';
+import { prepareImage } from '../ink/ink-image.js';
 import { CORNERS, EDGES, TOOLBAR_PHASE } from '../ink/toolbar-state.js';
 import Logger from '../core/logger.js';
 
@@ -586,8 +588,9 @@ export class PdfWorkspace {
    * 实时画出了这一片本身，落在哪一眼就看得见，再框一圈只是多一层蓝。
    */
   _previewInkDrag(fromSlot, at) {
-    // 每一次移动都要做：这一片是每一帧都在动的。
-    this._showInkGhost(fromSlot, at?.ghost || null);
+    // 每一次移动都要做：这一片是每一帧都在动的。回的是「这一片探进对面那一栏了没有」：源画布拿它判断松在
+    // 原栏时要不要把探过去的那一截收回来（见 InkSurface._offerDragOut）。
+    return this._showInkGhost(fromSlot, at?.ghost || null);
   }
 
   /**
@@ -628,13 +631,19 @@ export class PdfWorkspace {
    * 边。按手指判的话，那半边会一直被切掉，直到手指自己也过去。
    */
   _showInkGhost(fromSlot, ghost) {
+    let reached = false;
     for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
       if (slot === fromSlot) continue;
       const surface = this._loadedViewIn(slot)?.ink;
       if (!surface) continue;
-      if (ghost && this._ghostReaches(surface, ghost.bounds)) surface.showDragGhost(ghost);
-      else surface.clearDragGhost();
+      if (ghost && this._ghostReaches(surface, ghost.bounds)) {
+        surface.showDragGhost(ghost);
+        reached = true;
+      } else {
+        surface.clearDragGhost();
+      }
     }
+    return reached;
   }
 
   _ghostReaches(surface, bounds) {
@@ -1842,8 +1851,6 @@ export class PdfWorkspace {
     // underneath, and the slot knows which it is showing.
     on('zoom-out', () => this.viewFor(slot)?.zoomOut());
     on('zoom-in', () => this.viewFor(slot)?.zoomIn());
-    on('fit-width', () => pane.fitWidth());
-    on('fit-page', () => pane.fitPage());
 
     on('scratch-origin', () => this.scratchPanes[slot]?.returnToOrigin());
     on('scratch-fit', () => {
@@ -1873,6 +1880,7 @@ export class PdfWorkspace {
       const entry = activeEntryIn(this.state, slot);
       if (entry) this.removeEntry(slot, entry.id);
     });
+    on('insert-image', () => { this._closeSlotMenus(); this.insertImage(slot); });
     on('organize', () => { this._closeSlotMenus(); this.organize(slot, null); });
     on('export-pdf', () => { this._closeSlotMenus(); this.exportSlot(slot); });
     on('marks-book', () => { this._closeSlotMenus(); this.bookFromMarksSlot(slot); });
@@ -2020,6 +2028,8 @@ export class PdfWorkspace {
       n.setAttribute('aria-label', label);
     };
     set('scratch-origin', n => labelled(n, t('scratch.origin')));
+    // 栏上那颗「插入图片」：只有图标，字在提示和读屏里。书、本子、草稿纸都有。
+    set('insert-image', n => { labelled(n, t('image.insert')); n.disabled = !loaded; });
     set('scratch-fit', n => labelled(n, t('scratch.fitAll')));
     set('scratch-save', n => {
       const state = scratchPane?.saveState || SAVE_STATES.SAVED;
@@ -2413,6 +2423,44 @@ export class PdfWorkspace {
     // why a single open book used to sit at the wrong scale.
     this._resizePanes();
     this._persist();
+  }
+
+  /**
+   * 「插入图片」（栏头上缩放后面那一颗）：这一栏显示着的那一页上先占一个框，旁边一张单子挑图（ink-image-picker.js），挑好了
+   * 等比放进那个框里（InkSurface.insertImage）。书、本子、草稿纸都行——图是这一层里的一笔，存盘、导出、套索、
+   * 撤销都和笔迹走一样的路。书页上框收在这一页里面，不落到页外面的灰边上。
+   *
+   * @returns {boolean} 单子打开了
+   */
+  insertImage(slot) {
+    const view = this.viewFor(slot);
+    const surface = view?.ink;
+    if (!surface || !view.isLoaded?.()) return false;
+    const size = view.pageSize;
+    const limit = size?.width > 0 && size?.height > 0
+      ? { minX: 0, minY: 0, maxX: size.width, maxY: size.height } : null;
+    let box = surface.imageSlotBox(limit);
+    const viewport = surface.viewportSize();
+    const host = surface.canvas?.parentElement;
+    if (!box || !viewport || !host) return false;
+    this._imagePicker?.close();
+    const picker = new ImagePicker(host, {
+      // 窄的那一栏里框给单子让了地方：图放进挪过去的那个框里。
+      onSlotMove: (rect) => { box = surface.docBoxOf(rect); },
+      onPick: async (blob) => {
+        try {
+          const prepared = await prepareImage(blob);
+          return !!(await surface.insertImage(prepared, box));
+        } catch (error) {
+          Logger.warn('PDF', `插入图片没放进去：${error?.message || error}`);
+          return false;
+        }
+      },
+      onClose: () => { if (this._imagePicker === picker) this._imagePicker = null; },
+    });
+    this._imagePicker = picker;
+    picker.open(surface.screenRectOf(box), viewport);
+    return true;
   }
 
   // ── decks: showing, cycling, removing ─────────────────────────────────────
@@ -4566,14 +4614,18 @@ function slotChrome(slot) {
                   stroke-linejoin="round"/>
           </svg>
         </button>
+        <!-- 翻页这一组到此为止：后面是缩放。和后面几组一样用一道线隔开（草稿纸没有这一组，线跟着一起藏）。 -->
+        <span class="pdf-slot-sep"></span>
       </span>
+      <!-- 缩放只剩「−」「+」：「适合宽度」「整页」两颗拿掉了（人说「去掉右边两个按钮」），两指捏合照样缩放。 -->
       <button type="button" class="pdf-slot-btn" data-role="zoom-out" title="缩小" aria-label="缩小"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg></button>
       <span class="pdf-slot-zoom" data-role="zoom-label"></span>
       <button type="button" class="pdf-slot-btn" data-role="zoom-in" title="放大" aria-label="放大"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg></button>
-      <span class="pdf-slot-group is-pdf-only">
-        <button type="button" class="pdf-slot-btn" data-role="fit-width" title="适合宽度" aria-label="适合宽度"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5v13M20 5.5v13"/><path d="M7.5 12h9"/><path d="m10 9.5-2.5 2.5 2.5 2.5M14 9.5l2.5 2.5-2.5 2.5"/></svg></button>
-        <button type="button" class="pdf-slot-btn" data-role="fit-page" title="整页" aria-label="整页"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4.5h5v5M9.5 19.5h-5v-5M19.5 4.5l-5.8 5.8M4.5 19.5l5.8-5.8"/></svg></button>
-      </span>
+      <!-- 插入图片：这一栏显示着的那一页（本子、草稿纸也行）上先占一个框，旁边一张单子挑图，见 insertImage。原来在 ⋯
+           菜单里，人说「从菜单栏移出来成为个单独的按钮吧，刚好代替删去那两个按钮留下来的空隙」——就是「适合宽度」
+           「整页」原来的位置。图标是一张照片（框、山、太阳）缺了右下角，那儿一个加号：和栏上别的图标一样的线、
+           一样的粗细。字在 title、aria-label 里（换语言时由 _syncSlotChrome 写）。 -->
+      <button type="button" class="pdf-slot-btn" data-role="insert-image" title="插入图片" aria-label="插入图片"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 19.5H6.5a2 2 0 0 1-2-2v-11a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2V13"/><circle cx="9.2" cy="9.4" r="1.6"/><path d="m4.8 16.4 4.1-4.1 2.7 2.7 2-2 1.6 1.6"/><path d="M18 15v6M15 18h6"/></svg></button>
       <!-- A scratchpad has no outline, no page controls, no question label and
            no answer lookup, because it has no pages and takes no part in
            matching. What it has instead is a way back to the origin, a way to
