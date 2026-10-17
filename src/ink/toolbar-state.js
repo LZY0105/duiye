@@ -244,6 +244,12 @@ export function createToolbarState(initial = {}) {
      * 这里记着它在那一排里的位置，那一排拉回来就还回去；存盘写的也是这一份。
      */
     offRow: null,
+    /**
+     * 那一排收着的时候，人把它拖到最上面、藏进了那一排（见 endDrag 的 tucked）：停在那一排里，跟着
+     * 那一排一起看不见，不借住到左边；那一排拉回来时和它一起出来，这个记号就清掉。存盘也记着——
+     * 下次开机那一排还收着，它还藏着。
+     */
+    tucked: Object.values(PERCHES).includes(initial.perch) && initial.tucked === true,
 
     // ── ink tool state (must survive placement changes) ──
     tool,
@@ -305,6 +311,7 @@ export function startDrag(state, point) {
     yielded: null,
     // 顶上那一排收着时借住在左边的也一样：亲手挪过，那一排拉回来就不再把它送回去。
     offRow: null,
+    tucked: false,
   });
 }
 
@@ -334,11 +341,13 @@ export function moveDrag(state, point) {
  * untouched, which is the acceptance requirement that selections survive
  * movement and reorientation.
  */
-export function endDrag(state, point, viewport, { perch = null, perchX = null } = {}) {
+export function endDrag(state, point, viewport, { perch = null, perchX = null, tucked = false } = {}) {
   if (state.phase !== TOOLBAR_PHASE.DRAGGING) return state;
   // 松在顶上那一排里：收成一颗球，停在松手的那个地方。落在哪一侧、哪儿由页面那一层判
   // （它才知道那几枚胶囊在哪），这里只照办。edge / offset 不动——那是它在工作区里的
   // 家，之后从这一排拖回工作区时，落点会重新定它。
+  //
+  // tucked：那一排此刻收着，人把它拖到了最上面——藏进那一排（见 createToolbarState 的 tucked）。
   if (Object.values(PERCHES).includes(perch)) {
     return next(state, {
       phase: TOOLBAR_PHASE.DOCKED,
@@ -346,11 +355,14 @@ export function endDrag(state, point, viewport, { perch = null, perchX = null } 
       perch,
       perchX: Number.isFinite(perchX) ? clamp01(perchX) : null,
       dragPoint: null,
+      tucked: !!tucked,
     });
   }
   const release = point || state.dragPoint;
   if (!release || !viewport) {
-    return next(state, { phase: TOOLBAR_PHASE.EXPANDED, perch: null, perchX: null, dragPoint: null });
+    return next(state, {
+      phase: TOOLBAR_PHASE.EXPANDED, perch: null, perchX: null, dragPoint: null, tucked: false,
+    });
   }
   const { edge, offset } = nearestEdge(release, viewport);
   const corner = cornerOf(release, viewport);
@@ -362,6 +374,7 @@ export function endDrag(state, point, viewport, { perch = null, perchX = null } 
     edge,
     offset,
     dragPoint: null,
+    tucked: false,
   });
 }
 
@@ -428,6 +441,7 @@ export function leavePerch(state, corner = CORNERS.TOP_RIGHT) {
     perch: null,
     perchX: null,
     openCard: CARDS.NONE,
+    tucked: false,
   });
 }
 
@@ -448,6 +462,7 @@ export function perchAt(state, perch, perchX = null) {
     openCard: CARDS.NONE,
     yielded: null,
     offRow: null,
+    tucked: false,
   });
 }
 
@@ -462,9 +477,11 @@ export function perchAt(state, perch, perchX = null) {
  * 借的，不是搬家：它在那一排里的位置记在 offRow 里，那一排拉回来就还回去（backToRow），
  * 存盘写的也是那一排里的位置。人中间亲手拖过它就不再还（startDrag 清掉这笔账）。
  * 在左边点开、收起都照常，还回去时按那一刻是开着还是收着。
+ *
+ * 藏进去的（tucked）不借：那是人在那一排收着的时候亲手把它拖上去藏起来的，就该跟着那一排看不见。
  */
 export function stepOffRow(state) {
-  if (!state.perch || state.phase === TOOLBAR_PHASE.DRAGGING) return state;
+  if (!state.perch || state.tucked || state.phase === TOOLBAR_PHASE.DRAGGING) return state;
   const expanded = state.phase === TOOLBAR_PHASE.EXPANDED;
   const onLeft = state.edge === EDGES.LEFT;
   const offset = onLeft ? state.offset : 0.5;
@@ -502,6 +519,7 @@ export function backToRow(state) {
     openCard: CARDS.NONE,
     yielded: null,
     offRow: null,
+    tucked: false,
   });
 }
 
@@ -513,6 +531,20 @@ export function isOffRow(state) {
 /** 停在顶上那一排里（球也好、点开的那一条也好）。 */
 export function isPerched(state) {
   return !!state.perch;
+}
+
+/**
+ * 藏进去的那颗球跟着那一排出来了：从这一刻起它就是一颗平常停在那一排里的球。之后再收起那一排，
+ * 照「停在里面的借住到左边」那一套走（stepOffRow）——藏只是那一次人亲手做的事。
+ */
+export function untuck(state) {
+  if (!state.tucked) return state;
+  return next(state, { tucked: false });
+}
+
+/** 藏在收着的那一排里（停在里面、跟着那一排看不见）。 */
+export function isTucked(state) {
+  return !!state.perch && !!state.tucked;
 }
 
 /**
@@ -803,6 +835,8 @@ export function serializeToolbarState(state) {
     corner: placed.corner,
     perch: placed.perch || null,
     perchX: placed.perch && Number.isFinite(placed.perchX) ? placed.perchX : null,
+    // 藏在收着的那一排里：下次开机那一排还收着的话，它还藏着，不借住到左边去。
+    tucked: placed === state && isTucked(state),
     tool: state.tool,
     color: state.color,
     width: state.width,

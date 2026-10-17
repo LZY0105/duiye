@@ -35,7 +35,12 @@ import {
 import { InkSurface } from '../ink/ink-surface.js';
 import { loadLayer, prefetchInk, saveLayer } from '../ink/ink-store.js';
 import { notifyPeers, releaseLayer, shareLayer } from '../ink/ink-shared.js';
+import { polygonBounds } from '../ink/ink-selection.js';
 import Logger from '../core/logger.js';
+
+/** 截给识别的那张图：圈的长边画到多少像素（见 _captureRegion），以及整页最多画多少像素。 */
+const CAPTURE_LONG_SIDE = 1600;
+const CAPTURE_MAX_PIXELS = 16e6;
 
 /** A flick must travel this far, and finish this fast, to turn a page. */
 const SWIPE_DISTANCE = 64;
@@ -309,12 +314,17 @@ export class PdfPane {
         // 化只认前者：拿 onFocus 当信号的话，人手指碰一下窗格工具栏就躲走了。
         this.handlers.onInkDraw?.();
       },
-      // 跨栏拖拽：这块画布不知道另一栏在哪，交给工作区去找。
+      // 跨栏拖拽：这块画布不知道另一栏在哪，交给工作区去找。回的是「探进对面了没有」。
       onDragOver: (at) => this.handlers.onInkDragOver?.(at),
       // 原样回传，不要折成布尔：落地的那一侧给的是一组把手，源那边要靠它把
       // 「撤销拖走」连到落下的那一份上。折成 true/false 的话，撤销之后两边
       // 各留一份。
       onDragDrop: (payload) => this.handlers.onInkDragDrop?.(payload) || null,
+      // 套索上的「识别」：圈里那一块页面截给识别引擎（接了 OCR 才会用到，见 src/ocr/）。
+      captureRegion: (request) => this._captureRegion(request),
+      // 跨栏拖到一半松手：落下来的那一片滑进页面里，不停在页外的灰边上（见 InkSurface._landingShift）。
+      pageBounds: () => (this.pageSize?.width > 0 && this.pageSize?.height > 0
+        ? { minX: 0, minY: 0, maxX: this.pageSize.width, maxY: this.pageSize.height } : null),
     });
     this.ink.setEnabled(false); // enabled once a document is loaded
     this.minZoom = ZOOM_MIN;
@@ -1352,9 +1362,87 @@ export class PdfPane {
     });
   }
 
+  /**
+   * 圈里那一块页面截成一张图，给识别用（InkSurface 的 captureRegion）。
+   *
+   * 不拿屏幕上那张：那是按当前缩放画的，缩小着看的时候一个字只有十来个像素，认不清。按圈的大小重新画这一页——圈的
+   * 长边画到 1600 像素上下（2～4 倍），整页像素有上限（大开本的书不至于一下要几百兆）——再裁出圈的外框。圈外涂白：
+   * 引擎只该看人圈的那一块，旁边那一行半露出来的字只会添乱。笔迹不画进去（要认的是书上的字；圈里的笔迹另外以矢量给）。
+   *
+   * @param {{polygon: Array<{x: number, y: number}>}} request 圈，文档坐标（这一页 1 倍视口下的 CSS 像素）
+   * @returns {Promise<{image: HTMLCanvasElement, scale: number, box: object, pageNumber: number}>}
+   *   scale：图上几个像素是一个文档单位；box：这张图在页面上的范围（文档坐标）
+   */
+  async _captureRegion({ polygon } = {}) {
+    const doc = this.doc;
+    const page = this._inkPage || this.state?.pageNumber;
+    if (!doc || !page || !polygon?.length) throw new Error('CAPTURE_NO_PAGE');
+    const box = polygonBounds(polygon);
+    const size = await doc.pageSize(page);
+    const minX = Math.max(0, box.minX);
+    const minY = Math.max(0, box.minY);
+    const maxX = Math.min(size.width, box.maxX);
+    const maxY = Math.min(size.height, box.maxY);
+    if (maxX - minX < 1 || maxY - minY < 1) throw new Error('CAPTURE_OUTSIDE_PAGE');
+    const longest = Math.max(maxX - minX, maxY - minY);
+    const scale = Math.min(4, Math.max(2, CAPTURE_LONG_SIDE / longest),
+      Math.sqrt(CAPTURE_MAX_PIXELS / (size.width * size.height)));
+    const { canvas: pageCanvas } = await doc.renderPage(page, scale, { drawable: true });
+    try {
+      const x0 = Math.floor(minX * scale);
+      const y0 = Math.floor(minY * scale);
+      const w = Math.max(1, Math.ceil(maxX * scale) - x0);
+      const h = Math.max(1, Math.ceil(maxY * scale) - y0);
+      const crop = document.createElement('canvas');
+      crop.width = w;
+      crop.height = h;
+      const ctx = crop.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, w, h);
+      ctx.save();
+      ctx.beginPath();
+      polygon.forEach((p, i) => {
+        const x = p.x * scale - x0;
+        const y = p.y * scale - y0;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.closePath();
+      ctx.clip();
+      ctx.drawImage(pageCanvas, -x0, -y0);
+      ctx.restore();
+      return {
+        image: crop,
+        scale,
+        box: { minX: x0 / scale, minY: y0 / scale, maxX: (x0 + w) / scale, maxY: (y0 + h) / scale },
+        pageNumber: page,
+      };
+    } finally {
+      // 整页那张用完就放：一页 4 倍有几十兆。
+      pageCanvas.width = 0;
+      pageCanvas.height = 0;
+    }
+  }
+
   /** 不看这一页了。最后一个人走了，登记处才把它撤掉。 */
   _dropInk(documentId, page) {
     releaseLayer(documentId, page, this);
+  }
+
+  /**
+   * 这一页的笔迹被别处整份换过了（书签成书的「从母本更新」）：正显示着这一页的话，就地换上。
+   *
+   * 换的是手里那一层**本身**的内容，不是换一层新的：同一页开在另一栏时两边拿的是同一个对象（见 _takeInk），换了
+   * 它，两边下一次自动保存写下去的都是新的；换成一层新的，另一栏手里那份旧的会在它下次存盘时把更新整个盖回去。
+   * 撤销记录从这里重新开始——那些记录说的是换掉之前的笔迹，撤回去只会把旧的拼回来。
+   *
+   * @returns {boolean} 正显示着这一页，换上了
+   */
+  replaceInk(documentId, page, strokes) {
+    if (!this.meta || this.meta.id !== documentId || this._inkPage !== page) return false;
+    const layer = this.ink.getLayer();
+    layer.strokes = strokes.slice();
+    this.ink.loadLayer(layer);
+    return true;
   }
 
   /** True while an edit has been made but not yet written to storage. */
@@ -1654,8 +1742,8 @@ export class PdfPane {
     // Drawing the page is exactly what a pending zoom settle was waiting to do,
     // and whatever asked for this render has superseded it. Left armed it fires
     // mid-await, resets the preview scale and starts a second render of the
-    // same state — most visibly during a 整页 or 适合宽度 press that lands
-    // inside the settle window.
+    // same state — most visibly when a page turn, or the pane re-fitting
+    // itself to a new size, lands inside the settle window.
     clearTimeout(this._zoomSettleTimer);
     this._zoomSettleTimer = null;
     const token = ++this._renderToken;
@@ -2078,14 +2166,6 @@ export class PdfPane {
   previous() { if (this.doc) this._apply(previousPage(this.state), true); }
   zoomIn() { if (this.doc) this._zoomTo(zoomIn(this.state)); }
   zoomOut() { if (this.doc) this._zoomTo(zoomOut(this.state)); }
-  fitWidth() {
-    if (!this.doc) return;
-    this._apply(applyFit(this.state, FIT_MODES.WIDTH, this._viewport(), this.pageSize), true);
-  }
-  fitPage() {
-    if (!this.doc) return;
-    this._apply(applyFit(this.state, FIT_MODES.PAGE, this._viewport(), this.pageSize), true);
-  }
 
   canGoNext() { return !!this.doc && canGoNext(this.state); }
   canGoPrevious() { return !!this.doc && canGoPrevious(this.state); }

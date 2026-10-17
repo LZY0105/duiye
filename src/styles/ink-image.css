@@ -1,0 +1,204 @@
+/* 「插入图片」（src/ink/ink-image-picker.js）：页上先占的那个虚线框，旁边挑图的那张单子。
+ *
+ * 照人给的图 1 摆：框是一块淡淡的底色、一圈虚线、正中一个图片的样子；单子上面「最近照片」三列方格缩略图（多了
+ * 就在格子里上下划），下面一道粗一点的间隔，再是「拍照」「从图库中选择」两行，中间一道细线。颜色都是这里三套
+ * 皮肤自己的：框用主题色（纸里是钢笔色，不用黄），单子和识别出结果的那张单子同一种材质（--lg-glass-thick、
+ * --lg-blur、--lg-rim/--lg-edge/--lg-lift）；液态玻璃里它是透明的玻璃（liquid-glass-react.css），纸里是一张
+ * 纸条（paper.css）。
+ *
+ * 动画只动 transform / opacity。系统开了「减少动态效果」：不弹，直接出来。 */
+
+.ink-image-picker {
+  position: absolute;
+  inset: 0;
+  z-index: 32;
+  pointer-events: none;
+}
+
+/* 页上那个框：图会放在这儿。 */
+.ink-image-slot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  border: 1.5px dashed color-mix(in srgb, var(--accent, #2563eb) 55%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent, #2563eb) 9%, transparent);
+  color: color-mix(in srgb, var(--accent, #2563eb) 62%, transparent);
+  animation: ink-image-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ink-image-slot svg {
+  width: min(40%, 96px);
+  height: min(40%, 96px);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 挑图的那张单子。位置由 JS 用 transform 摆；进场那一下用单独的 translate/opacity，两样不打架。 */
+.ink-image-card {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: min(300px, calc(100% - 16px));
+  padding: 6px 0;
+  border-radius: 22px;
+  background: var(--lg-glass-thick, #fff);
+  backdrop-filter: var(--lg-blur, none);
+  color: var(--lg-label, var(--fg, #1d1d1f));
+  box-shadow: var(--lg-rim, 0 0 #0000), var(--lg-edge, 0 0 0 0.5px rgba(15, 23, 42, 0.07)),
+    var(--lg-lift, 0 18px 48px rgba(15, 23, 42, 0.22));
+  pointer-events: auto;
+  animation: ink-image-in 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes ink-image-in {
+  from { opacity: 0; translate: 0 8px; }
+  to { opacity: 1; translate: 0 0; }
+}
+
+/* 上面多留一点给标题；没有这一块（浏览器里、没有照片）时单子上下一样空。 */
+.ink-image-recent { padding-top: 8px; }
+.ink-image-recent[hidden] { display: none; }
+.ink-image-head {
+  padding: 0 16px 10px;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--lg-label-2, var(--muted, #6b7280));
+}
+/* 三列方格，最多露三排，多了就在格子里上下划（划不到下面的书页上）。单子 300 宽：一格 84，三排 3×84+2×8。
+   只给「最多这么高」，不把高度定死：定死了，格子一多，每一排被压扁到放得下为止，一格一格的缩略图叠在一起
+   （机上 10-17 撞到的）。一打开就先摆三排空格子（JS），单子一开始就是这么高，缩略图来了也不跟着长。 */
+.ink-image-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-auto-rows: min-content;
+  align-content: start;
+  gap: 8px;
+  max-height: 268px;
+  padding: 0 16px 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.ink-image-grid::-webkit-scrollbar { display: none; }
+.ink-image-grid[hidden] { display: none; }
+.ink-image-thumb {
+  position: relative;
+  aspect-ratio: 1;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--lg-fill, rgba(120, 120, 128, 0.12));
+  cursor: pointer;
+  transition: scale 0.14s var(--lg-ease, ease);
+}
+.ink-image-thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  animation: ink-image-fade 0.2s ease;
+}
+@keyframes ink-image-fade { from { opacity: 0; } to { opacity: 1; } }
+.ink-image-thumb:active { scale: 0.96; }
+.ink-image-thumb:focus-visible { outline: 2px solid var(--accent, #2563eb); outline-offset: 2px; }
+
+.ink-image-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px 14px;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--lg-label-2, var(--muted, #6b7280));
+}
+.ink-image-hint[hidden] { display: none; }
+.ink-image-hint-btn {
+  flex: none;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--lg-primary, rgba(49, 118, 221, 0.12));
+  color: var(--lg-primary-text, var(--accent, #2563eb));
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* 「最近照片」下面那一道粗一点的间隔，再是两行动作，中间一道从字那儿开始的细线。 */
+.ink-image-actions {
+  display: flex;
+  flex-direction: column;
+}
+.ink-image-recent:not([hidden]) + .ink-image-actions {
+  border-top: 6px solid var(--lg-fill, rgba(120, 120, 128, 0.12));
+  padding-top: 4px;
+}
+.ink-image-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 52px;
+  padding: 0 16px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.ink-image-row + .ink-image-row::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 54px;
+  right: 16px;
+  height: 0.5px;
+  background: var(--lg-separator, rgba(60, 60, 67, 0.2));
+}
+.ink-image-row svg {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--lg-label-2, var(--muted, #6b7280));
+}
+.ink-image-row:active { background: var(--lg-fill, rgba(120, 120, 128, 0.12)); }
+.ink-image-row:focus-visible { outline: 2px solid var(--accent, #2563eb); outline-offset: -2px; }
+
+.ink-image-status {
+  padding: 4px 16px 6px;
+  font-size: 0.8rem;
+  color: var(--lg-label-2, var(--muted, #6b7280));
+}
+.ink-image-status[hidden] { display: none; }
+/* 正在读那一张：别的都按不动，免得读两张。 */
+.ink-image-card.is-busy .ink-image-row,
+.ink-image-card.is-busy .ink-image-thumb { opacity: 0.45; pointer-events: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ink-image-slot,
+  .ink-image-card,
+  .ink-image-thumb img { animation: none; }
+  .ink-image-thumb { transition: none; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .ink-image-card { backdrop-filter: none; background: #fff; }
+}

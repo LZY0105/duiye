@@ -55,6 +55,20 @@ export async function start() {
   initLiquidGlassReact();
 
   probeNativeProxy(Logger);
+  sweepImagesLater(Logger);
+}
+
+/**
+ * 开机过一会儿收拾一次图片库（一天最多一次）：贴过又删掉、撤销也回不来的图，库里那一份删掉。规矩见
+ * src/ink/ink-image.js 的 removeUnusedImages。等一会儿再做：开机那几秒留给恢复上次的书和页。
+ */
+function sweepImagesLater(Logger) {
+  setTimeout(() => {
+    Promise.all([import('../ink/ink-image.js'), import('../ink/ink-store.js')])
+      .then(([images, store]) => images.sweepUnusedImages(store.imageIdsInUse))
+      .then((removed) => { if (removed) Logger.info('INK', `图片库收拾掉 ${removed} 张没人用的图`); })
+      .catch(() => { /* 收拾不了下次再说 */ });
+  }, 20000);
 }
 
 /**
@@ -74,17 +88,25 @@ export async function start() {
  *
  * 不 await：这一层眼下没有任何调用方（`agent` 和 `ocr` 两个位置都还空着），让
  * 启动去等它没有道理。探测失败也只记一行——桥不在是浏览器里跑时的正常情形。
+ *
+ * `ocr` 那一位哪天报 ready，就在这里把它登记成识别引擎（src/ocr/ocr-native.js），套索上的「识别」随之出现。
  */
 function probeNativeProxy(Logger) {
   import('../native/native-proxy.js')
     .then(({ describeProxy }) => describeProxy())
-    .then(({ loaded, services }) => {
+    .then((description) => {
+      const { loaded, services } = description;
       const slots = services
         .map((s) => `${s.name}=${s.ready ? 'ready' : s.reason || 'not ready'}`)
         .join('，');
       Logger.info('PROXY', loaded
         ? `原生层已加载${slots ? `（${slots}）` : ''}`
         : '原生层不在：浏览器里跑，或者库没能加载');
+      return import('../ocr/ocr-native.js').then(({ nativeOcrReady, registerNativeOcr }) => {
+        if (!nativeOcrReady(description)) return;
+        registerNativeOcr();
+        Logger.info('OCR', '原生识别已接上：套索上多了「识别」');
+      });
     })
     .catch((error) => Logger.warn('PROXY', `探测失败：${error?.message || error}`));
 }

@@ -133,6 +133,26 @@ export async function prefetchInk(documentId, pageNumber) {
   } catch (_) { /* the reader will fetch it properly if they arrive */ }
 }
 
+/**
+ * 所有存着的笔迹里，贴着的图片都是哪几张（ink-image.js 收拾图片库时用）。一条一条地读，不一下子全读进内存；
+ * 正在存、还没落到库里的那几页（缓存里的）也算上。
+ * @returns {Promise<Set<string>>}
+ */
+export async function imageIdsInUse() {
+  const ids = new Set();
+  const collect = (data) => {
+    for (const s of data?.strokes || []) if (s?.image?.id) ids.add(s.image.id);
+  };
+  for (const data of recordCache.values()) collect(data);
+  const db = await getDB();
+  let cursor = await db.transaction(STORE).store.openCursor();
+  while (cursor) {
+    collect(cursor.value?.data);
+    cursor = await cursor.continue();
+  }
+  return ids;
+}
+
 /** Page numbers of every annotated page in a document, ascending. */
 export async function annotatedPages(documentId) {
   const db = await getDB();

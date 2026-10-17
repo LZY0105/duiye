@@ -1,0 +1,415 @@
+/* 套索「识别」那一整段界面（src/ink/ink-recognize.js）：认着时圈里的东西像水面一样起伏、流动的圈线、进度小条（字
+ * 跟着浪起伏）、认出来的框、结果单子。
+ *
+ * 小条和套索那条小条一个样子（深色、圆头）；结果单子和「导入」那张弹出的单子同一种材质（--lg-glass-thick、
+ * --lg-blur、--lg-rim/--lg-edge/--lg-lift，liquid.css 定的那几个），三套皮肤各自的变量会把它染对。纸里单子是一张纸条
+ * （paper.css），液态玻璃里小条和单子都是透明的玻璃（liquid-glass-react.css），和套索那一条、导入那张单子一起。
+ *
+ * 动画只动 transform / translate / opacity / stroke-dashoffset：不碰排版。扫的时候整块界面挂着 data-lens-moving，液态玻璃
+ * 那边会换成便宜的那一版（第 53 节量过：静止那一版每帧几十毫秒）。
+ * 系统开了「减少动态效果」：不涌、不流动、不弹，只留静态的提示（最底下那一段）。 */
+
+.ink-recognize {
+  position: absolute;
+  inset: 0;
+  z-index: 31;
+  pointer-events: none;
+  color: var(--accent, #2563eb);
+}
+
+.ink-recognize[data-state="idle"] { display: none; }
+
+.ink-recognize-scan {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+/* 圈里那一块平常不铺颜色（人说「识别动画的波浪不要有颜色，让下面的背景和字像波浪一样动就行」）：动的是圈里的东西
+   自己（下面的 ripple）。只有「减少动态效果」的时候什么都不动，才铺一层淡淡的主题色，告诉人认的是哪一块（最底下）。 */
+.ink-recognize-wash {
+  fill: currentColor;
+  fill-opacity: 0;
+  transition: fill-opacity 0.25s ease;
+}
+
+/* 圈里的东西像水面一样起伏（人说「不止识别提示字样，圈的内容动画也是」）：书页的底色、字、笔迹、贴着的图，JS 一帧
+   一帧错开画在这块画布上，位置、按圈裁的 clip-path 也是 JS 给的。它压在原来那一块上，上面只有圈线。 */
+.ink-recognize-ripple {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+.ink-recognize-ripple[hidden] { display: none; }
+
+/* 圈线：认着的时候是流动的虚线（「它在动」），和套索线同一个虚线节奏。 */
+.ink-recognize-outline {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-dasharray: 7 5;
+  stroke-linejoin: round;
+  opacity: 0;
+}
+.ink-recognize[data-state="scanning"] .ink-recognize-outline {
+  opacity: 0.9;
+  animation: ink-rec-ants 0.9s linear infinite;
+}
+@keyframes ink-rec-ants { to { stroke-dashoffset: -24; } }
+
+/* 认出来的那几处：一个接一个框出来，告诉人「是这几处」。 */
+.ink-recognize-box {
+  fill: currentColor;
+  fill-opacity: 0.1;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ink-rec-pop 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.2) forwards;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+@keyframes ink-rec-pop {
+  from { opacity: 0; transform: scale(0.94); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* ── 小条：认着、没认出、没认成 ─────────────────────────────────────────────
+ * 和套索那条小条一个样子（深色、圆头），挂在圈下面。 */
+.ink-recognize-pill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 4px 5px 4px 14px;
+  border-radius: var(--pill-radius, 999px);
+  background: rgba(20, 20, 24, 0.86);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 0.5px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  color: #fff;
+  font-size: 0.84rem;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: auto;
+  animation: ink-rec-rise 0.2s ease;
+}
+.ink-recognize-pill[hidden] { display: none; }
+
+.ink-recognize-label { font-variant-numeric: tabular-nums; }
+
+/* 认着的时候，字和圈里的浪一个样子（人说「下面的字也要有如此效果」）：前面三个点、后面一个字接一个字，依次涌起来、
+   亮一下，像一道浪从头传到尾——三个点和字是同一个节拍（ink-rec-crest，1.5 秒；一个接一个隔 65ms，和
+   ink-recognize.js 的 CREST_PERIOD_MS、CREST_STAGGER_MS 是同一对数）。眼睛看的是 crest 那一份（一个字一个 span，
+   JS 排好节拍）；label 那一份挪出视野，只给读屏读——一个字一个 span 读出来是一个字一个字地念。 */
+.ink-recognize-crest {
+  display: none;
+  white-space: pre;
+  font-variant-numeric: tabular-nums;
+}
+.ink-recognize[data-state="scanning"]:not(.is-reduced) .ink-recognize-crest { display: inline-block; }
+.ink-recognize[data-state="scanning"]:not(.is-reduced) .ink-recognize-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.ink-recognize-ch {
+  display: inline-block;
+  opacity: 0.6;
+  animation: ink-rec-crest 1.5s ease-in-out infinite;
+}
+
+.ink-recognize-dots { display: inline-flex; gap: 3px; }
+.ink-recognize-dots i {
+  --lift: -3px;
+  --rest: 0.45;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.45;
+  animation: ink-rec-crest 1.5s ease-in-out infinite;
+}
+.ink-recognize-dots i:nth-child(2) { animation-delay: 65ms; }
+.ink-recognize-dots i:nth-child(3) { animation-delay: 130ms; }
+@keyframes ink-rec-crest {
+  0%, 44%, 100% { transform: translateY(0); opacity: var(--rest, 0.6); }
+  16% { transform: translateY(var(--lift, -2px)); opacity: 1; }
+}
+/* 没认出、没认成：不再跳了，说完就等人点。 */
+.ink-recognize-pill.is-still .ink-recognize-dots { display: none; }
+
+.ink-recognize-pill-btn {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--pill-radius, 999px);
+  background: rgba(255, 255, 255, 0.14);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.ink-recognize-pill-btn[hidden] { display: none; }
+.ink-recognize-pill-btn:active { background: rgba(255, 255, 255, 0.28); }
+
+@keyframes ink-rec-rise {
+  from { opacity: 0; translate: 0 6px; }
+  to { opacity: 1; translate: 0 0; }
+}
+
+/* ── 结果单子 ───────────────────────────────────────────────────────────────
+ * 位置由 JS 用 transform 摆（和小条、套索那条一样）；浮上来的那一下用单独的 translate，两样不打架。
+ * 它盖在正在读的那一页上，字要读得清：用「厚」的那一档玻璃（菜单、对话框那一档），不是 --card-bg 那种薄的。 */
+.ink-recognize-panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  width: min(360px, calc(100% - 16px));
+  max-height: min(62%, 440px);
+  padding: 10px;
+  border-radius: 18px;
+  background: var(--lg-glass-thick, #fff);
+  backdrop-filter: var(--lg-blur, none);
+  color: var(--lg-label, var(--fg, #1d1d1f));
+  border: 0;
+  box-shadow: var(--lg-rim, 0 0 #0000), var(--lg-edge, 0 0 0 0.5px rgba(15, 23, 42, 0.07)),
+    var(--lg-lift, 0 18px 48px rgba(15, 23, 42, 0.22));
+  pointer-events: auto;
+  opacity: 0;
+  translate: 0 10px;
+  transition: opacity 0.2s ease, translate 0.26s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ink-recognize-panel[hidden] { display: none; }
+.ink-recognize-panel.is-in { opacity: 1; translate: 0 0; }
+
+.ink-recognize-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 2px 4px 6px;
+}
+.ink-recognize-title { font-size: 0.95rem; font-weight: 700; }
+.ink-recognize-tag {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--accent, #2563eb);
+  background: color-mix(in srgb, var(--accent, #2563eb) 12%, transparent);
+}
+.ink-recognize-tag[hidden] { display: none; }
+.ink-recognize-close {
+  margin-left: auto;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted, #6b7280);
+  font-size: 1rem;
+  cursor: pointer;
+}
+.ink-recognize-close:active { background: var(--lg-fill, rgba(120, 120, 128, 0.12)); }
+
+.ink-recognize-hint {
+  padding: 0 6px 8px;
+  font-size: 0.76rem;
+  color: var(--muted, #6b7280);
+}
+
+.ink-recognize-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* 一条一行，整行都是靶子（和「挑几份」那张单子一样，没有那个指甲盖大的复选框）。一条接一条浮上来。 */
+.ink-recognize-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 6px 6px 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  cursor: pointer;
+  opacity: 0;
+  animation: ink-rec-rise 0.24s ease forwards;
+  animation-delay: calc(120ms + var(--i, 0) * 50ms);
+}
+.ink-recognize-row.is-selected {
+  background: color-mix(in srgb, var(--accent, #2563eb) 9%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #2563eb) 28%, transparent);
+}
+.ink-recognize-tick {
+  flex: none;
+  width: 16px;
+  text-align: center;
+  font-weight: 700;
+  color: var(--accent, #2563eb);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.ink-recognize-row.is-selected .ink-recognize-tick { opacity: 1; }
+.ink-recognize-kind {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--muted, #6b7280);
+  background: var(--lg-fill, rgba(120, 120, 128, 0.12));
+}
+/* 文字一行放不下就折行（最多三行）：人要看清认得对不对，截掉的那半句正好可能是认错的地方。
+   公式不能折：长了就横着划，不露滚动条（KaTeX 的上下标比行高，露出来的是一对上下箭头）。 */
+.ink-recognize-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.92rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+.ink-recognize-preview[hidden] { display: none; }
+.ink-recognize-preview.is-math {
+  display: block;
+  font-size: 1.02rem;
+  white-space: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 6px 0;
+  scrollbar-width: none;
+}
+.ink-recognize-preview.is-math::-webkit-scrollbar { display: none; }
+/* 公式按块级排（和写成笔迹的那一份一样，见 katex-ink.js）：KaTeX 给块级公式的上下留白、居中在一行里都不要。 */
+.ink-recognize-preview .katex-display { margin: 0; text-align: left; }
+.ink-recognize-preview .katex-display > .katex { text-align: left; }
+.ink-recognize-edit {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--accent, #2563eb);
+  border-radius: 8px;
+  background: var(--lg-fill, rgba(120, 120, 128, 0.12));
+  color: inherit;
+  font: inherit;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.84rem;
+}
+.ink-recognize-edit[hidden] { display: none; }
+/* 认得没把握的：一个灰色虚线圈住的问号（不用黄：纸里不许有黄）。 */
+.ink-recognize-doubt {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px dashed var(--muted, #6b7280);
+  border-radius: 50%;
+  font-size: 0.68rem;
+  font-weight: 800;
+  color: var(--muted, #6b7280);
+}
+.ink-recognize-doubt[hidden] { display: none; }
+.ink-recognize-edit-btn {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted, #6b7280);
+  cursor: pointer;
+}
+.ink-recognize-edit-btn:active { background: var(--lg-fill, rgba(120, 120, 128, 0.12)); }
+.ink-recognize-row.is-editing .ink-recognize-edit-btn { visibility: hidden; }
+
+.ink-recognize-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 10px;
+}
+/* 两颗按钮和对话框里的一样：平的一层灰；主要的那一颗是一层平平的淡蓝、深一点的蓝字（--lg-primary，不打光）。
+   不直接用 .deck-dialog-btn：液态玻璃会往那种按钮里挂几层玻璃，而这张单子靠淡入进场，半透明那一段里层里的磨砂
+   看不到背后；按钮上的字（「已复制」「正在写…」）也是换着的，换字会把挂进去的层冲掉。 */
+.ink-recognize-btn {
+  min-height: 44px;
+  min-width: 104px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--lg-fill, rgba(120, 120, 128, 0.12));
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.16s ease, scale 0.14s var(--lg-ease, ease);
+}
+.ink-recognize-btn:active:not(:disabled) { scale: 0.97; background: var(--lg-fill-2, rgba(120, 120, 128, 0.2)); }
+.ink-recognize-btn.is-primary {
+  background: var(--lg-primary, rgba(49, 118, 221, 0.12));
+  color: var(--lg-primary-text, var(--accent, #2563eb));
+  box-shadow: var(--lg-primary-shadow, 0 0 #0000);
+  font-weight: 700;
+}
+.ink-recognize-btn.is-primary:active:not(:disabled) { background: var(--lg-primary-press, rgba(49, 118, 221, 0.2)); }
+.ink-recognize-btn:disabled { opacity: 0.45; cursor: default; }
+/* 复制完那一下：字换成「已复制 n 条」，颜色跟着主题色走一下。 */
+.ink-recognize-btn.is-done:not(.is-primary) { color: var(--accent, #2563eb); }
+
+/* ── 减少动态效果：不起伏、不流动、不弹，只留静态的提示 ─────────────────────
+ * 圈里不动，铺一层淡淡的底色（wash）认出是哪一块；小条上的字就是 label 本身、不起伏。 */
+@media (prefers-reduced-motion: reduce) {
+  .ink-recognize[data-state="scanning"] .ink-recognize-wash { fill-opacity: 0.06; }
+  .ink-recognize-ch { animation: none; }
+  .ink-recognize[data-state="scanning"] .ink-recognize-outline { animation: none; }
+  .ink-recognize[data-state="scanning"] .ink-recognize-crest { display: none; }
+  .ink-recognize[data-state="scanning"] .ink-recognize-label {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+  }
+  .ink-recognize-box,
+  .ink-recognize-row,
+  .ink-recognize-pill,
+  .ink-recognize-dots i { animation: none; opacity: 1; }
+  .ink-recognize-panel { transition: none; translate: none; }
+  .ink-recognize-btn { transition: none; }
+}
+.ink-recognize.is-reduced .ink-recognize-ripple { display: none; }
+@media (prefers-reduced-motion: reduce) { .ink-recognize-ripple { display: none; } }
+.ink-recognize.is-reduced[data-state="scanning"] .ink-recognize-wash { fill-opacity: 0.06; }
+.ink-recognize.is-reduced .ink-recognize-outline { animation: none; }
+.ink-recognize.is-reduced .ink-recognize-dots i { animation: none; opacity: 1; }
+
+/* 系统开了「降低透明度」：单子不磨，一块实在的白（纸本来就是实的，paper.css 那条更具体，压得住这条）。 */
+@media (prefers-reduced-transparency: reduce) {
+  .ink-recognize-panel { backdrop-filter: none; background: #fff; }
+}
+
+/* 套索那条上「识别」那颗的图标（一个取景框里一个 T）：别的几颗是字，这一颗是画的，按字的大小摆正。 */
+.ink-selection-glyph:has(> .ink-selection-icon) { display: inline-flex; }
+.ink-selection-icon { display: block; width: 1.05em; height: 1.05em; }

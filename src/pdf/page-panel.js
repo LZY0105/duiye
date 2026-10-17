@@ -214,7 +214,19 @@ export class PagePanel {
 
   /** The reader turned a page elsewhere; the panel should agree. */
   syncCurrentPage() {
-    if (!this.isOpen || this._state.tab !== PANEL_TABS.THUMBS) return;
+    if (!this.isOpen) return;
+    if (this._state.tab === PANEL_TABS.MARKS) {
+      // 书签那一页也跟着走：原来只在画出来的那一刻定一次哪一行是蓝的，点另一个书签翻过去了，蓝的还停在
+      // 原来那一行（用户截图）。不重画整张单子：正在起名字、正往下翻着的单子不该被重置。
+      const current = this.handlers.getCurrentPage?.() || 0;
+      for (const row of this.body.querySelectorAll('.pdf-mark-row')) {
+        const on = Number(row.dataset.page) === current;
+        row.classList.toggle('is-current', on);
+        row.querySelector('.pdf-mark-go')?.setAttribute('aria-current', on ? 'page' : 'false');
+      }
+      return;
+    }
+    if (this._state.tab !== PANEL_TABS.THUMBS) return;
     const page = this.handlers.getCurrentPage?.() || 1;
     for (const [n, cell] of this._cells) {
       cell.classList.toggle('is-current', n === page);
@@ -437,9 +449,11 @@ export class PagePanel {
     for (const mark of marks) {
       const li = document.createElement('li');
       li.className = 'pdf-mark-row';
+      // 记下是哪一页：翻到别的页时 syncCurrentPage 按它挑哪一行是蓝的。
+      li.dataset.page = String(mark.page);
       if (mark.page === current) li.classList.add('is-current');
       li.innerHTML = `
-        <button type="button" class="pdf-mark-go">
+        <button type="button" class="pdf-mark-go" aria-current="${mark.page === current ? 'page' : 'false'}">
           <span class="pdf-mark-page">${esc(mark.page)}</span>
           <span class="pdf-mark-label"></span>
         </button>
@@ -463,6 +477,20 @@ export class PagePanel {
           this._paint();
         });
       list.appendChild(li);
+    }
+    // 书签成书：把这些标过的页挑出来做成一本。挂在单子底下而不是顶上——顶上那一行是人最常点的书签，
+    // 一颗不常用的按钮不该压在它前面；单子短，滚到底也就一两下。本子的书签不给（拷不出「原书的页」）。
+    if (this.handlers.canMakeBookFromMarks?.()) {
+      const make = document.createElement('button');
+      make.type = 'button';
+      make.className = 'pdf-mark-book';
+      make.innerHTML = `<svg class="pdf-mark-book-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M6 4.5h9.5a2 2 0 0 1 2 2V20l-5.75-3.4L6 20z"/><path d="M14.5 3.5H18a2 2 0 0 1 2 2V17"/></svg>
+        <span class="pdf-mark-book-label"></span>`;
+      make.querySelector('.pdf-mark-book-label').textContent = t('marksBook.panelButton', { count: marks.length });
+      make.addEventListener('click', () => this.handlers.onBookFromMarks?.());
+      this.body.replaceChildren(list, make);
+      return;
     }
     this.body.replaceChildren(list);
   }

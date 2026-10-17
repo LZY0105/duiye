@@ -292,11 +292,14 @@ await test('按钮认的是 pointerdown，不是 click', async () => {
   const src = await import('node:fs').then(fs => fs.readFileSync(
     new URL('../src/ink/ink-selection-bar.js', import.meta.url), 'utf-8'));
   assert.ok(/addEventListener\('pointerdown'/.test(src));
-  assert.ok(!/addEventListener\('click'/.test(src));
+  // 按钮自己不听 click。整份文件里唯一一处 click 监听是把按下之后补来的那一下吞掉（_swallowClickOf），挂在 document 上。
+  assert.ok(!/el\.addEventListener\('click'|button\.addEventListener\('click'/.test(src));
+  assert.equal((src.match(/addEventListener\('click'/g) || []).length, 1);
+  assert.ok(/doc\.addEventListener\('click', swallow, true\)/.test(src));
   assert.ok(/stopPropagation/.test(src), '这一下不能再穿到画布上去');
 });
 
-await test('四个动作都在，删除排在最后并自己标出来', async () => {
+await test('五个动作都在（复制、剪切、颜色、大小、删除），删除排在最后并自己标出来', async () => {
   const { surface } = mount();
   const a = line(surface, 100, 100);
   selectRect(surface, [a.id], 100, 100, 300, 200);
@@ -306,7 +309,7 @@ await test('四个动作都在，删除排在最后并自己标出来', async ()
     .map(b => b.dataset.action);
   assert.deepEqual(actions, [
     SELECTION_ACTIONS.COPY, SELECTION_ACTIONS.CUT,
-    SELECTION_ACTIONS.COLOR, SELECTION_ACTIONS.DELETE,
+    SELECTION_ACTIONS.COLOR, SELECTION_ACTIONS.SIZE, SELECTION_ACTIONS.DELETE,
   ], '删除排在最后——手指是从左往右够的，不可撤销的那个不该在半路上');
   assert.ok(el.querySelector('.ink-selection-btn.is-danger'));
 });
@@ -548,6 +551,21 @@ await test('圈里有闭合形状：换色那排分成边框、填充两排', as
   assert.equal(rows[0].querySelectorAll('[data-color]').length, 3, '边框那排是工具栏那排色');
   assert.equal(rows[1].querySelectorAll('[data-fill]').length, 4, '填充那排多一格「不填充」');
   assert.ok(rows[1].querySelector('.ink-selection-dot.is-none[data-fill=""]'), '打头那格是「不填充」');
+  // 两排的颜色上下对齐：边框那排在「不填充」的位置空一格（人说「这个颜色位置视觉上有点怪」——原来错开一格）。
+  const cells = rows.map(r => [...r.querySelectorAll('.ink-selection-dot')]);
+  assert.equal(cells[0].length, cells[1].length, '两排一样多格');
+  assert.ok(cells[0][0].classList.contains('is-gap') && cells[0][0].getAttribute('aria-hidden') === 'true', '空格位看不见、读屏也不念');
+  assert.equal(cells[0][0].tagName, 'SPAN', '空格位不是按钮');
+  for (const color of ['#111111', '#ff0000', '#2563eb']) {
+    const col = cells[0].findIndex(d => d.dataset.color === color);
+    assert.equal(cells[1].findIndex(d => d.dataset.fill === color), col, `${color} 在两排里是同一列`);
+  }
+  // 展开以后整条不再是两头半圆的胶囊（样式表按这个类换成圆角矩形），收起来换回去。
+  const bar = surface._bar.el;
+  pressDown(bar.querySelector('[data-action="color"]'));
+  assert.ok(bar.classList.contains('is-palette-open'));
+  pressDown(bar.querySelector('[data-action="color"]'));
+  assert.ok(!bar.classList.contains('is-palette-open'));
 });
 
 await test('改边框只动边框，改填充只动填充', async () => {

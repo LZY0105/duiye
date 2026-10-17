@@ -7,6 +7,7 @@
 
 import { annotatedPages, loadLayer } from '../ink/ink-store.js';
 import { createTransform, drawStroke } from '../ink/ink-renderer.js';
+import { getImage, imageIdsOf, whenImagesReady } from '../ink/ink-image.js';
 import { getDocumentBytes, openStoredDocument } from '../pdf/pdf-library.js';
 import { getNotebook } from '../note/note-store.js';
 import { NOTE_PAGE, openNoteDocument } from '../note/note-document.js';
@@ -19,6 +20,7 @@ import {
   EXPORT_ERRORS,
   buildBookPdf,
   buildNotebookPdf,
+  buildPagesPdf,
   buildRasterPdf,
   buildScratchPdf,
   parseColor,
@@ -40,6 +42,20 @@ const PAPER_MAX_PIXELS = 8e6;
 async function strokesOn(id, pageNumber) {
   const layer = await loadLayer(id, pageNumber);
   return layer?.getAll?.() || [];
+}
+
+/**
+ * 这几笔里贴着的图片，取齐成 id → { bytes, type }，交给做 PDF 的那一段：后台线程打不开图片库，只能先取好递过去。
+ * 库里丢了的那张就没有——做的时候那一张不画，别的照画。
+ */
+async function imagesFor(strokes) {
+  const out = {};
+  for (const id of imageIdsOf(strokes)) {
+    const record = await getImage(id);
+    if (!record?.blob) continue;
+    out[id] = { bytes: new Uint8Array(await record.blob.arrayBuffer()), type: record.type || record.blob.type };
+  }
+  return out;
 }
 
 /** 画布 → 某种格式的字节。 */
@@ -74,6 +90,8 @@ async function rasterBookPage(doc, pageNumber, strokes) {
   const wanted = RASTER_SCALE;
   const pixels = size.width * size.height * wanted * wanted;
   const scale = pixels > RASTER_MAX_PIXELS ? wanted * Math.sqrt(RASTER_MAX_PIXELS / pixels) : wanted;
+  // 贴着的图片先解好：下面是一口气画完的，画的时候还没解好的图就成了一块淡灰。
+  if (strokes?.length) await whenImagesReady(imageIdsOf(strokes));
   const { canvas } = await doc.renderPage(pageNumber, scale, { drawable: true });
   try {
     if (strokes?.length) {
@@ -181,6 +199,7 @@ export async function buildExport(target, { onProgress } = {}) {
       size: NOTE_PAGE,
       paper: await notePaper(record),
       strokesByPage,
+      images: await imagesFor(Object.values(strokesByPage).flat()),
     };
     const bytes = await inBackground('notebook', async () => input,
       (again) => buildNotebookPdf({
@@ -198,7 +217,7 @@ export async function buildExport(target, { onProgress } = {}) {
     const strokes = await strokesOn(id, SCRATCH_PAGE);
     const box = scratchPageBox(strokes);
     if (!box) throw new Error(EXPORT_ERRORS.EMPTY);
-    const input = { strokes, box, paper: await scratchPaper(record, box) };
+    const input = { strokes, box, paper: await scratchPaper(record, box), images: await imagesFor(strokes) };
     const bytes = await inBackground('scratch', async () => input, (again) => buildScratchPdf(again));
     return { bytes, raster: false };
   }
@@ -209,11 +228,13 @@ export async function buildExport(target, { onProgress } = {}) {
     const strokes = await strokesOn(id, pageNumber);
     if (strokes.length) pages.push({ pageNumber, strokes });
   }
-  // 原文件字节转手给后台线程（不复制：一本书几十上百兆）。退回主线程时重新读一份。
+  // 原文件字节转手给后台线程（不复制：一本书几十上百兆）。退回主线程时重新读一份。图片是复制过去的（不大），
+  // 退回主线程时还在。
+  const images = await imagesFor(pages.flatMap((p) => p.strokes));
   const bookInput = async () => {
     const original = await getDocumentBytes(id);
     if (!original) throw new Error(EXPORT_ERRORS.NOT_FOUND);
-    return { bytes: original, pages };
+    return { bytes: original, pages, images };
   };
   try {
     const bytes = await inBackground('book', bookInput,
@@ -231,6 +252,57 @@ export async function buildExport(target, { onProgress } = {}) {
     const bytes = await buildRasterPdf({
       pageCount: doc.numPages,
       rasterPage: (n) => rasterBookPage(doc, n, inkByPage.get(n)),
+      onProgress: report('pages'),
+    });
+    return { bytes, raster: true };
+  } finally {
+    doc.destroy?.();
+  }
+}
+
+/**
+ * 书签成书：一本书里挑出来的几页，做成一份新的 PDF。
+ *
+ * 和导出整本书走同一条路：先在后台线程里用 pdf-lib 把那几页原样拷进一份新文件（字还能选），加了密、
+ * pdf-lib 读不懂的书再换逐页画成图。
+ *
+ * @param {{id: string, pages: number[], stamp: boolean, title?: string}} spec
+ *   `pages` 原书的页码，按要排的次序；`stamp` 为真时笔迹画进页里（导出要的），为假时只要原书的页
+ *   （存成新书时笔迹另外拷成新书自己的笔迹，见 pdf-workspace-ui.js 的 saveBookmarkBook）
+ * @param {{onProgress?: function({stage: string, done: number, total: number})}} [options]
+ * @returns {Promise<{bytes: Uint8Array, raster: boolean}>}
+ */
+export async function buildPagesExport({ id, pages, stamp, title = '' }, { onProgress } = {}) {
+  const report = (stage) => (done, total) => onProgress?.({ stage, done, total });
+  const chosen = (pages || []).filter((n) => Number.isInteger(n) && n >= 1);
+  if (!chosen.length) throw new Error(EXPORT_ERRORS.EMPTY);
+
+  const wanted = [];
+  for (const pageNumber of chosen) {
+    wanted.push({ pageNumber, strokes: stamp ? await strokesOn(id, pageNumber) : [] });
+  }
+  const images = stamp ? await imagesFor(wanted.flatMap((p) => p.strokes)) : {};
+  const pagesInput = async () => {
+    const original = await getDocumentBytes(id);
+    if (!original) throw new Error(EXPORT_ERRORS.NOT_FOUND);
+    return { bytes: original, pages: wanted, images, stamp: !!stamp, title };
+  };
+  try {
+    const bytes = await inBackground('pages', pagesInput,
+      (again) => buildPagesPdf({ ...again, onProgress: report('pages') }),
+      { onProgress: report('pages'), transferOf: (input) => bufferOf(input.bytes) });
+    return { bytes, raster: false };
+  } catch (error) {
+    if (error?.message !== EXPORT_ERRORS.ENCRYPTED && error?.message !== EXPORT_ERRORS.UNREADABLE) throw error;
+  }
+
+  const doc = await openStoredDocument(id);
+  try {
+    const inRange = wanted.filter((p) => p.pageNumber <= doc.numPages);
+    if (!inRange.length) throw new Error(EXPORT_ERRORS.EMPTY);
+    const bytes = await buildRasterPdf({
+      pageCount: inRange.length,
+      rasterPage: (n) => rasterBookPage(doc, inRange[n - 1].pageNumber, inRange[n - 1].strokes),
       onProgress: report('pages'),
     });
     return { bytes, raster: true };

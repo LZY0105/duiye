@@ -932,6 +932,58 @@ body.is-scratch-focus .pdf-ws-swap { display: none !important; }
   .deck-pick-row:hover { background: color-mix(in srgb, var(--fg, #0f172a) 5%, transparent); }
 }
 
+/* ── 书签成书 ────────────────────────────────────────────────────────────────
+ * 「挑几份」那张单子多三样：上面一行新书名；列表上面一行「已选几页」和「全选 / 全不选」；每行前面是原书的
+ * 页码，等宽、和找页面板书签那一页对得上。默认全选，所以一打开每一行都是选中的样子。 */
+
+.marks-book-dialog .deck-input { width: 100%; box-sizing: border-box; }
+
+.marks-book-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0.75rem 0 0.3rem;
+}
+
+.marks-book-count {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 一颗字按钮：它改的是下面那一列，不是一件要「确认」的事，不配一颗实心按钮。 */
+.marks-book-all {
+  appearance: none;
+  min-height: 36px;
+  padding: 0 0.55rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--accent, #2563eb);
+  cursor: pointer;
+}
+
+.marks-book-all:active { background: color-mix(in srgb, var(--accent, #2563eb) 10%, transparent); }
+
+.marks-book-page {
+  flex: none;
+  min-width: 2.4em;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.marks-book-row.is-selected .marks-book-page { color: var(--accent, #2563eb); }
+
+/* 「带上批注」：勾是主题色，和选中的那几行一个颜色。 */
+.marks-book-ink input { accent-color: var(--accent, #2563eb); }
+
 /* ── 自由组合 ────────────────────────────────────────────────────────────────
  * 和「整理内容」同一张脸：两列，左右各一，列头说的是位置不是角色。差别只在这张
  * 是从零拼的——每列底下多一条「挑」，底下一排多一颗「撤销」。 */

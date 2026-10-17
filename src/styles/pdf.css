@@ -374,6 +374,14 @@ body.is-top-hidden .pdf-slot-toolbar * { touch-action: pan-x; }
 body:not([data-page="pdf"]) .app-nav,
 body.is-library-open .app-nav { translate: none !important; }
 
+/* 练习页上开出来的单子（新建纸张、移动到文件夹、选角色、本机 PDF、自由组合、整理内容……）属于练习页。
+   人说「点了新建纸张那个按钮后，换去设置新建纸张的菜单不会隐藏，会一直挂着」：两个标签浮在最上面
+   （z-index 1000），比这些单子的遮罩高，单子开着也点得到「设置」；而单子挂在 body 上、不在练习页里，
+   切页管不到它，它就压在设置页上。
+   不在切页时把它关掉：拼到一半的组合、填了一半的名字会一声不问就没了。像 iPad 上的标签页一样，单子跟着
+   它那一页走——切到设置，它和练习页一起收起来；切回来，原样还在。 */
+body:not([data-page="pdf"]) :is(.deck-overlay, .pdf-role-overlay, .pdf-picker-overlay) { display: none !important; }
+
 /* ── page toolbar: Floating Liquid Glass Bar ───────────────────────────────── */
 
 /* Compressed: three buttons do not need 72px of a 736px screen. */
@@ -444,9 +452,17 @@ body.is-library-open .app-nav { translate: none !important; }
   display: flex;
   align-items: center;
   gap: 6px;
+  transition: opacity 0.3s ease;
 }
 
 .pdf-status.is-error { color: #FF3B30; font-weight: 600; }
+
+/* 一句说完了的话留一会儿就淡掉（pdf-workspace-ui.js 的 setStatus：STATUS_FADE_MS 和这里同长），淡完才清字——
+   字一清它就不占地方了，淡的这一段里它还在原处。 */
+.pdf-status.is-fading { opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .pdf-status { transition: none; }
+}
 
 .pdf-runtime-missing {
   padding: 3rem 1.5rem;
@@ -482,9 +498,19 @@ body.is-library-open .app-nav { translate: none !important; }
 
 .pdf-agent-fab {
   position: absolute;
-  top: 50%;
-  /* 工具栏贴在右边时，工作区把它推到横杠左边——见 _syncAgentFab。 */
-  right: var(--agent-fab-right, 14px);
+  /* 停在哪儿：人拖过以后按工作区的比例记着（agent-panel.js 写 --agent-fab-y，是按钮正中的高度；在左边
+     就给这一层挂 .is-fab-left），没拖过是右边正中。上面不进栏头（--agent-fab-top-min，工作区量了给），
+     下面留 14px。
+     左右两边都用 left 写——贴右边就是 100% 减去按钮和边距——松手吸过去时才有同一个属性可以动。
+     不用 transform 居中：液态玻璃给按钮的 transform 是 none !important（它的弹性和按下去走 translate /
+     scale），那里原来的 translateY(-50%) 一直没生效，按钮比别的皮肤低半个身子。 */
+  top: clamp(
+    var(--agent-fab-top-min, 14px),
+    calc(var(--agent-fab-y, 50%) - 24px),
+    calc(100% - 62px - var(--agent-fab-safe-bottom, 0px))
+  );
+  /* 工具栏贴在同一边时，工作区把它推到横杠里侧——见 _syncAgentFab。 */
+  left: calc(100% - 48px - var(--agent-fab-right, 14px));
   width: 48px;
   height: 48px;
   padding: 0;
@@ -498,17 +524,26 @@ body.is-library-open .app-nav { translate: none !important; }
   justify-content: center;
   cursor: pointer;
   pointer-events: auto;
-  transform: translateY(-50%);
   transition: transform 0.18s ease, box-shadow 0.18s ease;
-  touch-action: manipulation;
+  /* 按住就能拖：别让浏览器把这一下当成滚动、缩放收走（那样拖到一半会收到 pointercancel）。 */
+  touch-action: none;
 }
 
+.pdf-agent-layer.is-fab-left .pdf-agent-fab { left: var(--agent-fab-left, 14px); }
+
 .pdf-agent-fab:hover {
-  transform: translateY(-50%) scale(1.04);
+  transform: scale(1.04);
   box-shadow: 0 6px 20px rgba(15, 23, 42, 0.2);
 }
 
-.pdf-agent-fab:active { transform: translateY(-50%) scale(0.94); }
+.pdf-agent-fab:active { transform: scale(0.94); }
+
+/* 拖着的时候稍稍拿起来一点。液态玻璃里 transform 由它自己管（按下去 0.96），这一条在那里不起作用。 */
+.pdf-agent-fab.is-dragging,
+.pdf-agent-fab.is-dragging:active {
+  transform: scale(1.06);
+  cursor: grabbing;
+}
 
 .pdf-agent-fab:focus-visible,
 .pdf-agent-dialog-clear:focus-visible,
@@ -1495,6 +1530,11 @@ body.is-library-open .app-nav { translate: none !important; }
   animation: outlineIn 0.16s var(--spring-ease);
 }
 
+/* 单子开着的时候，横杠整层抬到浮着的工具栏上面。单子是横杠里面的东西，自己的 z-index 再高也高不过
+   横杠这一层（15）；工具栏是 36（停进这一排时 40）。工具栏贴在左边时，「导入」那张单子的左半截——每一项
+   的图标——压在工具栏底下，点上去点到的是工具栏的把手。收起来就回去，平时谁在上面不变。 */
+.pdf-page-bar:has(.pdf-bar-menu:not([hidden])) { z-index: 41; }
+
 /* 收起时淡出，不是当场消失——和设置页那两个下拉一样（base.css 的
    .set-select-dropdown）。JS 照旧当场设 hidden；display: none 那一下由
    allow-discrete 推迟到淡出结束，这一小段里它点不到。 */
@@ -1945,6 +1985,40 @@ body.is-library-open .app-nav { translate: none !important; }
 .pdf-mark-drop:active { background: var(--glass-bg-subtle); color: var(--danger, #dc2626); }
 .pdf-mark-name { font-size: 0.92rem; }
 .pdf-mark-name:active { background: var(--glass-bg-subtle); color: var(--accent); }
+
+/* 书签那一页底下的「书签成书」。虚线框：和「新建文件夹」同一种样子，说的是「从这些做出一样新东西」，
+   不是这一页上又一条书签。 */
+.pdf-mark-book {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  width: calc(100% - 1.2rem);
+  min-height: 40px;
+  margin: 0.35rem 0.6rem 0.65rem;
+  padding: 0 0.8rem;
+  border: 1px dashed var(--line, rgba(15, 23, 42, 0.22));
+  border-radius: 12px;
+  background: transparent;
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: var(--accent, #2563eb);
+  cursor: pointer;
+}
+
+.pdf-mark-book:active { background: var(--glass-bg-subtle); }
+
+.pdf-mark-book-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 
 /* 缩略图上的角标。放在右上角、盖在页面之上，因为它说的是「这一页」而不是页面
    内容的一部分。 */
@@ -3257,35 +3331,6 @@ body.is-library-open .ink-card-layer { display: none; }
 }
 
 .pdf-picker-count { font-size: 0.76rem; color: var(--muted, rgba(15, 23, 42, 0.5)); }
-
-/* 跨栏拖笔迹：手指底下的那一栏。
-
-   一片被拖到半空中的笔迹，如果没有任何东西表示它会落在哪，人只会以为自己把它拖
-   丢了——于是松手前就缩回来了，这个功能等于不存在。所以这条不是装饰，是它能不能
-   被用起来的前提。
-
-   用内描边而不是外发光：外发光会被相邻那一栏盖住一半（两栏是紧挨着的），而内描
-   边永远整圈都在。底色只加一层很淡的 accent，不动文档本身的亮度——那底下是正在
-   读的一页，不该因为旁边在拖东西就变色。*/
-
-.pdf-ws-slot.is-ink-drop {
-  box-shadow: inset 0 0 0 2px var(--accent, #2563eb);
-  border-radius: 10px;
-}
-
-.pdf-ws-slot.is-ink-drop::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--accent, #2563eb) 6%, transparent);
-}
-
-/* 「减少动态效果」下不做渐变，但**不取消这条提示**：它传的是信息，不是动效。 */
-@media (prefers-reduced-motion: no-preference) {
-  .pdf-ws-slot { transition: box-shadow 0.14s ease; }
-}
 
 /* 组合在书架上的样子。
 

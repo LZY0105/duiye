@@ -33,6 +33,18 @@ export const TOOL_DEFAULTS = Object.freeze({
   [INK_TOOLS.HIGHLIGHTER]: { width: 16, opacity: 0.35, pressureRange: 0, composite: 'multiply' },
 });
 
+/**
+ * 贴在页上的一张图片（ink-image.js）。它也是这一层里的「一笔」：四个点是图的四个角（左上、右上、右下、左下），
+ * 图本身另存（image.id 指着它）。和笔迹排在同一层里，套索圈它、搬它、转它、缩放它、撤销、存盘、跨栏拖、复制
+ * 粘贴，走的都是笔迹那一套——变换本来就只动点。橡皮不擦它（见 ink-eraser.js）。
+ */
+export const IMAGE_TOOL = 'image';
+
+/** 这一笔是不是一张图片。认 image 字段，不认工具名：存盘、复制过来的那一份照样认得出。 */
+export function isImageStroke(stroke) {
+  return !!stroke?.image?.id;
+}
+
 let idCounter = 0;
 function nextId() {
   idCounter += 1;
@@ -63,6 +75,8 @@ export function createStroke({
      * 话，形状一旦落盘就只剩一串点，和手抖出来的线再也分不开。
      */
     shape: shape || null,
+    /** 贴上去的图片才有：{ id, w, h }（见 IMAGE_TOOL）。笔迹永远是 null。 */
+    image: null,
     points: [],
     // Kept incrementally so hit-testing and repaint regions never rescan points.
     bounds: null,
@@ -89,6 +103,8 @@ export function cloneStroke(stroke, dx = 0, dy = 0) {
     // 形状跟着挪：复制出来的那个圆还是一个圆，点一下照样亮出四颗点。不挪的话，
     // 它的圆点会留在原来那一份身上，拖起来改的是另一个东西。
     shape: stroke.shape ? translateShape(stroke.shape, dx, dy) : null,
+    // 复制出来的图片指着同一张图：图存一份就够，两份各自搬、各自缩放，动的都只是自己的四个角。
+    image: stroke.image ? { ...stroke.image } : null,
     points: stroke.points.map(pt => ({ x: pt.x + dx, y: pt.y + dy, p: pt.p })),
     bounds: null,
   };
@@ -211,11 +227,20 @@ function inflate(bounds, by) {
   };
 }
 
-/** True when any sampled point falls inside the polygon (even-odd rule). */
+/**
+ * True when any sampled point falls inside the polygon (even-odd rule).
+ *
+ * 图片的「点」只有四个角：圈住一个角、或者圈住图的正中，算圈到了它。只看角的话，圈一大张图的中间那一块
+ * 圈不住它；而整圈都在图里面的那一下（圈图上的一道公式去认）本来就不是要拿这张图——那一圈留下来当识别区域。
+ */
 export function strokeIntersectsPolygon(stroke, polygon) {
   if (!isDrawable(stroke) || !Array.isArray(polygon) || polygon.length < 3) return false;
   for (const pt of stroke.points) {
     if (pointInPolygon(pt.x, pt.y, polygon)) return true;
+  }
+  if (isImageStroke(stroke) && stroke.points.length >= 4) {
+    const [a, , c] = stroke.points;
+    if (pointInPolygon((a.x + c.x) / 2, (a.y + c.y) / 2, polygon)) return true;
   }
   return false;
 }
@@ -269,6 +294,8 @@ export function serializeStroke(stroke) {
     // null 进去，存盘会白白长一截。
     ...(stroke.fill ? { fill: stroke.fill } : null),
     ...(stroke.shape ? { shape: serializeShape(stroke.shape) } : null),
+    // 图片只记它是哪一张、原来多大；图本身在 ink-image.js 的库里。
+    ...(isImageStroke(stroke) ? { image: { id: stroke.image.id, w: stroke.image.w, h: stroke.image.h } } : null),
     // Rounded to 0.01 document units: far finer than any display can show, and
     // roughly halves the stored size versus full float precision.
     points: stroke.points.map(pt => [round2(pt.x), round2(pt.y), round2(pt.p)]),
@@ -284,6 +311,8 @@ export function deserializeStroke(json) {
     opacity: Number.isFinite(json.opacity) ? json.opacity : 1,
     fill: json.fill || null,
     shape: json.shape ? deserializeShape(json.shape) : null,
+    image: json.image?.id
+      ? { id: String(json.image.id), w: Number(json.image.w) || 0, h: Number(json.image.h) || 0 } : null,
     points: (json.points || []).map(p => (
       Array.isArray(p) ? { x: p[0], y: p[1], p: p[2] } : { x: p.x, y: p.y, p: p.p }
     )),

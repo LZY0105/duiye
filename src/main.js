@@ -15,6 +15,10 @@ import './styles/scratch.css';
 // The switching strip, the content list and the dialogs the decks need.
 import './styles/deck.css';
 import './styles/ink-toolbar.css';
+// 套索「识别」那一段界面：扫描动画、进度小条、结果单子（接了 OCR 才用得到，见 src/ocr/）。
+import './styles/ink-recognize.css';
+// 「插入图片」：页上那个虚线框、旁边挑图的那张单子（见 src/ink/ink-image-picker.js）。
+import './styles/ink-image.css';
 import './styles/mobile.css';
 // Last: the material tier system is the authority on which layer a surface
 // belongs to (chrome = glass, content = sharp, controls = fills).
@@ -25,6 +29,9 @@ import './styles/liquid.css';
 // 液态玻璃里那几块真的液态玻璃（照 liquid-glass-react 挂上去的层）：要压过 liquid.css 给这些
 // 胶囊、按钮的底色和磨砂，所以在它后面。只认 data-glass="liquid"，和毛玻璃、纸不相干。
 import './styles/liquid-glass-react.css';
+// 只给毛玻璃的几条（不挂 data-glass 的 liquid-math）：顶栏胶囊的玻璃画在伪元素上、单子里的细线是直的。
+// 液态玻璃、纸不吃它。
+import './styles/frosted.css';
 // 最后：「纸」的材质。尺寸和排法和玻璃是同一套（上面那一份），这里只换颜色、边和影子。
 import './styles/paper.css';
 

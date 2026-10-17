@@ -1628,6 +1628,36 @@ check('the Agent button steps aside for a toolbar on the right edge', () => {
     'a short bar parked high on the edge does not reach the middle');
 });
 
+check('the Agent button the reader dragged steps aside on whichever edge it rests', () => {
+  // 人把按钮拖到了左边、拖到了别的高度（agent-panel.js）：让路要按它现在在哪儿量，不是按右边正中。
+  const props = new Map();
+  const layer = { style: { setProperty: (k, v) => props.set(k, v) } };
+  const rect = { left: 5, top: 64, right: 1195, bottom: 734, width: 1190, height: 670 };
+  const ws = Object.create(PdfWorkspace.prototype);
+  ws.root = { querySelector: (sel) => (sel === '.pdf-agent-layer' ? layer : null) };
+  const place = (placement, state, bar, safe) => {
+    props.clear();
+    ws.agentPanel = { placement: () => placement };
+    ws.toolbar = { state, rect: () => bar };
+    ws._syncAgentFab(rect, safe);
+    return Object.fromEntries(props);
+  };
+  const leftBar = { left: 15, right: 61, top: 150, bottom: 667, width: 46, height: 517 };
+  const rightBar = { left: 1139, right: 1185, top: 150, bottom: 667, width: 46, height: 517 };
+
+  assert.deepEqual(place({ side: 'left', y: 0.5 }, { phase: 'expanded', edge: 'left' }, leftBar),
+    { '--agent-fab-left': `${61 - 5 + 8}px` }, 'on the left it moves to the right of a left-hand bar');
+  assert.deepEqual(place({ side: 'left', y: 0.5 }, { phase: 'expanded', edge: 'right' }, rightBar),
+    { '--agent-fab-left': '14px' }, 'a bar on the far edge is no concern of a button on the left');
+  assert.deepEqual(place({ side: 'right', y: 0.08 }, { phase: 'expanded', edge: 'right' }, rightBar),
+    { '--agent-fab-right': '14px' }, 'parked above the bar, it stays on the edge');
+  assert.deepEqual(place({ side: 'right', y: 0.6 }, { phase: 'expanded', edge: 'right' }, rightBar),
+    { '--agent-fab-right': `${1195 - 1139 + 8}px` }, 'lower down, the bar is beside it again');
+  // 记着的高度落进了栏头：按钮实际画在栏头下面（样式表里的 --agent-fab-top-min），让路也按那儿量。
+  assert.deepEqual(place({ side: 'right', y: 0.05 }, { phase: 'expanded', edge: 'right' }, rightBar, { top: 120, bottom: 0 }),
+    { '--agent-fab-right': `${1195 - 1139 + 8}px` }, 'pushed below the pane headers, it meets the bar');
+});
+
 check('a bar with no box yet falls back to the active pane', () => {
   const fractions = { [SLOTS.PRIMARY]: 0.3, [SLOTS.SECONDARY]: 0.7 };
   const ws = workspaceOver(0, 0, { active: SLOTS.SECONDARY });
@@ -1944,6 +1974,17 @@ check('no rung ever hides something you can press', () => {
   assert.ok(/is-snug \.pdf-slot-btn-text/.test(block), 'the captions are what goes first');
 });
 
+check('栏头里没有「适合宽度」「整页」了；书的翻页那一组后面隔一道线（在那一组里面，草稿纸跟着那一组一起藏）', () => {
+  const ws = $read('src/pdf/pdf-workspace.js').replace(/\r\n/g, '\n');
+  const chrome = ws.slice(ws.indexOf('function slotChrome('), ws.indexOf('${deckStripHtml()}'));
+  assert.ok(chrome.includes('data-role="zoom-in"'), '量的是栏头那一段');
+  assert.ok(!/data-role="fit-(width|page)"/.test(chrome), '人说「去掉右边两个按钮」');
+  assert.ok(!/on\('fit-(width|page)'/.test(ws), '接线一起拿掉');
+  assert.ok(!/\bfit(Width|Page)\(\)/.test($read('src/pdf/pdf-pane.js')), '没人再叫的两条命令也拿掉');
+  assert.match(chrome, /<span class="pdf-slot-sep"><\/span>\n\s*<\/span>\n(\s*<!--[^]*?-->\n)?\s*<button[^>]*data-role="zoom-out"/,
+    '翻页那一组的最后一样是一道线，紧接着是缩放');
+});
+
 check('every size on the bar goes through the one multiplier', () => {
   const css = $read('src/styles/ink-toolbar.css');
   assert.ok(/--ink-hit: calc\(44px \* var\(--ink-scale\)\)/.test(css));
@@ -2238,11 +2279,17 @@ check('换了许可证，旧的那一份原文仍然留着', () => {
     '分界点在哪、凭什么可以改，要写下来——这是将来唯一拿得出的东西');
 });
 
-check('the notices file no longer credits what was deleted', () => {
+check('the notices file credits what the build links, and nothing it deleted', () => {
   const md = $read('THIRD_PARTY_NOTICES.md');
   const sections = md.split('\n').filter((l) => l.startsWith('## '));
-  assert.ok(!sections.some((l) => /llama\.cpp|ONNX/i.test(l)),
+  // 删掉的那套识别栈（llama.cpp、ONNX Runtime GenAI）不再列。
+  assert.ok(!sections.some((l) => /llama\.cpp|GenAI/i.test(l)),
     'crediting a dependency the build does not have is its own kind of wrong');
+  // 2026-10 接上公式识别后，ONNX Runtime 又进了包（精简版 AAR）。链接了它就得列它，不链接就不列：
+  // 只看依赖那一行，不看注释。
+  const linksOrt = /^\s*implementation\b.*onnxruntime/m.test($code('android/app/build.gradle'));
+  assert.equal(sections.some((l) => /^## ONNX Runtime\s*$/.test(l)), linksOrt,
+    'ONNX Runtime is credited exactly when the build links it');
   assert.ok(/LaTeXSnipper Mobile base/.test(md), 'the base project is still credited');
 });
 
@@ -2813,9 +2860,11 @@ ok(
   && importUi.includes('openDevicePdfPicker('),
   '平板上走应用内面板，浏览器里退回系统选择器',
 );
+// 现在交进去的是一批（人要多选）：应用内那张单子交「到时候再读」的几份，系统选择器交它给的几个 File。
 ok(
   (importUi.match(/await handleImport\(/g) || []).length >= 1
-  && importUi.includes('await handleImport([file], role)'),
+  && importUi.includes('await handleImport(chosen.map(')
+  && importUi.includes('handleImport(Array.from(e.target.files'),
   '——两条路在 handleImport 之前就合并了，往下只有一套导入逻辑',
 );
 ok(

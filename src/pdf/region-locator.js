@@ -28,6 +28,23 @@ export const REGION_BASIS = Object.freeze({
 });
 
 /**
+ * The alignment's usable pairs in exercise-page order, computed once per
+ * alignment. This is asked for once per question on every page turn, and the
+ * alignment does not change between calls.
+ */
+const sortedPairsCache = new WeakMap();
+function sortedPairs(alignment) {
+  let sorted = sortedPairsCache.get(alignment);
+  if (!sorted) {
+    sorted = [...(alignment.pairs ?? [])]
+      .filter(p => p.exercise?.pageNumber && p.answer?.pageNumber)
+      .sort((a, b) => a.exercise.pageNumber - b.exercise.pageNumber);
+    sortedPairsCache.set(alignment, sorted);
+  }
+  return sorted;
+}
+
+/**
  * The answer-book page range for one exercise page, from the section alignment.
  *
  * The aligned pairs are sorted by exercise page and the last pair at or before
@@ -42,22 +59,39 @@ export function sectionRangeForPage(alignment, exercisePage, answerPageCount) {
   if (!alignment?.available) return null;
   if (!Number.isFinite(exercisePage)) return null;
 
-  const sorted = [...(alignment.pairs ?? [])]
-    .filter(p => p.exercise?.pageNumber && p.answer?.pageNumber)
-    .sort((a, b) => a.exercise.pageNumber - b.exercise.pageNumber);
+  const sorted = sortedPairs(alignment);
   if (sorted.length === 0) return null;
 
-  let index = -1;
-  for (let i = 0; i < sorted.length; i++) {
-    if (sorted[i].exercise.pageNumber <= exercisePage) index = i;
-    else break;
+  // The page must fall INSIDE an aligned exercise section, and the tightest
+  // such section wins. The previous rule took the last aligned section starting
+  // at or before the page, with no upper bound — so three sections a wrong book
+  // happened to share with this one located 91 of 96 sampled pages of it.
+  // Measured on the 2026-09 textbook corpus: 陈纪修 against a 近世代数
+  // textbook aligned "1 集合" and "2 映射与函数" and nothing else, and pages
+  // three hundred further on were still "located" through them.
+  let chosen = null;
+  for (const pair of sorted) {
+    const from = pair.exercise.pageNumber;
+    const to = Number.isFinite(pair.exercise.endPage) ? pair.exercise.endPage : Infinity;
+    if (exercisePage < from || exercisePage > to) continue;
+    if (!chosen || (pair.exercise.depth ?? 0) >= (chosen.exercise.depth ?? 0)) chosen = pair;
   }
-  if (index < 0) return null;
-
-  const chosen = sorted[index];
+  if (!chosen) return null;
+  const index = sorted.indexOf(chosen);
   const answerStart = chosen.answer.pageNumber;
-  const next = sorted.slice(index + 1).find(p => p.answer.pageNumber > answerStart);
-  const answerEnd = next ? next.answer.pageNumber - 1 : (answerPageCount || answerStart);
+  // The answer side's own span, when the classifier measured one: a chapter
+  // runs to the next chapter, not to its first section. The next-pair rule
+  // below cut a chapter-level range at the first aligned section inside it —
+  // on the 2023 pair that left "第一章" covering pages 19-59 of a chapter
+  // running to 210, and every question in a section the alignment had missed
+  // fell outside the range that was supposed to be its fallback.
+  const ownEnd = Number.isFinite(chosen.answer.endPage) ? chosen.answer.endPage : null;
+  // Failing that, the next aligned section at the same or a shallower depth on
+  // the answer side — a chapter's range must not stop at its own first section.
+  const depth = chosen.answer.depth ?? 0;
+  const next = sorted.slice(index + 1).find(p =>
+    p.answer.pageNumber > answerStart && (p.answer.depth ?? 0) <= depth);
+  const answerEnd = ownEnd ?? (next ? next.answer.pageNumber - 1 : (answerPageCount || answerStart));
 
   return {
     from: answerStart,

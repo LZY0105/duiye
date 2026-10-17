@@ -54,7 +54,7 @@
 
 import { PAIR_STATUS } from './decision.js';
 import { bindingMatches, fingerprintDocument } from './fingerprint.js';
-import { contentSimilarity } from './question-matcher.js';
+import { profileSimilarity, textProfile } from './question-matcher.js';
 import { extractAnswer } from './answer-index.js';
 
 /** Language that appears when a text is working a problem rather than posing one. */
@@ -168,17 +168,64 @@ export function documentYear(doc, { sampleLines = 4000 } = {}) {
     : { year: null, agreement: Number(agreement.toFixed(3)) };
 }
 
-const MATH_ANALYSIS = /(数学分析|微积分|极限|积分|导数|级数)/;
-const ALGEBRA = /(高等代数|线性代数|矩阵|多项式|行列式|特征值|二次型)/;
+/**
+ * The subjects a document can be about, each with the words that NAME it and
+ * the words that belong to its TOPICS.
+ *
+ * Two subjects used to be recognised, Mathematical Analysis and Algebra — the
+ * two in the 考研 corpus. Everything else read as MIXED, so the subject gate was
+ * simply silent on any other book: measured on the 2026-09 textbook corpus, a
+ * differential-equations answer book, a PDE answer book and a probability
+ * textbook all classified as MATH_ANALYSIS, because 极限 and 积分 are the
+ * working vocabulary of every analysis-family subject, not of one.
+ *
+ * Names decide first. A book says what it is in its running heads and its
+ * chapter titles, and a name is specific where a topic word is shared: 微分方程
+ * appears in an analysis book too, 常微分方程 does not. Topics decide only when
+ * no subject is named often enough, and there the original two lists are kept
+ * verbatim so the 考研 books classify exactly as before.
+ */
+const SUBJECTS = Object.freeze([
+  { subject: 'MATH_ANALYSIS', names: /数学分析|微积分/, topics: /数学分析|微积分|极限|积分|导数|级数/ },
+  { subject: 'ALGEBRA', names: /高等代数|线性代数/, topics: /高等代数|线性代数|矩阵|多项式|行列式|特征值|二次型/ },
+  { subject: 'PROBABILITY', names: /概率论|数理统计/, topics: /概率|随机变量|随机事件|分布函数|数学期望|方差|样本|假设检验/ },
+  { subject: 'ODE', names: /常微分方程/, topics: /常微分方程|初值问题|通解|特解|奇解|常数变易|朗斯基|稳定性/ },
+  { subject: 'PDE', names: /数学物理方程|偏微分方程/, topics: /数学物理方程|偏微分|波动方程|热传导|拉普拉斯方程|边值问题|分离变量|格林函数/ },
+  { subject: 'ABSTRACT_ALGEBRA', names: /近世代数|抽象代数/, topics: /近世代数|抽象代数|子群|正规子群|商群|同态|同构|置换群|循环群|理想|整环/ },
+  { subject: 'COMPLEX_ANALYSIS', names: /复变函数/, topics: /复变函数|解析函数|留数|柯西积分|全纯|共形映射/ },
+  { subject: 'REAL_ANALYSIS', names: /实变函数|泛函分析/, topics: /实变函数|泛函分析|测度|勒贝格|可测函数|巴拿赫|希尔伯特空间/ },
+  { subject: 'NUMERICAL_ANALYSIS', names: /数值分析/, topics: /数值分析|插值|数值积分|迭代法|截断误差|舍入误差|数值解/ },
+  { subject: 'ANALYTIC_GEOMETRY', names: /解析几何/, topics: /解析几何|二次曲面|二次曲线|平面方程|直线方程|空间向量/ },
+]);
 
-/** Which subject a document is mostly about. */
+const SUBJECT_THRESHOLDS = Object.freeze({
+  /** Name mentions needed before a name settles the subject. */
+  minNames: 5,
+  /** Topic mentions needed before topics settle it. */
+  minTopics: 3,
+  /** The leader must beat the runner-up by this factor, on names or on topics. */
+  margin: 2,
+});
+
+/**
+ * Which subject a document is mostly about.
+ *
+ * MIXED is the verdict whenever the evidence is not one-sided, and MIXED never
+ * rejects a pair. Naming a subject wrongly is what the margin protects against:
+ * a wrong confident subject on one side of a valid pair would block it.
+ *
+ * @returns {{subject: string, ma: number, alg: number, names: object, topics: object}}
+ */
 export function documentSubject(doc, { sampleLines = 3000 } = {}) {
-  let ma = 0;
-  let alg = 0;
+  const names = {};
+  const topics = {};
+  for (const s of SUBJECTS) { names[s.subject] = 0; topics[s.subject] = 0; }
   const scan = (text) => {
     const s = String(text ?? '');
-    if (MATH_ANALYSIS.test(s)) ma++;
-    if (ALGEBRA.test(s)) alg++;
+    for (const def of SUBJECTS) {
+      if (def.names.test(s)) names[def.subject]++;
+      if (def.topics.test(s)) topics[def.subject]++;
+    }
   };
   const walk = (items) => {
     for (const item of items || []) { scan(item?.title); walk(item?.children); }
@@ -186,9 +233,24 @@ export function documentSubject(doc, { sampleLines = 3000 } = {}) {
   walk(doc?.outline?.items);
   for (const line of (doc?.lines ?? []).slice(0, sampleLines)) scan(line?.text);
 
-  if (ma > alg * 2) return { subject: 'MATH_ANALYSIS', ma, alg };
-  if (alg > ma * 2) return { subject: 'ALGEBRA', ma, alg };
-  return { subject: 'MIXED', ma, alg };
+  const leader = (counts, minimum) => {
+    const ranked = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    const [subject, top] = ranked[0];
+    const second = ranked[1]?.[1] ?? 0;
+    return top >= minimum && top >= second * SUBJECT_THRESHOLDS.margin ? subject : null;
+  };
+  const subject = leader(names, SUBJECT_THRESHOLDS.minNames)
+    ?? leader(topics, SUBJECT_THRESHOLDS.minTopics)
+    ?? 'MIXED';
+
+  return {
+    subject,
+    // Retained for callers reading the original two counters.
+    ma: topics.MATH_ANALYSIS,
+    alg: topics.ALGEBRA,
+    names,
+    topics,
+  };
 }
 
 /**
@@ -214,17 +276,24 @@ export function contentAnchorAgreement(exerciseIndex, answerIndex, {
     return { top1: null, sampled: 0, shared: shared.length, sufficient: false };
   }
 
-  const pool = (answerIndex?.entries ?? []).filter(e => e.text);
+  // Every sampled question is scored against the WHOLE pool, so each entry's
+  // profile is built once here rather than once per sampled question. Measured
+  // on a 500-entry index of page-range texts this is the difference between
+  // ~15 s and well under a second for the whole check.
+  const pool = (answerIndex?.entries ?? [])
+    .filter(e => e.text)
+    .map(e => ({ entry: e, profile: textProfile(e.text) }));
   const step = Math.max(1, Math.floor(shared.length / sample));
   let first = 0;
   let sampled = 0;
   for (let i = 0; i < shared.length && sampled < sample; i += step) {
     const q = shared[i];
+    const qp = textProfile(q.text);
     let best = null;
     let bestScore = -Infinity;
     for (const candidate of pool) {
-      const s = contentSimilarity(q.text, candidate.text);
-      if (s > bestScore) { bestScore = s; best = candidate; }
+      const s = profileSimilarity(qp, candidate.profile);
+      if (s > bestScore) { bestScore = s; best = candidate.entry; }
     }
     sampled++;
     if (best && best.label === q.label) first++;

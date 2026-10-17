@@ -69,7 +69,7 @@ await test('paper.css 里没有一条改尺寸的声明：只有颜色、底、�
   const decoration = /^(content|display|position|z-index|top|right|bottom|left|inset|pointer-events|animation)$/;
   // 大标题换宋体：它们不是能按的东西，旁边也没有谁按它们的宽度摆。
   const headings = ['.pdf-library-header strong', '.settings-title', '.guide-head h2', '.guide-chapter-title',
-    '.deck-dialog-title', '.pdf-empty-title'];
+    '.deck-dialog-title', '.pdf-agent-dialog-header h2', '.pdf-empty-title'];
   const bad = [];
   const body = noComments(paper);
   for (const block of body.matchAll(/([^{}]*)\{([^{}]*)\}/g)) {
@@ -473,6 +473,75 @@ await test('分隔条的纸只在 paper.css 里：pdf.css 只留边的宽度和�
   const rules = [...pdf.matchAll(/\[data-skin="minimal"\][^{]*\{([^}]*)\}/g)].map((m) => m[1]).join('\n');
   assert.ok(rules && !/#dfe3e8|#ffffff|background|box-shadow/.test(rules), '旧的冷灰和白拆了：这里一条颜色都不写');
   assert.ok(/\[data-skin="minimal"\] \.pdf-ws-divider-grip::after \{ content: ''; \}/.test(pdf));
+});
+
+// ═══════════════════════════════════════════════════════════════
+group('6. 只给毛玻璃的几条（frosted.css）');
+
+// 用户看了毛玻璃里的「组合」单子（底下的书名、图标透上来，细线两头往下弯）说要改，又说「液态玻璃不用改，改毛玻璃
+// 就行」：这几条单开一份，三套共用的 liquid.css、液态玻璃和纸各自那一份都不动。
+const frosted = $read('src/styles/frosted.css');
+const FROSTED = 'html[data-skin="liquid-math"]:not([data-glass="liquid"])';
+
+await test('在 liquid-glass-react.css 之后、paper.css 之前引入', () => {
+  const main = $read('src/main.js');
+  const a = main.indexOf("import './styles/liquid-glass-react.css';");
+  const b = main.indexOf("import './styles/frosted.css';");
+  const c = main.indexOf("import './styles/paper.css';");
+  assert.ok(a > 0 && b > a && c > b);
+});
+
+await test('每一条都只挂在毛玻璃上：液态玻璃（data-glass="liquid"）、纸（minimal）都吃不到', () => {
+  const body = noComments(frosted).replace(/@media[^{]*\{/g, '');
+  // 只在括号外面的逗号处切：:is(a, b) 里的逗号不分开两条选择器。
+  const split = (list) => {
+    const out = [];
+    let depth = 0;
+    let from = 0;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i] === '(') depth++;
+      else if (list[i] === ')') depth--;
+      else if (list[i] === ',' && depth === 0) { out.push(list.slice(from, i)); from = i + 1; }
+    }
+    out.push(list.slice(from));
+    return out.map((x) => x.trim()).filter(Boolean);
+  };
+  const selectors = [...body.matchAll(/([^{}]+)\{[^{}]*\}/g)].flatMap((m) => split(m[1]));
+  assert.ok(selectors.length >= 6);
+  for (const sel of selectors) assert.ok(sel.startsWith(FROSTED), sel);
+});
+
+await test('胶囊自己不带磨砂，玻璃画在伪元素上：从它里面弹出来的单子才磨得到胶囊外面', () => {
+  const body = noComments(frosted);
+  const capsule = body.slice(body.indexOf(`${FROSTED} .pdf-bar-group {`));
+  const own = capsule.slice(0, capsule.indexOf('}'));
+  assert.ok(/backdrop-filter: none !important;/.test(own) && /background: transparent !important;/.test(own));
+  assert.ok(/position: relative;/.test(own) && /z-index: 0;/.test(own), '自成一层，伪元素的 -1 落在胶囊里面');
+  const pseudo = body.slice(body.indexOf(`${FROSTED} .pdf-bar-group::before {`));
+  const glass = pseudo.slice(0, pseudo.indexOf('}'));
+  assert.ok(/backdrop-filter: var\(--lg-chrome-blur\);/.test(glass) && /background: var\(--lg-glass\);/.test(glass));
+  assert.ok(/z-index: -1;/.test(glass) && /pointer-events: none;/.test(glass));
+});
+
+await test('单子里的细线：毛玻璃里是一道直线（伪元素），液态玻璃和纸照旧是原来那道', () => {
+  const body = noComments(frosted);
+  assert.ok(new RegExp(`${FROSTED.replace(/[[\]().:"=]/g, '\\$&')} \\.pdf-bar-menu-item ~ \\.pdf-bar-menu-item::before \\{[^}]*left: 14px;[^}]*right: 14px;[^}]*height: 0\\.5px;`).test(body));
+  const shared = noComments(liquid);
+  assert.ok(/html\[data-skin\] \.pdf-bar-menu-item ~ \.pdf-bar-menu-item \{\s*box-shadow: inset 0 0\.5px 0 var\(--lg-separator\);/.test(shared),
+    '共用的那条没动');
+});
+
+await test('新建草稿纸 / 笔记本那张单子：样式那几格不被压扁（毛玻璃、纸里单子限高，自己滚）', () => {
+  const css = noComments($read('src/styles/scratch.css'));
+  const at = css.indexOf('.create-styles {');
+  const rule = css.slice(at, css.indexOf('}', at));
+  assert.ok(/flex: none;/.test(rule), '单子比屏幕高时先压能滚的孩子：这一块不让压，单子自己滚');
+  assert.ok(/grid-auto-rows: max-content;/.test(rule), '行永远装得下格子（格子是 overflow: hidden，最小高度是 0）');
+  const deck = noComments($read('src/styles/deck.css'));
+  const d = deck.indexOf('.deck-dialog {');
+  const dialog = deck.slice(d, deck.indexOf('}', d));
+  assert.ok(/max-height:/.test(dialog) && /overflow-y: auto;/.test(dialog) && /flex-direction: column;/.test(dialog),
+    '这条修的就是这种单子：一列 flex、限高、自己滚');
 });
 
 console.log('\n═══════════════════════════════════════════════════════════════');

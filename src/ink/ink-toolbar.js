@@ -57,9 +57,11 @@ import {
   stepOffRow,
   yieldToCorner,
   undock,
+  untuck,
   unyield,
 } from './toolbar-state.js';
 import { currentLang, onLangChange, t } from '../core/i18n.js';
+import Logger from '../core/logger.js';
 import { INK_TOOLS } from './stroke.js';
 import { ERASER_MODES } from './ink-eraser.js';
 import { SHAPE_ORDER } from './shape-geometry.js';
@@ -227,16 +229,24 @@ const OFF_ROW_LEAVE_MS = 220;
 const OFF_ROW_ENTER_GAP = 60;
 /** 回到那一排里的球长出来那一下。 */
 const OFF_ROW_POP_MS = 240;
+/**
+ * 那一排收着时把它拖到最上面、藏进去那一下（_tuckAway）：从松手的地方飞向那一排里它的空当，接着跟那一排
+ * 一样往上走掉；后一段淡没（TUCK_FADE_FROM 之后）。比那一排自己收起（ROW_MS）长一点：它要走的路远得多。
+ */
+const TUCK_MS = 420;
+const TUCK_FADE_FROM = 0.45;
 
 /**
  * 工具、颜色上按住划着挑（_installScrub）。
  *
  * SCRUB_START 和顶上那一排的收起手势、两个标签的划动是同一个数：手指按着会晃几像素，过了这么远
- * 才是有意在划。SCRUB_ESCAPE：抬手时离横杠这么远（横躺的看上下、竖着的看左右），算划出去了、
- * 反悔了。透镜从选中那一格浮起来追到手指底下用 SCRUB_CATCH_MS，松手落回去用 SCRUB_SETTLE_MS。
+ * 才是有意在划。SCRUB_ESCAPE：手指离横杠这么远（横躺的看上下、竖着的看左右），而且在外面待满
+ * SCRUB_ESCAPE_HOLD_MS，才算划出去了、反悔了——快甩着松手时手往外一偏不算（见 _installScrub）。
+ * 透镜从选中那一格浮起来追到手指底下用 SCRUB_CATCH_MS，松手落回去用 SCRUB_SETTLE_MS。
  */
 const SCRUB_START = 10;
 const SCRUB_ESCAPE = 44;
+const SCRUB_ESCAPE_HOLD_MS = 180;
 const SCRUB_CATCH_MS = 160;
 const SCRUB_SETTLE_MS = 220;
 const SCRUB_EASE = 'cubic-bezier(0.32, 0.72, 0, 1)';
@@ -1218,8 +1228,10 @@ export class InkToolbar {
     this._perchHost = host || null;
     this._offPerch = host?.onChange?.((info) => this._onPerchChange(info)) || null;
     this._liftOffTopEdge();
-    // 开机时那一排就是收着的（上次收起来之后关的）：停在那一排里的直接借住到左边，不演。
-    if (this.state.perch && host?.away?.()) { this._stepOffRow({ animate: false }); return; }
+    // 开机时那一排就是收着的（上次收起来之后关的）：停在那一排里的直接借住到左边，不演。藏进去的
+    // （tucked）照旧藏着——那是人收着那一排的时候亲手藏的。那一排开机时没收着，藏的那一笔就作废。
+    if (this.state.tucked && !host?.away?.()) this._set(untuck(this.state), { pushTools: false });
+    if (this.state.perch && !this.state.tucked && host?.away?.()) { this._stepOffRow({ animate: false }); return; }
     this.render();
   }
 
@@ -1487,9 +1499,16 @@ export class InkToolbar {
     const { state } = this;
     if (state.phase === TOOLBAR_PHASE.DRAGGING) return;
 
-    // 顶上那一排往上收起来了：停在里面的跟着它走掉，从左边出来；拉回来时回原处。
-    if (info.away === true && state.perch) { this._stepOffRow(); return; }
+    // 顶上那一排往上收起来了：停在里面的跟着它走掉，从左边出来；拉回来时回原处。藏进去的那颗本来就跟着
+    // 那一排走（ink-toolbar.css 的 .is-perched 按同一个进度上移、淡出），收起时它不借住；拉回来时它和那一排
+    // 一起落下来、停在人放它的那处空当里——这里只把「藏着」那一笔清掉。
+    if (info.away === true && state.perch && !state.tucked) { this._stepOffRow(); return; }
     if (info.away === false && state.offRow) { this._returnToRow(); return; }
+    if (info.away === false && state.tucked) {
+      this._tuckAnim?.cancel();
+      this._tuckAnim = null;
+      this._set(untuck(state), { pushTools: false });
+    }
 
     const focus = typeof document !== 'undefined'
       && !!document.body?.classList.contains('is-scratch-focus');
@@ -1702,6 +1721,38 @@ export class InkToolbar {
         scale: this.root.style.getPropertyValue('--ink-scale'),
       }
       : null;
+  }
+
+  /**
+   * 藏进收着的那一排那一下。
+   *
+   * 它已经摆在终点：停在那一排里松手那一侧的空当，跟着 is-top-hidden 上移到屏幕外、透明（ink-toolbar.css
+   * 的 .is-perched）。这里只演路上那一段：球从松手的地方飞向那处空当、接着随那一排往上走掉，后一段淡没。
+   * 用单独的 translate / scale / opacity——transform 归「跟着那一排收起」那条公式；那条公式自带的过渡这一刻
+   * 关掉（_settleInstantly），不然它和这一段叠着演，起步时球先往下一跳。
+   */
+  _tuckAway(from) {
+    const el = this.root;
+    this._settleInstantly();
+    if (!from?.width || !from?.height || typeof el.animate !== 'function' || prefersReducedMotion()) return;
+    const to = el.getBoundingClientRect();
+    if (!to.width || !to.height) return;
+    const dx = (from.left + from.width / 2) - (to.left + to.width / 2);
+    const dy = (from.top + from.height / 2) - (to.top + to.height / 2);
+    const sx = Math.max(0.15, from.width / to.width);
+    const sy = Math.max(0.15, from.height / to.height);
+    const anim = el.animate(
+      [
+        { translate: `${dx}px ${dy}px`, scale: `${sx} ${sy}`, opacity: 1 },
+        { opacity: 1, offset: TUCK_FADE_FROM },
+        { translate: '0px 0px', scale: '1 1', opacity: 0 },
+      ],
+      { duration: TUCK_MS, easing: ROW_EASE },
+    );
+    // 还没藏好就把那一排拉回来了：这一段作罢（_onPerchChange），它跟着那一排出来，不先淡没再一下子冒出来。
+    this._tuckAnim = anim;
+    const clear = () => { if (this._tuckAnim === anim) this._tuckAnim = null; };
+    if (anim?.finished) anim.finished.then(clear, clear);
   }
 
   _positionExpanded() {
@@ -1997,10 +2048,13 @@ export class InkToolbar {
       // surprise on release. Inside a corner zone the token swells and its cast
       // deepens — the language of something being pulled toward a magnet.
       //
-      // 上面那两个角不算：松在那儿，球是进顶上那一排的（那一排接得住的时候）。
+      // 上面那两个角不算：松在那儿，球是进顶上那一排的（那一排接得住的时候），或者藏进收着的那一排。
+      // 藏的时候不另亮一圈提示（人说「不要加亮圈」）：松手那一下球自己飞上去，就是交代。
       const rect = this.host.getBoundingClientRect();
       const corner = inRow ? null : cornerOf(point, { width: rect.width, height: rect.height });
-      const toRow = !!corner && corner.startsWith('top') && !!this._perchHost?.spotFor?.(e.clientX);
+      const host = this._perchHost;
+      const toRow = !!corner && corner.startsWith('top')
+        && (!!host?.spotFor?.(e.clientX) || !!host?.tuckSpot?.(e.clientX));
       this.root.classList.toggle('is-corner-armed', !!corner && !toRow);
     };
 
@@ -2085,6 +2139,15 @@ export class InkToolbar {
         this._absorb(from, false, PERCH_LAND_MS);
         return;
       }
+      // 那一排收着的时候松在离顶上近的地方：不在顶边展开（人说「则不应该在那展开，应该也自己隐藏到上方位置」），
+      // 收成球、藏进那一排里松手那一侧的空当——跟着那一排看不见；拉回那一排时和它一起落下来（_onPerchChange）。
+      const tuck = topward ? this._perchHost?.tuckSpot?.((rect.left || 0) + point.x) : null;
+      if (tuck) {
+        this._set(endDrag(this.state, point, viewport, { perch: tuck.perch, perchX: tuck.at, tucked: true }),
+          { pushTools: false });
+        this._tuckAway(from);
+        return;
+      }
       this._set(endDrag(this.state, point, viewport), { pushTools: false });
       this._absorb(from, corner);
     };
@@ -2151,10 +2214,15 @@ export class InkToolbar {
    *   · 顺着横杠划（横躺的左右、竖着的上下）：过了 SCRUB_START 才算。那块玻璃从选中那一格浮起来、
    *     追到手指底下（SCRUB_CATCH_MS），之后直接跟手；选中那一格的镜片和蓝色让给它，底下那一格
    *     变蓝。竖着的那一条工具多到要滚的时候，划到头上 / 底下它自己往那边滚。
-   *   · 松手：落在哪一格拿哪一格。落在原来那一支上什么都不变，也不开卡片——那是点的事。玻璃滑到
-   *     那一格上、缩回镜片那么大、淡掉，那一格自己的镜片同时长出来（SCRUB_SETTLE_MS）。
+   *   · 松手：拿玻璃停着的那一格——人看着的就是它，不按抬手那一点重新找。落在原来那一支上什么都
+   *     不变，也不开卡片——那是点的事。玻璃滑到那一格上、缩回镜片那么大、淡掉，那一格自己的镜片
+   *     同时长出来（SCRUB_SETTLE_MS）。
    *   · 横着划过竖着的那一条、竖着划过横躺的那一条：不是在挑，放手。
-   *   · 划到横杠外面老远（SCRUB_ESCAPE）再松手、或者系统把手势收走：算反悔，什么都不拿。
+   *   · 划到横杠外面老远（SCRUB_ESCAPE）、在外面待满 SCRUB_ESCAPE_HOLD_MS：玻璃回到原来那一支上，
+   *     哪一格都不亮——这时松手就是反悔，什么都不拿；划回来接着挑。快甩着松手、抬手前那一下甩出了
+   *     横杠的，不算：人录的屏里按住「形状」往下拖、再往上一甩，手顺势往右偏，抬手那一点落在横杠
+   *     右边老远；原来按抬手那一点判反悔，玻璃跟到最上面那一格，又飞回「形状」，什么都没换。
+   *   · 系统把手势收走：和松手一样（见 _onScrubEnd）。
    *
    * 那块玻璃不在横杠里面，挂在 body 上、浮在横杠上面。横杠自己带 backdrop-filter，它里面再有一块
    * 会折射的东西，看得见的「背后」只有横杠自己那层半透明的底——弯出来的图标和原来的图标叠成两个
@@ -2244,6 +2312,67 @@ export class InkToolbar {
       place(s.drop, cx, cy, size);
     };
 
+    /** 手指此刻在不在横杠外面老远（横躺的看上下、竖着的看左右）。 */
+    const outside = (s, x, y) => {
+      const bar = this.root.getBoundingClientRect();
+      return s.vertical
+        ? x < bar.left - SCRUB_ESCAPE || x > bar.right + SCRUB_ESCAPE
+        : y < bar.top - SCRUB_ESCAPE || y > bar.bottom + SCRUB_ESCAPE;
+    };
+
+    /**
+     * 划出去了：玻璃回到原来那一支上、缩回镜片那么大，哪一格都不亮——这时松手什么都不换，看得见。
+     * 这一组里没有选中的（用的是自己调的颜色）：玻璃停在原地缩回去。
+     */
+    const leave = (s) => {
+      s.away = true;
+      mark(s, null);
+      const drop = s.drop;
+      if (!drop) return;
+      drop.style.transition = reduced() ? 'none'
+        : `translate ${SCRUB_CATCH_MS}ms ${SCRUB_EASE}, scale ${SCRUB_CATCH_MS}ms ${SCRUB_EASE}, opacity 120ms ease`;
+      s.catchUntil = 0;
+      const home = s.group.querySelector(`${selectorFor(s)}.is-selected`);
+      if (home) {
+        const c = centreOf(home);
+        place(drop, c.x, c.y, sizeOf(home));
+      }
+      drop.classList.add('is-away');
+    };
+
+    /** 划回来了：玻璃重新浮起来，追到手指底下（和刚开始划一样用 SCRUB_CATCH_MS）。 */
+    const comeBack = (s) => {
+      s.away = false;
+      const drop = s.drop;
+      if (!drop) return;
+      drop.classList.remove('is-away');
+      if (reduced()) return;
+      drop.style.transition = `translate ${SCRUB_CATCH_MS}ms ${SCRUB_EASE}, `
+        + `scale ${SCRUB_CATCH_MS}ms ${SCRUB_EASE}, opacity 120ms ease`;
+      s.catchUntil = nowMs() + SCRUB_CATCH_MS;
+    };
+
+    /**
+     * 手指出了横杠多远、出去了多久：在外面待满 SCRUB_ESCAPE_HOLD_MS 才算划出去（leave）——到点时手指
+     * 停着不动也算，所以挂一个定时器；回到横杠边上就算回来了（comeBack）。快甩着松手，手往外一偏就
+     * 抬起来了，待不满，不算。
+     */
+    const track = (s, x, y) => {
+      if (!outside(s, x, y)) {
+        clearTimeout(s.awayTimer);
+        s.awayTimer = 0;
+        s.awaySince = 0;
+        if (s.away) comeBack(s);
+        return;
+      }
+      if (s.awaySince) return;
+      s.awaySince = nowMs();
+      s.awayTimer = setTimeout(() => {
+        s.awayTimer = 0;
+        if (this._scrub === s && s.awaySince && !s.away) leave(s);
+      }, SCRUB_ESCAPE_HOLD_MS);
+    };
+
     const listen = (on) => {
       const method = on ? 'addEventListener' : 'removeEventListener';
       window[method]('pointermove', this._onScrubMove, { capture: true });
@@ -2310,16 +2439,16 @@ export class InkToolbar {
       setTimeout(() => { drop.remove(); this._scrubDrops.delete(drop); }, SCRUB_SETTLE_MS + 40);
     };
 
-    const finish = (s, e, commit) => {
+    /**
+     * 收尾：拿玻璃停着的那一格（s.target）——人看着的就是它。划出去了（s.away）就什么都不拿。抬手那一点
+     * 只在玻璃还没落到哪一格上时才拿来找：快甩着抬手，那一下的坐标常常已经甩出去老远（录屏里那一下），
+     * 安卓收走手势时带的又常常是旧的或者 0。
+     */
+    const finish = (s, at) => {
       untrack();
-      let picked = null;
-      if (commit) {
-        const bar = this.root.getBoundingClientRect();
-        const away = s.vertical
-          ? e.clientX < bar.left - SCRUB_ESCAPE || e.clientX > bar.right + SCRUB_ESCAPE
-          : e.clientY < bar.top - SCRUB_ESCAPE || e.clientY > bar.bottom + SCRUB_ESCAPE;
-        if (!away) picked = itemAt(s, e.clientX, e.clientY) || s.target;
-      }
+      clearTimeout(s.awayTimer);
+      s.awayTimer = 0;
+      const picked = s.away ? null : (s.target || (at ? itemAt(s, at.x, at.y) : null));
       try { this.root.releasePointerCapture(s.pointerId); } catch (_) { /* never taken */ }
       // 抬手后浏览器补的那一下点击：不该再按到哪一格（捕获不住的时候它会落在按下的那一格上）。
       this._scrubSwallow = true;
@@ -2352,10 +2481,16 @@ export class InkToolbar {
         vertical: this.root.dataset.orientation === ORIENTATION.VERTICAL,
         x: e.clientX,
         y: e.clientY,
+        /** 最后跟到的那一点：系统把手势收走时按它算（那一下自己带的坐标不作数）。 */
+        last: { x: e.clientX, y: e.clientY },
         started: false,
         target: null,
         drop: null,
         catchUntil: 0,
+        /** 划出去了（见 track）：什么时候出去的、到点算数的定时器、算没算数。 */
+        awaySince: 0,
+        awayTimer: 0,
+        away: false,
       };
       // 这里不捕获：捕获了，点一下的那个 click 也会被改道到横杠身上，按钮就收不到了。等它证明
       // 自己是在划，再捕获。
@@ -2375,8 +2510,10 @@ export class InkToolbar {
         }
         begin(s, e);
       } else {
-        follow(s, e.clientX, e.clientY);
+        track(s, e.clientX, e.clientY);
+        if (!s.away) follow(s, e.clientX, e.clientY);
       }
+      s.last = { x: e.clientX, y: e.clientY };
       // 划起来以后这一路手势只归这里：不让它再去画线、拖书页、拉分栏。
       e.stopPropagation();
     };
@@ -2393,7 +2530,12 @@ export class InkToolbar {
       // 监听要听到它。liquid-glass.js 按下时给那一格挂上「鼓起」（liquid-bulge-press：缩一点、一圈影子
       // 和高光边），就是在 window 的冒泡阶段听 pointerup 摘掉的——原来这里拦了，每划一次，按下的那一格
       // 就留一圈，划几次一排全是圈（平板上看到的）。
-      finish(s, e, e.type === 'pointerup');
+      if (e.type === 'pointerup') { finish(s, { x: e.clientX, y: e.clientY }); return; }
+      // 系统把手势收走（pointercancel；横杠自己丢了捕获也一样）：和松手一样，拿玻璃停着的那一格（最后跟到
+      // 的那一点只在玻璃还没落到哪一格上时才用）。安卓上它自己带的坐标常常是旧的或者 0，不作数。被收走
+      // 不是人要反悔。
+      Logger.info('TOOLBAR', `划着挑被系统收走（${e.type}），按玻璃停着的那一格算`);
+      finish(s, s.last);
     };
 
     this._onScrubClick = (e) => {
@@ -2408,6 +2550,7 @@ export class InkToolbar {
       const s = this._scrub;
       if (s) {
         untrack();
+        clearTimeout(s.awayTimer);
         s.group.classList.remove('is-scrubbing');
         s.target?.classList.remove('is-scrub-target');
         s.drop?.remove();

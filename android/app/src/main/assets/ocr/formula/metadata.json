@@ -1,0 +1,166 @@
+{
+  "format_version": 1,
+  "architecture": "scratch-formula-ocr-v1-kv",
+  "created_at": "2026-10-12T06:05:23.241128+00:00",
+  "training_status": "experimental-locally-trained",
+  "training_steps": 57780,
+  "checkpoint_sha256": "ab696675066267bdc12064b69ed3bca9005284f18232afcb0cb46d7a340b1804",
+  "provenance": {
+    "architecture": "scratch-formula-ocr-v1",
+    "initialization": "random",
+    "pretrained_weights": false,
+    "teacher_model": "TexTeller-3.0-ONNX",
+    "label_normalization": "texteller-norm-v1",
+    "label_smoothing": null,
+    "ema_decay": null,
+    "bn_recalibration": {
+      "version": "precise-bn-v1",
+      "images": 3200,
+      "seed": 20261005,
+      "batch_size": 64,
+      "augmented": false,
+      "when": "before every validation"
+    },
+    "tokenizer_source": "training_manifest_lexical_tokens_only",
+    "training_augmentation": "contrast_subpixel_blur_additive_noise_v1",
+    "seed": 1729,
+    "train_manifest_sha256": "3c90ca582c4399db4bafa6db83b687e36491f751ac9c335d4aa94b0f166cb46d",
+    "validation_manifest_sha256": "f72a26236fd13df766518b00c2f399ad14de205279e5943ad8c7ef7c14cfff32",
+    "train_samples": 616214,
+    "validation_samples": 11487,
+    "split_check": "distinct_image_paths_file_sha256_and_canonical_formula_labels",
+    "torch_version": "2.11.0+cu130",
+    "training_device": "cuda",
+    "gpu_name": "NVIDIA L4"
+  },
+  "parameter_count": 2774586,
+  "vocab_size": 538,
+  "weight_format": "dynamic-int8-matmul",
+  "model_bytes": 4921920,
+  "config": {
+    "image_height": 256,
+    "image_width": 768,
+    "d_model": 192,
+    "nhead": 6,
+    "encoder_layers": 2,
+    "decoder_layers": 3,
+    "feedforward_dim": 576,
+    "max_tokens": 160,
+    "dropout": 0.1,
+    "visual_variant": "v2"
+  },
+  "input": {
+    "name": "images",
+    "dtype": "float32",
+    "layout": "NCHW",
+    "batch": 1,
+    "channels": 1,
+    "height": 256,
+    "width": 768,
+    "preprocessing": {
+      "alpha": "composite-on-white",
+      "color": "Pillow-L-grayscale",
+      "crop": "tight-bbox-of-gray-less-than-245; reject-blank",
+      "resize": "aspect-preserving-Pillow-LANCZOS",
+      "resize_scale": "min((width-8)/crop_width,(height-8)/crop_height)",
+      "resize_rounding": "Python-round-ties-to-even; minimum-1",
+      "padding": "center-on-white-canvas; integer-floor-offset",
+      "normalization": "pixel/127.5-1"
+    }
+  },
+  "encoder": {
+    "outputs": [
+      "cross_keys",
+      "cross_values"
+    ],
+    "shape": [
+      3,
+      6,
+      768,
+      32
+    ]
+  },
+  "decoder": {
+    "inputs": [
+      "token",
+      "past_keys",
+      "past_values",
+      "cross_keys",
+      "cross_values"
+    ],
+    "token_dtype": "int64",
+    "token_shape": [
+      1,
+      1
+    ],
+    "cache_shape": [
+      3,
+      6,
+      "past_length",
+      32
+    ],
+    "first_step_past_length": 0,
+    "outputs": [
+      "logits",
+      "present_keys",
+      "present_values"
+    ],
+    "logits_shape": [
+      1,
+      538
+    ]
+  },
+  "decoding": {
+    "strategy": "greedy",
+    "max_new_tokens": 159,
+    "pad_id": 0,
+    "bos_id": 1,
+    "eos_id": 2,
+    "suppressed_output_ids": [
+      0,
+      1
+    ],
+    "score": "mean full-vocabulary log probability of generated tokens including EOS; not calibrated confidence",
+    "detokenization": "concatenate; add ASCII space after a backslash-letter command when the next token starts with an ASCII letter"
+  },
+  "files": {
+    "encoder.ort": {
+      "sha256": "715b6cbf3205782a5b4a7f87dc02747014561ea58d3912329da78c75ade02cb3",
+      "bytes": 2763112
+    },
+    "decoder.ort": {
+      "sha256": "f64dbf79e0c796cf9bbea5becf995fe7c46ef23458adf243b494d24673f24068",
+      "bytes": 2158808
+    },
+    "tokenizer.json": {
+      "sha256": "3c40d43386bcc383c33d6e5ad77b629ba0abeec068f3e4a891a483ce824e0cd8",
+      "bytes": 8276
+    }
+  },
+  "recognition_accuracy": "Not established by export validation; evaluate on independent formula images.",
+  "android_device_validation": "NOT RUN",
+  "model_files": {
+    "encoder": "encoder.ort",
+    "decoder": "decoder.ort"
+  },
+  "model_format": "ort",
+  "ort_format_conversion": {
+    "source_bundle_files": {
+      "encoder.onnx": {
+        "sha256": "871e39e7a706a7321be24e40fc4a60821d611fa4465d24f94623054e74330952",
+        "bytes": 2153192
+      },
+      "decoder.onnx": {
+        "sha256": "ab24668ae858f729dda9e1532ca98951dfcbc13d838d572bbb51a46d93c51eff",
+        "bytes": 2092422
+      },
+      "tokenizer.json": {
+        "sha256": "3c40d43386bcc383c33d6e5ad77b629ba0abeec068f3e4a891a483ce824e0cd8",
+        "bytes": 8276
+      }
+    },
+    "optimization": "Fixed style, level all, target arm (no NchwcTransformer, session.qdqisint8allowed=1)",
+    "onnxruntime_version": "1.23.2",
+    "operator_config": "required_operators_and_types.config"
+  }
+}

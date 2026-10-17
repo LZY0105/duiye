@@ -38,7 +38,7 @@ const dom = new JSDOM(`<!doctype html><html data-skin="liquid-math" data-glass="
   </div>
   <nav class="app-nav" style="position: fixed; z-index: 1000"><div class="nav-glass-lens" aria-hidden="true" style="position: absolute; z-index: 1"></div><button>练习</button><button>设置</button></nav>
   <div class="pdf-slot-header"><button class="pdf-slot-btn is-answer-action" style="position: relative">对答案</button></div>
-  <div class="settings"><button id="settingsSave" class="action-btn">保存设置</button><button class="action-btn" id="plain">别的</button></div>
+  <div class="settings"><button id="settingsSave" class="action-btn">保存设置</button><button class="pdf-control-btn" id="plain">别的</button></div>
   <div class="deck-dialog"><button class="deck-dialog-btn is-primary">好</button><button class="deck-dialog-btn is-danger">删除</button></div>
   <div class="ink-toolbar is-perched"><button class="ink-tool">笔</button></div>
   <div class="page"><canvas class="ink-surface"></canvas></div>
@@ -153,11 +153,11 @@ await test('平时只弯一次：库里那张贴图、库里那个位移量（�
   assert.equal(parseFilter(glassFilterMarkup('t0b', PRESETS.capsule)).querySelector('feDisplacementMap').getAttribute('scale'), '-48');
 });
 
-await test('色散版（chromatic）逐个原语照搬：贴图、三个通道各弯一点不一样的量、柔化、边缘遮罩、合回去', () => {
+await test('色散版（chromatic）：贴图、三个通道各弯一点不一样的量、screen 混回去、柔化；区域是元素本身', () => {
   const f = parseFilter(glassFilterMarkup('t1', PRESETS.button, { chromatic: true }));
   assert.equal(f.localName, 'filter');
-  assert.equal(f.getAttribute('x'), '-35%');
-  assert.equal(f.getAttribute('width'), '170%');
+  assert.equal(f.getAttribute('x'), '0%');
+  assert.equal(f.getAttribute('width'), '100%');
   assert.equal(f.getAttribute('color-interpolation-filters'), 'sRGB');
   const img = f.querySelector('feImage');
   assert.equal(img.getAttribute('href'), maps.STANDARD_MAP);
@@ -169,12 +169,28 @@ await test('色散版（chromatic）逐个原语照搬：贴图、三个通道�
     assert.equal(d.getAttribute('yChannelSelector'), 'B');
   }
   assert.equal(f.querySelector('feGaussianBlur').getAttribute('stdDeviation'), '0.3');
-  assert.equal(f.querySelector('feFuncA[type="discrete"]').getAttribute('tableValues'), '0 0.1 1');
   const blends = [...f.querySelectorAll('feBlend')].map((b) => b.getAttribute('mode'));
   assert.deepEqual(blends, ['screen', 'screen']);
-  const last = f.lastElementChild;
-  assert.equal(last.localName, 'feComposite');
-  assert.equal(last.getAttribute('operator'), 'over');
+  // 那条边缘遮罩链拿掉了：贴图不透明，元素里面它处处是 1，本来就什么都不改。
+  assert.equal(f.querySelectorAll('feComposite, feComponentTransfer, feOffset').length, 0);
+  assert.equal(f.lastElementChild.getAttribute('result'), 'ABERRATED_BLURRED');
+});
+
+await test('静止那版和手在动那版：区域、贴图怎么铺一模一样——只差彩边，不差弯法（不然一换背景就整块挪）', () => {
+  // 人录屏报「背景模糊突然跳跃」：原来色散版区域 170%、只弯一次那版 100%，平板的 WebView 按区域铺贴图，
+  // 两版弯法差一大截，手一碰、一停，背后磨过的东西整块挪四五十像素。
+  const attrs = (el, names) => names.map((n) => el.getAttribute(n));
+  for (const [name, preset] of Object.entries(PRESETS)) {
+    for (const how of [{}, { backdrop: true }, { fit: 'none' }, { box: true, convex: true }]) {
+      const lean = parseFilter(glassFilterMarkup('a', preset, how));
+      const rich = parseFilter(glassFilterMarkup('b', preset, { ...how, chromatic: true }));
+      const box = ['x', 'y', 'width', 'height', 'primitiveUnits'];
+      assert.deepEqual(attrs(rich, box), attrs(lean, box), `${name} ${JSON.stringify(how)}：区域`);
+      const img = ['x', 'y', 'width', 'height', 'preserveAspectRatio', 'href'];
+      assert.deepEqual(attrs(rich.querySelector('feImage'), img), attrs(lean.querySelector('feImage'), img), `${name}：贴图`);
+      assert.equal(scalesOf(rich)[0], scalesOf(lean)[0], `${name}：红通道和只弯一次那版弯得一样多`);
+    }
+  }
 });
 
 await test('色散版给 backdrop-filter 用：区域收回元素本身、没有遮罩链，三个通道和柔化照旧', () => {
@@ -238,10 +254,33 @@ await test('该挂的都挂上：顶上三枚胶囊、对答案、保存设置�
   assert.ok($('#settingsSave').classList.contains('lgr--button'));
 });
 
-await test('不挂的：红色的「删除」（一整块红是回不来的意思）、笔迹工具栏、没点名的按钮', () => {
-  assert.ok(!$('.deck-dialog-btn.is-danger').classList.contains('lgr'));
+await test('不挂的：笔迹工具栏、没点名的按钮', () => {
   assert.ok(!$('.ink-toolbar').classList.contains('lgr'));
   assert.ok(!$('#plain').classList.contains('lgr'));
+});
+
+await test('「删除」也是玻璃（人说「全面液态玻璃化」）：红落在字上，不是一块红', () => {
+  assert.ok($('.deck-dialog-btn.is-danger').classList.contains('lgr--button'));
+  assert.match(read('../src/styles/liquid-glass-react.css'),
+    /html\[data-glass="liquid"\] \.deck-dialog-btn\.is-danger\.lgr \{ color: var\(--lg-red\) !important; \}/);
+});
+
+await test('对话框自己挂 sheet（库里演示站那张卡片的数：位移 100、磨 20px、饱和度 140、色散 2、不弹）', () => {
+  assert.deepEqual({ ...PRESETS.sheet }, {
+    displacementScale: 100, blurAmount: 0.5, saturation: 140, aberrationIntensity: 2, elasticity: 0, mode: 'standard',
+  });
+  assert.equal(blurRadius(PRESETS.sheet.blurAmount), 20);
+  const d = $('.deck-dialog');
+  assert.ok(d.classList.contains('lgr--sheet'));
+  assert.equal(d.querySelector(':scope > .lgr-lens .lgr-warp').style.getPropertyValue('--lgr-backdrop'), 'blur(20px) saturate(140%)');
+  assert.equal(d.querySelectorAll(':scope > .lgr-glow').length, 0, '它不是按钮');
+});
+
+await test('两栏那两张装内容的卡片不挂（人说「除了文件栏的边框」）', () => {
+  assert.ok(!lgr.TARGETS.some(([s]) => /pdf-ws-slot/.test(s)));
+  // 它自己不再磨背后：一磨就是里面那些玻璃的 backdrop 根，接在自己身上的折射弯到边上取不到像素，整条发黑。
+  assert.match(read('../src/styles/liquid-glass-react.css'),
+    /html\[data-glass="liquid"\] \.pdf-ws-slot \{\s*backdrop-filter: none;\s*background: rgba\(255, 255, 255, 0\.85\);\s*\}/);
 });
 
 await test('按钮上的层：挂在最后面，顺序是 身子（裁圆角的里面套着弯背后的）、影子、三层亮光、两道边', () => {
@@ -280,7 +319,7 @@ await test('身子的滤镜和磨砂：按这一组的数写成变量，滤镜�
   assert.deepEqual(scalesOf(filter), [-64], '手在屏幕上时那一版只弯一次');
   const rich = document.getElementById(warp.style.getPropertyValue('--lgr-filter-rich').match(/url\(#(.+)\)/)[1]);
   assert.deepEqual(scalesOf(rich).map((v) => +v.toFixed(4)), [-64, -70.4, -76.8], '静止时那一版是库里原样的色散');
-  assert.equal(rich.querySelectorAll('feComposite').length, 3, '连边缘遮罩那条链一起');
+  assert.equal(rich.getAttribute('width'), filter.getAttribute('width'), '两版区域一样');
   assert.equal(warp.style.getPropertyValue('--lgr-backdrop'), 'blur(7.2px) saturate(130%)');
   assert.equal($('.app-nav > .lgr-lens .lgr-warp').style.getPropertyValue('--lgr-backdrop'), 'blur(6px) saturate(140%)');
 });
@@ -295,10 +334,12 @@ await test('同一组数只造一段滤镜（两版各一段）：按钮共用�
     assert.notEqual(idOf('.nav-glass-lens .lgr-warp', v), idOf(nav, v));
   }
   const all = [...document.querySelectorAll('.lgr-defs filter')];
-  const named = all.filter((f) => /^lgr-(cap|bar|drop)-/.test(f.id));
-  assert.deepEqual(named.map((f) => f.id).sort(),
-    ['lgr-bar-lean', 'lgr-bar-rich', 'lgr-cap-lean', 'lgr-cap-rich', 'lgr-drop-lean', 'lgr-drop-rich']);
-  assert.equal(all.length - named.length, 6, '三组数（按钮、胶囊、透镜），每组两版');
+  const named = all.filter((f) => /^lgr-(cap|bar|drop|sheet)-/.test(f.id));
+  assert.deepEqual(named.map((f) => f.id).sort(), [
+    'lgr-bar-lean', 'lgr-bar-rich', 'lgr-cap-lean', 'lgr-cap-rich', 'lgr-drop-lean', 'lgr-drop-rich',
+    'lgr-sheet-lean', 'lgr-sheet-rich',
+  ]);
+  assert.equal(all.length - named.length, 8, '四组数（按钮、胶囊、透镜、对话框那一块），每组两版');
 });
 
 await test('没定位的定个位，定了位的自成一层（z-index 0），本来就有 z-index 的不动', () => {
@@ -339,7 +380,7 @@ await test('和玻璃无关的 DOM 变化（书页一次加进一大堆字）：
   assert.equal(rafCalls, before);
 });
 
-await test('新开的对话框：下一帧挂上；按钮变成红色的删除：拆掉', async () => {
+await test('新开的对话框：下一帧挂上（它自己、里面的按钮）；按钮变成红色的删除：还是玻璃；对话框关掉：拆掉', async () => {
   const d = document.createElement('div');
   d.className = 'deck-dialog';
   d.innerHTML = '<button class="deck-dialog-btn">取消</button>';
@@ -347,8 +388,25 @@ await test('新开的对话框：下一帧挂上；按钮变成红色的删除�
   await microtasks();
   flush();
   const btn = d.querySelector('button');
-  assert.ok(btn.classList.contains('lgr'));
+  assert.ok(d.classList.contains('lgr--sheet'));
+  assert.ok(btn.classList.contains('lgr--button'));
   btn.classList.add('is-danger');
+  await microtasks();
+  flush();
+  assert.ok(btn.classList.contains('lgr--button'));
+  d.remove();
+  await microtasks();
+  flush();
+  assert.ok(!lgr.attachedGlass().includes(d) && !lgr.attachedGlass().includes(btn));
+});
+
+await test('顶上那一排的单子开着的那一格（aria-expanded）：挂一块透镜；单子收起来：拆掉', async () => {
+  const btn = $('.pdf-page-bar .pdf-bar-btn');
+  btn.setAttribute('aria-expanded', 'true');
+  await microtasks();
+  flush();
+  assert.ok(btn.classList.contains('lgr--lens'));
+  btn.setAttribute('aria-expanded', 'false');
   await microtasks();
   flush();
   assert.ok(!btn.classList.contains('lgr'));
@@ -398,8 +456,10 @@ await test('空桌面那张卡片挂成一整块玻璃：没有按钮那三层�
     assert.equal(card.querySelectorAll(':scope > .lgr-glow').length, 0, '卡片不是按钮');
     assert.equal(card.querySelectorAll(':scope > .lgr-rim').length, 2);
     assert.ok(card.querySelector('.pdf-empty-btn').classList.contains('lgr--button'), '玻璃叠在玻璃上');
-    assert.match(read('../src/styles/liquid-glass-react.css'),
-      /html\[data-glass="liquid"\] \.pdf-empty-card\.lgr \{ border-color: transparent; \}/);
+    // 那圈细线：挂了玻璃的一律撤掉颜色（.lgr.lgr 那一条），宽度留着——宽度一变东西就挪了。
+    const css = read('../src/styles/liquid-glass-react.css');
+    const at = css.indexOf('html[data-glass="liquid"] #settingsSave.lgr {');
+    assert.match(css.slice(at, css.indexOf('}', at)), /border-color:\s*transparent !important/);
   } finally {
     card.remove();
     await microtasks();
@@ -551,6 +611,35 @@ await test('手离开了、东西还在动（松手以后那一页还在翻）�
   assert.ok(!root.classList.contains('lgr-busy'));
 });
 
+await test('手指一路按着、停着不动超过半秒：玻璃不换回色散版；抬起来半秒后才换回', async () => {
+  // 人录屏报「背景模糊突然跳跃」：按着慢慢划，停一下就换回色散、一动又换回来，一次按住里来回换好几次。
+  const root = document.documentElement;
+  assert.ok(!root.classList.contains('lgr-busy'), '前提：静止');
+  document.body.dispatchEvent(new window.PointerEvent('pointerdown', { pointerType: 'touch', pointerId: 5, bubbles: true }));
+  assert.ok(root.classList.contains('lgr-busy'));
+  await new Promise((r) => setTimeout(r, lgr.IDLE_MS + 300));
+  assert.ok(root.classList.contains('lgr-busy'), '手指还按着：不换');
+  window.dispatchEvent(new window.PointerEvent('pointerup', { pointerType: 'touch', pointerId: 5 }));
+  await new Promise((r) => setTimeout(r, lgr.IDLE_MS + 250));
+  assert.ok(!root.classList.contains('lgr-busy'), '抬起来半秒：换回色散');
+});
+
+await test('已经换回色散以后东西又自己动起来（松手后透镜回弹）：一声 glassbusy 就换回只弯一次的；停了再换回来', async () => {
+  // 平板上实测：按着不动时透镜停了、玻璃换回色散版；松手透镜一回弹，每一帧都用色散版整页重画，一帧 110ms。
+  const root = document.documentElement;
+  assert.ok(!root.classList.contains('lgr-busy'), '前提：静止，色散版');
+  const lensHost = document.createElement('div');
+  lensHost.setAttribute('data-lens-moving', '');
+  document.body.appendChild(lensHost);
+  window.dispatchEvent(new window.Event('glassbusy'));
+  assert.ok(root.classList.contains('lgr-busy'), '一动就换');
+  await new Promise((r) => setTimeout(r, lgr.IDLE_MS + 100));
+  assert.ok(root.classList.contains('lgr-busy'), '透镜还在动（data-lens-moving）：不换回去');
+  lensHost.remove();
+  await new Promise((r) => setTimeout(r, 260));
+  assert.ok(!root.classList.contains('lgr-busy'), '停了：换回色散');
+});
+
 await test('减少动态：不挪不拉（光照转）', () => {
   motion.matches = true;
   move(document.body, 'mouse', 560, 116);
@@ -580,7 +669,10 @@ const rule = (selector) => {
 await test('样式表只认液态玻璃（data-glass="liquid"）：毛玻璃和它同一个 data-skin，一条都不能吃到', () => {
   assert.ok(!/data-skin/.test(code), '按 data-skin 挑的规则毛玻璃也吃');
   // 碰到应用自己那些元素的规则都挂在 data-glass 底下；不挂的只碰 JS 挂上去的那几层（.lgr-*），毛玻璃里没有。
-  for (const sel of code.match(/[^{}]+(?=\{)/g).map((x) => x.trim()).filter((x) => x && !x.startsWith('@'))) {
+  // @keyframes 里的 from / to 不是选择器：名字都是 lgr- 开头的，只被 data-glass 底下的规则用到。
+  assert.ok((code.match(/@keyframes\s+[\w-]+/g) || []).every((k) => /@keyframes\s+lgr-/.test(k)));
+  const rules = code.replace(/@keyframes[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, '');
+  for (const sel of rules.match(/[^{}]+(?=\{)/g).map((x) => x.trim()).filter((x) => x && !x.startsWith('@'))) {
     for (const part of sel.split(',').map((x) => x.trim())) {
       assert.ok(part.startsWith('html[data-glass="liquid"]') || /^(html\.lgr-busy )?(\.lgr|\[data-lgr)/.test(part),`「${part}」没挂在 data-glass 底下`);
     }
@@ -706,6 +798,53 @@ await test('划着挑那块玻璃（lgr-drop-*）：凸的、按它自己的大�
   assert.deepEqual(scalesOf(rich).map((v) => +v.toFixed(4)), [0.16, 0.144, 0.128]);
   assert.equal(rich.querySelectorAll('feComposite, feComponentTransfer').length, 0, '没有遮罩链');
   assert.ok(+rich.querySelector('feGaussianBlur').getAttribute('stdDeviation') < 0.01, '柔化按边长折过去，不是 0.3 个边长');
+});
+
+await test('栏头那枚胶囊是嵌在栏里的：只有边光和一道细线，没有浮在最上层那种影子', () => {
+  // 人说「这个菜单栏的阴影使其位置关系与整个栏目很不协调」。
+  const r = rule('html[data-glass="liquid"] .pdf-slot-toolbar');
+  assert.match(r, /box-shadow: var\(--lgr-rim-still\), 0 0 0 0\.5px rgba\(15, 23, 42, 0\.08\);/);
+  assert.ok(!/--lgr-shadow\b/.test(r), '不该再有 --lgr-shadow（往下 12px、糊开 40px）');
+});
+
+await test('滑块弹过去的那半秒（data-lens-moving）：所有玻璃只磨不弯；这一条排在按类挑的那几条后面、压得住', () => {
+  const sel = 'html[data-glass="liquid"]:has([data-lens-moving]) .lgr-warp';
+  const at = code.indexOf(`${sel} {`);
+  assert.ok(at >= 0, '那一条不在');
+  assert.match(code.slice(at, code.indexOf('}', at)), /filter:\s*none;/);
+  // 同样具体的「⋯」那条（静止时只弯一次）在它前面，后写的赢。
+  assert.ok(code.indexOf('html[data-glass="liquid"] .pdf-book-more .lgr-warp {') < at);
+  // 只在滑块动时：别的动作（lgr-busy）照旧是只弯一次的那一版，不是 none。
+  assert.match(code, /html\.lgr-busy \.lgr-warp \{ filter: var\(--lgr-filter, none\); \}/);
+});
+
+await test('笔的设置卡片：毛玻璃那套的高光、边光（伪元素，高光带混合模式）在液态玻璃里撤掉——不然卡片自成一组、磨不到书页', () => {
+  const at = code.indexOf('html[data-glass="liquid"] .ink-card.lgr::before,');
+  assert.ok(at >= 0, '那一条不在');
+  const sel = code.slice(at, code.indexOf('{', at));
+  assert.ok(sel.includes('html[data-glass="liquid"] .ink-card.lgr::after'));
+  assert.match(code.slice(code.indexOf('{', at), code.indexOf('}', at)), /display:\s*none;/);
+  // 那条高光确实带着混合模式（它就是原因）：毛玻璃里它还在。
+  const toolbarCss = read('../src/styles/ink-toolbar.css');
+  const glint = toolbarCss.indexOf('[data-skin="liquid-math"] .ink-card::before {');
+  assert.ok(glint >= 0 && /mix-blend-mode:\s*screen/.test(toolbarCss.slice(glint, toolbarCss.indexOf('}', glint))));
+});
+
+await test('文档库、说明书盖满整屏时藏起来的 Agent 那一层：玻璃的滤镜一起撤（Chromium 照样合成藏着的 backdrop-filter）', () => {
+  // 液态玻璃：身子那层（.lgr-warp）
+  for (const scope of ['body.is-library-open', 'body:has(.pdf-guide)']) {
+    const at = code.indexOf(`html[data-glass="liquid"] ${scope} .pdf-agent-layer .lgr-warp`);
+    assert.ok(at >= 0, `${scope} 那一条不在`);
+    const body = code.slice(code.indexOf('{', at), code.indexOf('}', at));
+    assert.match(body, /backdrop-filter:\s*none !important;/);
+  }
+  // 毛玻璃（liquid.css 两套共用）：按钮和对话框自己的磨砂
+  const liquid = read('../src/styles/liquid.css').replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const scope of ['body.is-library-open', 'body:has(.pdf-guide)']) {
+    const at = liquid.indexOf(`html[data-skin] ${scope} .pdf-agent-layer :is(.pdf-agent-fab, .pdf-agent-dialog)`);
+    assert.ok(at >= 0, `liquid.css 里 ${scope} 那一条不在`);
+    assert.match(liquid.slice(liquid.indexOf('{', at), liquid.indexOf('}', at)), /backdrop-filter:\s*none;/);
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════

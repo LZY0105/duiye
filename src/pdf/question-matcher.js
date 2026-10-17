@@ -42,7 +42,7 @@ import {
 import { locateAnswerRegion, sectionRangeForPage } from './region-locator.js';
 import { FORMULA_POLICY, formulaCeiling } from './formula-set.js';
 import { positionalWindow, separateByPosition } from './positional-prior.js';
-import { symbolContextSimilarity } from './symbol-context.js';
+import { contextSetSimilarity, symbolContexts } from './symbol-context.js';
 import {
   TEXT_QUALITY,
   textCanCarryMatch,
@@ -103,6 +103,40 @@ function bigrams(s) {
 }
 
 /**
+ * A normalised string with its bigram multiset counted once.
+ *
+ * Scoring one text against hundreds of candidates used to re-normalise and
+ * re-count both sides on every call — three times per pair, once for each of
+ * the prose, fragment and operator-context signals. The profile is computed
+ * once per text and shared by all three; see textProfile.
+ */
+function bigramProfile(norm) {
+  const map = bigrams(norm);
+  let total = 0;
+  for (const n of map.values()) total += n;
+  return { norm, map, total };
+}
+
+/** Dice coefficient over two bigram profiles, 0..1. */
+function diceProfiles(pa, pb) {
+  const x = pa.norm;
+  const y = pb.norm;
+  if (!x || !y) return 0;
+  if (x === y) return 1;
+  if (x.length < 2 || y.length < 2) return 0;
+
+  // Walk the smaller multiset and look up in the larger.
+  const [small, large] = pa.map.size <= pb.map.size ? [pa.map, pb.map] : [pb.map, pa.map];
+  let shared = 0;
+  for (const [g, count] of small) {
+    const other = large.get(g);
+    if (other) shared += Math.min(count, other);
+  }
+  const total = pa.total + pb.total;
+  return total === 0 ? 0 : (2 * shared) / total;
+}
+
+/**
  * Dice coefficient over character bigrams, 0..1.
  *
  * Chosen over exact or prefix matching because a question and its answer entry
@@ -110,22 +144,10 @@ function bigrams(s) {
  * otherwise different prose.
  */
 export function similarity(a, b) {
-  const x = normalizeForMatch(a);
-  const y = normalizeForMatch(b);
-  if (!x || !y) return 0;
-  if (x === y) return 1;
-  if (x.length < 2 || y.length < 2) return x === y ? 1 : 0;
-
-  const ga = bigrams(x);
-  const gb = bigrams(y);
-  let shared = 0;
-  for (const [g, count] of ga) {
-    const other = gb.get(g);
-    if (other) shared += Math.min(count, other);
-  }
-  const total = [...ga.values()].reduce((s, n) => s + n, 0)
-    + [...gb.values()].reduce((s, n) => s + n, 0);
-  return total === 0 ? 0 : (2 * shared) / total;
+  return diceProfiles(
+    bigramProfile(normalizeForMatch(a)),
+    bigramProfile(normalizeForMatch(b)),
+  );
 }
 
 // ── mathematical content ────────────────────────────────────────────────────
@@ -154,7 +176,11 @@ const MATH_CHAR = /[0-9a-zA-Z+\-*/=^_(){}[\]<>|.,\\∫∑∏√±×÷≤≥≠�
  * @returns {string[]} fragments, single characters discarded
  */
 export function extractMathFragments(text) {
-  const s = normalizeForMatch(text);
+  return fragmentRuns(normalizeForMatch(text));
+}
+
+/** The maths runs of an already-normalised string. */
+function fragmentRuns(s) {
   const runs = [];
   let current = '';
   for (const ch of s) {
@@ -204,12 +230,39 @@ const SYMBOL_SHARE = 0.6;
  * than scoring zero.
  */
 export function contentSimilarity(a, b) {
-  const prose = similarity(a, b);
-  const fragments = mathSimilarity(a, b);
-  if (fragments === null) return prose;
+  return profileSimilarity(textProfile(a), textProfile(b));
+}
 
-  // Measured on the same normalised strings the rest of the scoring sees.
-  const contexts = symbolContextSimilarity(normalizeForMatch(a), normalizeForMatch(b));
+/**
+ * Everything contentSimilarity needs to know about one text, computed once.
+ *
+ * The three signals — prose bigrams, fragment bigrams and operator contexts —
+ * are all read off the same normalised string, so a text that is compared
+ * against many candidates should be profiled once and the profile reused. On a
+ * page alignment every answer entry in the band is scored against every
+ * question on the page; on pair verification two dozen sampled questions are
+ * scored against the whole answer index. Both used to re-derive all three
+ * signals for both sides on every pair.
+ *
+ * @returns {{norm: string, prose: object, math: object|null, contexts: string[]}}
+ */
+export function textProfile(text) {
+  const norm = normalizeForMatch(text);
+  const prose = bigramProfile(norm);
+  const joined = fragmentRuns(norm).join(' ');
+  const math = joined ? bigramProfile(normalizeForMatch(joined)) : null;
+  // Contexts only matter when both sides carry mathematics.
+  const contexts = math ? symbolContexts(norm) : [];
+  return { norm, prose, math, contexts };
+}
+
+/** contentSimilarity over two prepared profiles. */
+export function profileSimilarity(pa, pb) {
+  const prose = diceProfiles(pa.prose, pb.prose);
+  if (!pa.math || !pb.math) return prose;
+
+  const fragments = diceProfiles(pa.math, pb.math);
+  const contexts = contextSetSimilarity(pa.contexts, pb.contexts);
   const math = contexts === null
     ? fragments
     : SYMBOL_SHARE * contexts + (1 - SYMBOL_SHARE) * fragments;
@@ -475,10 +528,11 @@ export function matchQuestion(question, candidates, {
   }
 
   const comparable = textIsComparable(textQuality, crossBookComparable);
+  const questionProfile = comparable ? textProfile(question.text) : null;
   const scored = candidates.map((entry) => ({
     entry,
     labelMatches: !!wanted && sameQuestionId(entry.label, wanted),
-    textScore: comparable ? contentSimilarity(question.text, entry.text) : 0,
+    textScore: comparable ? profileSimilarity(questionProfile, textProfile(entry.text)) : 0,
   }));
 
   const labelHits = scored.filter(s => s.labelMatches);
@@ -579,8 +633,7 @@ export const ALIGN_LIMITS = Object.freeze({
   timeoutMs: 1500,
 });
 
-function pairScore(question, entry, comparable) {
-  const content = comparable ? contentSimilarity(question.text, entry.text) : 0;
+function pairScore(question, entry, content) {
   return content + (sameQuestionId(question.label, entry.label) ? LABEL_BONUS : 0);
 }
 
@@ -635,11 +688,22 @@ export function alignSequences(questions, entries, {
   for (let i = 1; i <= n; i++) F[i][0] = F[i - 1][0] + GAP_PENALTY;
   for (let j = 1; j <= m; j++) F[0][j] = F[0][j - 1] + GAP_PENALTY;
 
+  // Each side is profiled once, on first use, and reused across every pair in
+  // the band. Entries outside the band are never profiled at all.
+  const questionProfiles = new Array(n);
+  const entryProfiles = new Array(m);
+  const profileAt = (list, texts, k) => {
+    if (list[k] === undefined) list[k] = textProfile(texts[k].text);
+    return list[k];
+  };
   const score = Array.from({ length: n }, () => new Float64Array(m).fill(NaN));
   const scoreAt = (i, j) => {
     const cached = score[i][j];
     if (!Number.isNaN(cached)) return cached;
-    const value = pairScore(questions[i], pool[j], comparable);
+    const content = comparable
+      ? profileSimilarity(profileAt(questionProfiles, questions, i), profileAt(entryProfiles, pool, j))
+      : 0;
+    const value = pairScore(questions[i], pool[j], content);
     score[i][j] = value;
     return value;
   };

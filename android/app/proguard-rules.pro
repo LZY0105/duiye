@@ -30,3 +30,9 @@
 -keep class io.github.lzy0105.duiye.proxy.NativeProxy {
     *;
 }
+
+# ── 公式识别：ONNX Runtime 的 JNI 层同样按名字找 Java 类和字段 ──
+#
+# libonnxruntime4j_jni.so 用 FindClass / GetFieldID 按字符串找 ai.onnxruntime 里的类（OnnxTensor、
+# OrtSession$Result……），R8 一改名就是同样的「库在、就是不工作」。整个包原样保留。
+-keep class ai.onnxruntime.** { *; }

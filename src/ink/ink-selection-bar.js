@@ -16,6 +16,15 @@
 //
 // 换色那一排在圈里有闭合形状时分成两排：边框、填充，各挑各的。原来只有一排，
 // 改的只是边框——一个红边蓝底的三角形，底色就再也换不掉了。
+//
+// 接了识别（OCR）以后多一颗「识别」：认出圈里那一块的字和公式（见 ink-recognize.js、src/ocr/）。圈里没套到笔迹、只圈了
+// 书上印的字时，条只剩这一颗——那一圈是「识别区域」，不是选区。没接识别的时候它不出现，一切照旧。
+//
+// 「大小」展开一排：缩小、眼下是原来的百分之几、放大（人说识别写成的笔迹「同时也要可以放大缩小」）。拖套索线上那颗把手
+// 也能缩放，但它同时转——只想变大变小的时候，按钮比把手准。
+
+import { t } from '../core/i18n.js';
+import { avoidFloatingObstacles } from './float-avoid.js';
 
 export const SELECTION_ACTIONS = Object.freeze({
   COPY: 'copy',
@@ -27,7 +36,27 @@ export const SELECTION_ACTIONS = Object.freeze({
   COLOR_PICK: 'color-pick',
   /** 填充那一排里点了某一个色点，或者「不填充」。带着颜色回来，「不填充」是空串。 */
   FILL_PICK: 'fill-pick',
+  /** 认出圈里那一块的字和公式。只在接了识别的时候出现。 */
+  RECOGNIZE: 'recognize',
+  /** 「大小」：展开、收起放大缩小那一排（条自己处理，不往外报）。 */
+  SIZE: 'size',
+  /** 那一排里的放大、缩小、点百分比回到原来的大小。 */
+  SIZE_UP: 'size-up',
+  SIZE_DOWN: 'size-down',
+  SIZE_RESET: 'size-reset',
 });
+
+/** 「大小」那颗的图标：对角两个箭头。用画的，不用字——这种箭头字符有的系统字体里没有，会是一个方块。 */
+const SIZE_GLYPH = '<svg class="ink-selection-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" '
+  + 'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"/></svg>';
+
+/** 「识别」那颗的图标：一个取景框里一个 T。 */
+const RECOGNIZE_GLYPH = '<svg class="ink-selection-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" '
+  + 'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16'
+  + 'M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><path d="M9 9h6M12 9v7"/></svg>';
+const recognizeSpec = () => ({ action: SELECTION_ACTIONS.RECOGNIZE, label: t('ocr.button'), glyph: RECOGNIZE_GLYPH });
 
 const sameColor = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
 
@@ -40,8 +69,12 @@ const BUTTONS = [
   { action: SELECTION_ACTIONS.COPY, label: '复制', glyph: '⧉' },
   { action: SELECTION_ACTIONS.CUT, label: '剪切', glyph: '✂' },
   { action: SELECTION_ACTIONS.COLOR, label: '颜色', glyph: '◧' },
+  { action: SELECTION_ACTIONS.SIZE, label: '大小', glyph: SIZE_GLYPH },
   { action: SELECTION_ACTIONS.DELETE, label: '删除', glyph: '✕', danger: true },
 ];
+
+/** 「大小」那一排里按一下会连着按好几下：这几样按完不收那一排。 */
+const SIZE_STEPS = new Set([SELECTION_ACTIONS.SIZE_UP, SELECTION_ACTIONS.SIZE_DOWN, SELECTION_ACTIONS.SIZE_RESET]);
 
 export class SelectionBar {
   /**
@@ -56,6 +89,9 @@ export class SelectionBar {
     this._mode = null;        // 'selection' | 'paste'
     this._palette = null;
     this._paletteOpen = false;
+    /** 「大小」那一排（放大、缩小、百分比）和它开着没有。和色排一次只开一个。 */
+    this._sizeRow = null;
+    this._sizeOpen = false;
     /** 这一副条是按什么搭的：面孔、有没有填充那一排、用的哪排色。变了才重搭。 */
     this._key = null;
     /** 换色那排是不是分成了边框、填充两排。 */
@@ -69,13 +105,43 @@ export class SelectionBar {
     el.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      this._swallowClickOf(e.pointerId);
       if (action === SELECTION_ACTIONS.COLOR) { this._togglePalette(); return; }
+      if (action === SELECTION_ACTIONS.SIZE) { this._toggleSize(); return; }
+      // 放大缩小常常连着按好几下：那一排开着不收。
+      if (SIZE_STEPS.has(action)) { this.onAction?.(action, value); return; }
       // 两排的时候挑完不收：边框和填充常常是连着改的，收起来就得再点一次「颜色」。
       const picking = action === SELECTION_ACTIONS.COLOR_PICK
         || action === SELECTION_ACTIONS.FILL_PICK;
       if (!(picking && this._twoRows)) this._closePalette();
+      this._closeSize();
       this.onAction?.(action, value);
     });
+  }
+
+  /**
+   * 按下去那一下已经把事做完了；同一根手指抬起来时浏览器补的那一下 click 不许再落到别处。
+   *
+   * 按「识别」：条收起来，识别那一套界面的小条正好出在原来那颗按钮底下——那一下 click 落在小条的「取消」上，
+   * 刚开始认就被取消了（机上 10-17 用手指点出来的；测试和 CDP 发的按下没有后面那一下 click，看不出来）。只吞这根
+   * 指针的那一下（click 也带 pointerId），过一会儿还没来就不等了。
+   */
+  _swallowClickOf(pointerId) {
+    const doc = this.host?.ownerDocument;
+    if (!doc || pointerId == null) return;
+    let timer = 0;
+    const done = () => {
+      clearTimeout(timer);
+      doc.removeEventListener('click', swallow, true);
+    };
+    const swallow = (e) => {
+      if (e.pointerId !== pointerId) return;
+      e.preventDefault();
+      e.stopPropagation();
+      done();
+    };
+    doc.addEventListener('click', swallow, true);
+    timer = setTimeout(done, 800);
   }
 
   _button(spec) {
@@ -107,14 +173,26 @@ export class SelectionBar {
     }
     // 圈里有闭合的形状：边框一排、填充一排。填充那排打头的是「不填充」——它不是一
     // 种颜色，是「别填」，和形状卡片上填充那一排的头一格一个样。
+    //
+    // 边框那排在同一个位置空一格：两排的颜色要上下对齐。原来边框那排从第一格就是色，
+    // 填充那排多了「不填充」，同一个颜色在两排里错开一格——边框的黑正压在「不填充」
+    // 上面、边框的红压在填充的黑上面（人说「这个颜色位置视觉上有点怪」）。
     palette.append(
-      this._paletteRow('边框', edgeDots),
+      this._paletteRow('边框', [this._gapCell(), ...edgeDots]),
       this._paletteRow('填充', [
         this._noFillDot(),
         ...colors.map(color => this._dot(color, SELECTION_ACTIONS.FILL_PICK, 'fill')),
       ]),
     );
     return palette;
+  }
+
+  /** 边框那排里对着「不填充」的那个空位：占着一格的地方，看不见、点不到。 */
+  _gapCell() {
+    const gap = document.createElement('span');
+    gap.className = 'ink-selection-dot is-gap';
+    gap.setAttribute('aria-hidden', 'true');
+    return gap;
   }
 
   _dot(color, action, key) {
@@ -173,32 +251,88 @@ export class SelectionBar {
 
   _togglePalette() {
     if (!this._palette) return;
+    this._closeSize();
     this._paletteOpen = !this._paletteOpen;
     this._palette.hidden = !this._paletteOpen;
+    // 展开以后条有两三行高：两头还是半圆的话，高出来的那一截整个成了一个大半圆，色排贴着弯边（样式表按这个类换成圆角矩形）。
+    this.el?.classList.toggle('is-palette-open', this._paletteOpen);
   }
 
   _closePalette() {
     if (!this._palette || !this._paletteOpen) return;
     this._paletteOpen = false;
     this._palette.hidden = true;
+    this.el?.classList.remove('is-palette-open');
   }
 
-  /** 按当下该是哪一副面孔重建。两种面孔的按钮完全不同，所以是重建而不是切换。 */
-  _build(mode, colors, canFill = false) {
+  /**
+   * 「大小」那一排：缩小、眼下是原来的百分之几、放大。点百分比回到原来的大小。
+   *
+   * 也收在一颗按钮后面，和色排一样：条上已经五六个动作了。按一下放大、缩小是一步撤销；那一排开着不收，连着按几下就行。
+   */
+  _buildSizeRow() {
+    const row = document.createElement('div');
+    row.className = 'ink-selection-size';
+    row.hidden = true;
+    const step = (action, glyph, label) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'ink-selection-btn ink-selection-size-btn';
+      button.dataset.action = action;
+      button.title = label;
+      button.setAttribute('aria-label', label);
+      button.textContent = glyph;
+      this._press(button, action);
+      return button;
+    };
+    const value = step(SELECTION_ACTIONS.SIZE_RESET, '100%', '回到原来的大小');
+    value.classList.add('ink-selection-size-value');
+    row.append(step(SELECTION_ACTIONS.SIZE_DOWN, '−', '缩小'), value, step(SELECTION_ACTIONS.SIZE_UP, '+', '放大'));
+    this._sizeValue = value;
+    return row;
+  }
+
+  /** 那一排上的百分比：眼下是圈住（或刚写成）时的几倍。回到 100% 时那颗按不下去——已经是原来的大小了。 */
+  _markScale(scale) {
+    if (!this._sizeValue) return;
+    const pct = Math.round((Number.isFinite(scale) ? scale : 1) * 100);
+    this._sizeValue.textContent = `${pct}%`;
+    this._sizeValue.disabled = pct === 100;
+  }
+
+  _toggleSize(force) {
+    if (!this._sizeRow) return;
+    const open = typeof force === 'boolean' ? force : !this._sizeOpen;
+    if (open) this._closePalette();
+    this._sizeOpen = open;
+    this._sizeRow.hidden = !open;
+    this.el?.classList.toggle('is-palette-open', open || this._paletteOpen);
+  }
+
+  _closeSize() {
+    if (!this._sizeRow || !this._sizeOpen) return;
+    this._toggleSize(false);
+  }
+
+  /** 按当下该是哪一副面孔重建。几种面孔的按钮完全不同，所以是重建而不是切换。 */
+  _build(mode, colors, canFill = false, recognize = false, canColor = true) {
     // 面孔一样还不够：圈里有没有闭合形状、用的哪排色变了，色排也得跟着变。原来只
-    // 认面孔，工具栏的色换了，这里还是旧的那排。
-    const key = `${mode}|${canFill ? 1 : 0}|${(colors || []).join(',')}`;
+    // 认面孔，工具栏的色换了，这里还是旧的那排。识别接上、断开了，那颗按钮也跟着变。
+    const key = `${mode}|${canFill ? 1 : 0}|${recognize ? 1 : 0}|${canColor ? 1 : 0}|${(colors || []).join(',')}`;
     if (this.el && this._key === key) return;
     this.el?.remove();
     this._palette = null;
     this._paletteOpen = false;
+    this._sizeRow = null;
+    this._sizeValue = null;
+    this._sizeOpen = false;
     this._key = key;
     this._twoRows = mode !== 'paste' && !!canFill;
 
     const bar = document.createElement('div');
     bar.className = 'ink-selection-bar';
     bar.setAttribute('role', 'toolbar');
-    bar.setAttribute('aria-label', mode === 'paste' ? '剪贴板' : '选中内容的操作');
+    bar.setAttribute('aria-label', mode === 'paste' ? '剪贴板' : mode === 'region' ? t('ocr.regionLabel') : '选中内容的操作');
 
     const row = document.createElement('div');
     row.className = 'ink-selection-row';
@@ -208,11 +342,25 @@ export class SelectionBar {
         action: SELECTION_ACTIONS.PASTE, label: '粘贴', glyph: '⎘',
       }));
       bar.appendChild(row);
-    } else {
-      for (const spec of BUTTONS) row.appendChild(this._button(spec));
+    } else if (mode === 'region') {
+      // 圈里没套到笔迹、只圈了书上印的字：能做的只有认它。
+      row.appendChild(this._button(recognizeSpec()));
       bar.appendChild(row);
-      this._palette = this._buildPalette(colors, canFill);
-      bar.appendChild(this._palette);
+    } else {
+      for (const spec of BUTTONS) {
+        // 「识别」排在「删除」前面：危险的那一颗永远在最后。
+        if (spec.danger && recognize) row.appendChild(this._button(recognizeSpec()));
+        // 圈里只有图片：换色换不到它，「颜色」那一颗和色排都不摆。
+        if (spec.action === SELECTION_ACTIONS.COLOR && !canColor) continue;
+        row.appendChild(this._button(spec));
+      }
+      bar.appendChild(row);
+      if (canColor) {
+        this._palette = this._buildPalette(colors, canFill);
+        bar.appendChild(this._palette);
+      }
+      this._sizeRow = this._buildSizeRow();
+      bar.appendChild(this._sizeRow);
     }
 
     this.host.appendChild(bar);
@@ -228,15 +376,24 @@ export class SelectionBar {
    *   选区在屏幕上的外接矩形，CSS 像素，相对 host
    * @param {{width:number, height:number}} viewport  host 自己多大
    * @param {{mode?: string, colors?: Array<string>, canFill?: boolean,
-   *          current?: {color?: ?string, fill?: ?string}}} [opts]
+   *          current?: {color?: ?string, fill?: ?string}, recognize?: boolean,
+   *          scale?: number, openSize?: boolean}} [opts]
+   *   mode：'selection'（套到了笔迹）、'paste'（只剩粘贴）、'region'（识别区域，只有「识别」）；
    *   canFill：圈里有闭合的形状，换色那排分成边框、填充两排；current：这一片眼下
-   *   的颜色，标在色排上
+   *   的颜色，标在色排上；recognize：接了识别，套到笔迹时也多一颗「识别」；
+   *   scale：这一片眼下是原来的几倍（「大小」那一排上的百分比）；openSize：这一次把「大小」那一排打开；
+   *   canColor：圈里有能换色的东西（只圈了图片时没有，「颜色」不摆）
    */
-  place(box, viewport, { mode = 'selection', colors = [], canFill = false, current = null } = {}) {
+  place(box, viewport, {
+    mode = 'selection', colors = [], canFill = false, current = null, recognize = false,
+    scale = 1, openSize = false, canColor = true,
+  } = {}) {
     if (!box || !viewport || !this.host) { this.hide(); return; }
-    this._build(mode, colors, canFill);
+    this._build(mode, colors, canFill, recognize, canColor);
     if (!this.el) return;
     this._markCurrent(current);
+    this._markScale(scale);
+    if (openSize) this._toggleSize(true);
 
     if (!this._visible) {
       this.el.classList.add('is-visible');
@@ -256,12 +413,15 @@ export class SelectionBar {
 
     let left = (box.minX + box.maxX) / 2 - w / 2;
     left = Math.max(EDGE, Math.min(left, viewport.width - w - EDGE));
+    // 圈在页边时条会落到浮着的工具栏底下：横着挪开（见 float-avoid.js）。
+    left = avoidFloatingObstacles(this.host, left, top, w, h, viewport, EDGE);
 
     this.el.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
   }
 
   hide() {
     this._closePalette();
+    this._closeSize();
     if (!this.el || !this._visible) return;
     this.el.classList.remove('is-visible');
     this._visible = false;
@@ -271,6 +431,8 @@ export class SelectionBar {
     this.el?.remove();
     this.el = null;
     this._palette = null;
+    this._sizeRow = null;
+    this._sizeValue = null;
     this._visible = false;
     this._mode = null;
     this._key = null;

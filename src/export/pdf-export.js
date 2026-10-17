@@ -16,8 +16,14 @@
 // 器当成密文去解，出来一片乱码。那种书走 buildRasterPdf：每一页画成图、叠上笔迹、
 // 拼成一份新的 PDF。样子一样，只是字不能再选了。
 
-import { INK_TOOLS, TOOL_DEFAULTS } from '../ink/stroke.js';
-import { widthAt } from '../ink/ink-renderer.js';
+import { INK_TOOLS, TOOL_DEFAULTS, isImageStroke } from '../ink/stroke.js';
+import { smoothSamples, widthAt } from '../ink/ink-renderer.js';
+
+/**
+ * 手写笔迹的中心线细分到离那条平滑曲线多近（笔迹自己的坐标，和书页同一个单位）。屏幕上按 0.25 个像素算
+ * （ink-renderer.js 的 smoothSamples）；PDF 会被放大着看、被打印，这里给细一点。
+ */
+const EXPORT_SMOOTH_TOLERANCE = 0.05;
 
 /** 做不出来时的原因。调用方按这个决定是换一条路，还是告诉人。 */
 export const EXPORT_ERRORS = Object.freeze({
@@ -264,8 +270,16 @@ function smoothLine(out, pts) {
  */
 const GRAIN_COVER = 0.73;
 
-/** 采样点：去掉落在同一处的，最后一个一定留着（那是这一笔停下的地方）。 */
+/**
+ * 采样点：去掉落在同一处的，最后一个一定留着（那是这一笔停下的地方）。手写的再沿和屏幕上同一条平滑曲线细分
+ * （smoothSamples）；形状的角是真的角，不削。
+ */
 function samplesOf(stroke) {
+  const raw = rawSamplesOf(stroke);
+  return stroke.shape ? raw : smoothSamples(raw, EXPORT_SMOOTH_TOLERANCE);
+}
+
+function rawSamplesOf(stroke) {
   const out = [];
   const pts = stroke.points;
   for (let i = 0; i < pts.length; i++) {
@@ -286,13 +300,18 @@ function samplesOf(stroke) {
  * 状态在这里只留一个占位符（`/@GS0`）：它真正叫什么，要等把它挂到页面的资源上才知
  * 道——那个名字不能和原书里已有的撞上，得由 pdf-lib 去挑。
  *
+ * 贴在页上的图片也在这一段里、在它在层里的那个位置画（图是垫在字底下的那张纸）：一个 `/@IMG0 Do` 占位，
+ * 真正的名字和状态一样，要等图嵌进文件、挂到页面的资源上才知道（见 stampInk）。
+ *
  * @param {Array} strokes ink-layer 里的笔迹，笔迹自己的坐标
  * @param {number[]} matrix 笔迹坐标 → PDF 坐标
- * @returns {{content: string, states: Map<string, {alpha: number, blend: string|null}>}}
+ * @returns {{content: string, states: Map<string, {alpha: number, blend: string|null}>,
+ *            images: Map<string, string>}} images：占位符 → 图片的 id
  */
 export function inkOps(strokes, matrix) {
   const out = [];
   const states = new Map();
+  const images = new Map();
   const keyOf = new Map();
   /** 这一笔要的透明度和混合模式；完全不透明、正常混合就不用设。 */
   const gs = (alpha, blend) => {
@@ -313,6 +332,18 @@ export function inkOps(strokes, matrix) {
   for (const stroke of strokes || []) {
     const pts = Array.isArray(stroke?.points) ? stroke.points : [];
     if (!pts.length) continue;
+    if (isImageStroke(stroke)) {
+      // 图的四个角：左上、右上、右下、左下。PDF 把图画进一个单位方块（左下原点、y 朝上），这一个 cm 把那个方块
+      // 搬到这四个角上——转过、缩过的图照样对得上。
+      const [tl, , br, bl] = pts;
+      if (pts.length < 4 || ![tl, br, bl].every((p) => Number.isFinite(p?.x) && Number.isFinite(p?.y))) continue;
+      const token = `/@IMG${images.size}`;
+      images.set(token, stroke.image.id);
+      out.push('q', `${num(br.x - bl.x)} ${num(br.y - bl.y)} ${num(tl.x - bl.x)} ${num(tl.y - bl.y)} ${num(bl.x)} ${num(bl.y)} cm`,
+        `${token} Do`, 'Q');
+      painted++;
+      continue;
+    }
     const defaults = TOOL_DEFAULTS[stroke.tool] || TOOL_DEFAULTS[INK_TOOLS.PEN];
     const color = parseColor(stroke.color);
     const opacity = Number.isFinite(stroke.opacity) ? clamp01(stroke.opacity) : defaults.opacity;
@@ -367,7 +398,26 @@ export function inkOps(strokes, matrix) {
     painted++;
   }
   out.push('Q');
-  return { content: painted ? out.join('\n') : '', states };
+  return { content: painted ? out.join('\n') : '', states, images };
+}
+
+/**
+ * 要嵌进这一份 PDF 的图：同一张只嵌一次（几页上贴的同一张、复制出来的几份都指着它）。
+ * images：图片 id → { bytes, type }（导出前从库里取齐，见 export-document.js）。
+ *
+ * @returns {function(string): Promise<object|null>} 给一个 id，回嵌好的那张（pdf-lib 的 PDFImage）；没有、嵌不进去是 null
+ */
+export function imageEmbedder(doc, images) {
+  const cache = new Map();
+  return (id) => {
+    if (!cache.has(id)) {
+      const spec = images?.[id];
+      const embedding = !spec?.bytes ? Promise.resolve(null)
+        : (/png/i.test(spec.type || '') ? doc.embedPng(spec.bytes) : doc.embedJpg(spec.bytes));
+      cache.set(id, Promise.resolve(embedding).catch(() => null));
+    }
+    return cache.get(id);
+  };
 }
 
 /**
@@ -376,12 +426,25 @@ export function inkOps(strokes, matrix) {
  * pdf-lib 的 addContentStream 会先把原来的内容整个包进 `q … Q`，所以原书里没配对的
  * 坐标变换、裁剪不会漏到这一段来——笔迹不会因为原书某页最后留了一个 cm 而整片挪走。
  *
- * @returns {boolean} 真的画了东西
+ * 图片：嵌好、挂到页面的资源上，占位符换成它真正的名字；那张图没有了（库里丢了、读不出来）就不画它，别的照画。
+ *
+ * @param {function(string): Promise<object|null>} [embed] imageEmbedder 给的
+ * @returns {Promise<boolean>} 真的画了东西
  */
-function stampInk(doc, page, strokes, matrix) {
-  const { content, states } = inkOps(strokes, matrix);
+async function stampInk(doc, page, strokes, matrix, embed = null) {
+  const { content, states, images } = inkOps(strokes, matrix);
   if (!content) return false;
   let text = content;
+  // 同一页上贴了同一张图的几份：挂一个名字就够了。
+  const named = new Map();
+  for (const [token, id] of images) {
+    if (!named.has(id)) {
+      const image = embed ? await embed(id) : null;
+      named.set(id, image ? page.node.newXObject('DyImg', image.ref).toString() : null);
+    }
+    const name = named.get(id);
+    text = text.split(`${token} Do`).join(name ? `${name} Do` : '');
+  }
   for (const [token, spec] of states) {
     const dict = doc.context.obj({
       Type: 'ExtGState',
@@ -426,7 +489,7 @@ const PRODUCER = '对页 Duìyè';
  *          onProgress?: function(number, number)}} input
  * @returns {Promise<Uint8Array>}
  */
-export async function buildBookPdf({ bytes, pages, onProgress }) {
+export async function buildBookPdf({ bytes, pages, images, onProgress }) {
   const { PDFDocument } = await lib();
   let doc;
   try {
@@ -442,16 +505,76 @@ export async function buildBookPdf({ bytes, pages, onProgress }) {
 
   const all = doc.getPages();
   const todo = (pages || []).filter((p) => p?.strokes?.length && all[p.pageNumber - 1]);
+  const embed = imageEmbedder(doc, images);
   let done = 0;
   for (const { pageNumber, strokes } of todo) {
     const page = all[pageNumber - 1];
     const { view, rotate } = pageViewOf(page);
-    stampInk(doc, page, strokes, invertTransform(viewportTransform(view, rotate)));
+    await stampInk(doc, page, strokes, invertTransform(viewportTransform(view, rotate)), embed);
     onProgress?.(++done, todo.length);
   }
   try {
     // 对象流不开：开了要把整本书的对象重新压一遍，一本几百兆的书在平板上要多等好
     // 一会儿；不开，原来那些大块的图原样拷过去。
+    return await doc.save({ useObjectStreams: false, objectsPerTick: 64 });
+  } catch (error) {
+    throw new Error(EXPORT_ERRORS.UNREADABLE, { cause: error });
+  }
+}
+
+/**
+ * 一本书里挑出来的几页，做成一份新的 PDF（书签成书）。
+ *
+ * 页照原样拷过去（pdf-lib 的 copyPages：页面内容、字体、图都跟着走，字还能选，页面大小和旋转也照旧），
+ * 按 `pages` 给的次序排。`stamp` 为真时把每一页的笔迹画上去——那是「导出」要的一份；「存成新书」不画，
+ * 笔迹另外按页拷成新书自己的、还能接着改的笔迹，画进去就成了擦不掉的底子。
+ *
+ * @param {{bytes: Uint8Array|ArrayBuffer,
+ *          pages: Array<{pageNumber: number, strokes?: Array}>,
+ *          stamp?: boolean, title?: string,
+ *          onProgress?: function(number, number)}} input
+ * @returns {Promise<Uint8Array>}
+ */
+export async function buildPagesPdf({ bytes, pages, images, stamp = false, title = '', onProgress }) {
+  const { PDFDocument } = await lib();
+  let source;
+  try {
+    source = await PDFDocument.load(bytes, {
+      ignoreEncryption: true,
+      updateMetadata: false,
+      throwOnInvalidObject: false,
+    });
+  } catch (error) {
+    throw new Error(EXPORT_ERRORS.UNREADABLE, { cause: error });
+  }
+  if (source.isEncrypted) throw new Error(EXPORT_ERRORS.ENCRYPTED);
+
+  const count = source.getPageCount();
+  const wanted = (pages || []).filter((p) => Number.isInteger(p?.pageNumber)
+    && p.pageNumber >= 1 && p.pageNumber <= count);
+  if (!wanted.length) throw new Error(EXPORT_ERRORS.EMPTY);
+
+  const doc = await PDFDocument.create();
+  doc.setProducer(PRODUCER);
+  doc.setCreator(PRODUCER);
+  if (title) doc.setTitle(title);
+  let copied;
+  try {
+    copied = await doc.copyPages(source, wanted.map((p) => p.pageNumber - 1));
+  } catch (error) {
+    throw new Error(EXPORT_ERRORS.UNREADABLE, { cause: error });
+  }
+  const embed = imageEmbedder(doc, images);
+  for (let i = 0; i < copied.length; i++) {
+    const page = doc.addPage(copied[i]);
+    const strokes = wanted[i].strokes;
+    if (stamp && strokes?.length) {
+      const { view, rotate } = pageViewOf(page);
+      await stampInk(doc, page, strokes, invertTransform(viewportTransform(view, rotate)), embed);
+    }
+    onProgress?.(i + 1, copied.length);
+  }
+  try {
     return await doc.save({ useObjectStreams: false, objectsPerTick: 64 });
   } catch (error) {
     throw new Error(EXPORT_ERRORS.UNREADABLE, { cause: error });
@@ -469,7 +592,7 @@ export async function buildBookPdf({ bytes, pages, onProgress }) {
  *          strokesFor: function(number): Promise<Array>,
  *          onProgress?: function(number, number)}} input
  */
-export async function buildNotebookPdf({ pageCount, size, paper, strokesFor, onProgress }) {
+export async function buildNotebookPdf({ pageCount, size, paper, images, strokesFor, onProgress }) {
   const { PDFDocument, rgb } = await lib();
   const doc = await PDFDocument.create();
   doc.setProducer(PRODUCER);
@@ -478,11 +601,12 @@ export async function buildNotebookPdf({ pageCount, size, paper, strokesFor, onP
   const count = Math.max(1, Math.floor(Number(pageCount) || 1));
   // 本子页的坐标就是 pdf.js 给一页没转过、没裁过的纸的坐标：左上角原点、y 朝下。
   const matrix = invertTransform(viewportTransform([0, 0, size.width, size.height], 0));
+  const embed = imageEmbedder(doc, images);
   for (let n = 1; n <= count; n++) {
     const page = doc.addPage([size.width, size.height]);
     paintPaper(page, size, ready, rgb);
     const strokes = await strokesFor(n);
-    if (strokes?.length) stampInk(doc, page, strokes, matrix);
+    if (strokes?.length) await stampInk(doc, page, strokes, matrix, embed);
     onProgress?.(n, count);
   }
   return doc.save();
@@ -521,7 +645,7 @@ export function scratchPageBox(strokes, { margin = 24, maxSide = 14400 } = {}) {
  *
  * @param {{strokes: Array, box: object, paper?: object}} input
  */
-export async function buildScratchPdf({ strokes, box, paper }) {
+export async function buildScratchPdf({ strokes, box, paper, images }) {
   if (!box) throw new Error(EXPORT_ERRORS.EMPTY);
   const { PDFDocument, rgb } = await lib();
   const doc = await PDFDocument.create();
@@ -532,7 +656,7 @@ export async function buildScratchPdf({ strokes, box, paper }) {
   const page = doc.addPage([size.width, size.height]);
   paintPaper(page, size, ready, rgb);
   const k = box.scale;
-  stampInk(doc, page, strokes, [k, 0, 0, -k, -k * box.x0, k * box.y1]);
+  await stampInk(doc, page, strokes, [k, 0, 0, -k, -k * box.x0, k * box.y1], imageEmbedder(doc, images));
   return doc.save();
 }
 

@@ -254,6 +254,16 @@ await test('钢笔：一条路径填一次（非零环绕），完全不透明�
   assert.ok(content.startsWith('q\n1 0 0 -1 0 842 cm'), '先整体换到 PDF 的坐标');
 });
 
+await test('手写的转角：导出也沿和屏幕上同一条平滑曲线细分（转角那一段多出几个圆）；形状的角原样', () => {
+  // 人说「笔迹转折还略显突兀」，屏幕上改成沿平滑曲线拼（ink-renderer.js 的 smoothSamples）；导出来的得是同一条。
+  const corner = [[0, 0], [30, 0], [60, 0], [60, 30], [60, 60]];
+  const circles = (content) => (content.match(/ c\n/g) || []).length / 4;
+  const hand = circles(X.inkOps([stroke(corner)], MAT).content);
+  const shape = circles(X.inkOps([stroke(corner, { shape: { kind: 'rect' } })], MAT).content);
+  assert.equal(shape, 5, '形状：每个采样点一个圆，角不削');
+  assert.ok(hand > 5, `手写：转角那一段细分了（${hand} 个圆）`);
+});
+
 await test('荧光笔：等宽描一次边、圆头圆角、正片叠底、0.35 的透明度', () => {
   const { content, states } = X.inkOps([stroke([[10, 10], [40, 20], [80, 10]],
     { tool: 'highlighter', color: '#facc15', width: 16, opacity: 0.35 })], MAT);

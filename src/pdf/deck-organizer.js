@@ -77,6 +77,8 @@ export function openOrganizer({ getDecks, describe, positions, onMove }) {
 
     const onKey = (e) => {
       if (e.key !== 'Escape') return;
+      // 切到了设置页，它跟着练习页收起来了（pdf.css）：这一下是设置页的。
+      if (getComputedStyle(overlay).display === 'none') return;
       e.preventDefault();
       e.stopPropagation();
       // Escape stops an uncommitted drag first, and only then closes the panel.

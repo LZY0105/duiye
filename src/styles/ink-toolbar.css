@@ -299,6 +299,8 @@
 }
 /* 浮起来放大多少：纸不浮起来，把它设成 1（paper.css）。 */
 .ink-scrub-drop.is-on { opacity: 1; scale: var(--scrub-lift, 1.3); }
+/* 划出横杠外面待住了：玻璃回到原来那一支上、落回镜片那么大——松手什么都不换（脚本把它挪回去，见 _installScrub）。 */
+.ink-scrub-drop.is-on.is-away { scale: 1; }
 /* ── colour swatches ──────────────────────────────────────────────────────── */
 
 .ink-swatch {
@@ -1064,12 +1066,45 @@ body.is-top-hidden .ink-toolbar.is-perched.is-perch-hanging { pointer-events: au
   gap: 2px;
 }
 
+/* 展开以后条有两三行高：两头还是半圆的话，高出来的那一截整个成了一个大半圆，色排贴着弯边——换成圆角矩形。
+   色排和上面那一行动作之间一道细线：上面是「做什么」，下面是「改成什么色」，是两件事。 */
+.ink-selection-bar.is-palette-open { border-radius: 22px; }
+
 .ink-selection-palette {
   display: flex;
   gap: 6px;
-  padding: 8px 6px 4px;
+  margin-top: 4px;
+  padding: 10px 6px 4px;
+  border-top: 0.5px solid rgba(255, 255, 255, 0.16);
   justify-content: center;
 }
+
+/* 「大小」那一排：缩小、百分比、放大。和色排一样收在条下面、隔一道细线；三颗都是手指能按的大小，百分比的数字等宽，
+   按着变的时候那一排不晃。 */
+.ink-selection-size {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 6px 4px 0;
+  border-top: 0.5px solid rgba(255, 255, 255, 0.16);
+}
+.ink-selection-size[hidden] { display: none; }
+.ink-selection-size-btn {
+  justify-content: center;
+  min-width: 44px;
+  min-height: 36px;
+  font-size: 1.15rem;
+  line-height: 1;
+}
+.ink-selection-size-value {
+  min-width: 64px;
+  font-size: 0.84rem;
+  font-variant-numeric: tabular-nums;
+}
+/* 已经是原来的大小：那颗不亮，也按不下去。 */
+.ink-selection-size-value:disabled { opacity: 0.55; cursor: default; }
 
 .ink-selection-dot {
   width: 26px;
@@ -1084,10 +1119,18 @@ body.is-top-hidden .ink-toolbar.is-perched.is-perch-hanging { pointer-events: au
 .ink-selection-dot:active { transform: scale(0.9); }
 
 /* 圈里有闭合形状时：边框一排、填充一排，各挑各的。每排左边一个字说它改的是哪一
-   样——两排一模一样的色点，不说就分不出哪排是哪排。 */
+   样——两排一模一样的色点，不说就分不出哪排是哪排。
+   两排一样宽（边框那排在「不填充」的位置空一格），整块居中：同一个颜色上下对齐，
+   也不再全挤在左边、右边空出一大截。 */
 .ink-selection-palette.is-two-rows {
   flex-direction: column;
-  align-items: stretch;
+  align-items: center;
+}
+
+/* 边框那排里对着「不填充」的那个空位：占地方，不画、不接手指。 */
+.ink-selection-dot.is-gap {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .ink-selection-palette-row {
@@ -1096,12 +1139,13 @@ body.is-top-hidden .ink-toolbar.is-perched.is-perch-hanging { pointer-events: au
   gap: 6px;
 }
 
+/* 条本身是深底（液态玻璃里另给颜色）：字用半透明的白，不用 --muted——那是给浅底的灰，压在深底上几乎看不见。 */
 .ink-selection-palette-label {
   flex: 0 0 auto;
   min-width: 2.6em;
   font-size: 12px;
   font-weight: 600;
-  color: var(--muted, #64748b);
+  color: rgba(255, 255, 255, 0.62);
   text-align: right;
 }
 

@@ -8,9 +8,9 @@
 // 见 pdf-files.js）。所以「点进去只看得见 PDF」是结构上成立的，不是靠一个可以被绕
 // 过的筛选条件。
 //
-// 面板不做导入，只回答「选了哪一份」。导入那一步（问角色、读字节、写库）还在
-// pdf-workspace-ui.js 里，和系统选择器那条路共用——两条路在 readDevicePdf 之后就合
-// 并了，往下只有一条，不会长出第二套导入逻辑。
+// 面板不做导入，只回答「选了哪几份」（可以多选，人说「导入文件时要允许用户多选」）。导入那一步
+// （问角色、读字节、写库）还在 pdf-workspace-ui.js 里，和系统选择器那条路共用——两条路在
+// readDevicePdf 之后就合并了，往下只有一条，不会长出第二套导入逻辑。
 //
 // 这个文件还管「问权限」那一步（ensureFilesPermission）。它在面板**之前**跑：没有
 // 权限的面板是空的，而空面板不会告诉人为什么空——看着就像这台机器上没有 PDF。
@@ -122,9 +122,9 @@ function formatDate(ms) {
 }
 
 /**
- * 打开面板，等人选一份。
+ * 打开面板，等人选。可以多选：点一行勾上、再点取消，按钮上写着要导几份。
  *
- * @returns {Promise<Object|null>} 选中的那一条（uri/name/size/…），取消则 null
+ * @returns {Promise<Array<Object>|null>} 选中的那几条（uri/name/size/…），按勾选的先后；取消则 null
  */
 export function openDevicePdfPicker({ title } = {}) {
   return new Promise((resolve) => {
@@ -163,7 +163,13 @@ export function openDevicePdfPicker({ title } = {}) {
       overlay.remove();
       resolve(value);
     };
-    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); finish(null); } };
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      // 切到了设置页，它跟着练习页收起来了（pdf.css）：这一下是设置页的。
+      if (getComputedStyle(overlay).display === 'none') return;
+      e.stopPropagation();
+      finish(null);
+    };
     document.addEventListener('keydown', onKey, true);
 
     const body = overlay.querySelector('[data-role="body"]');
@@ -173,9 +179,16 @@ export function openDevicePdfPicker({ title } = {}) {
     const searchRow = overlay.querySelector('.pdf-picker-search');
 
     let all = [];
-    let chosen = null;
+    /** 勾上的那几份：uri → 那一条。Map 记着勾选的先后，导入就按这个顺序。 */
+    const picked = new Map();
+    const pickedList = () => [...picked.values()];
 
-    const syncConfirm = () => { confirm.disabled = !chosen; };
+    const syncConfirm = () => {
+      confirm.disabled = picked.size === 0;
+      confirm.textContent = picked.size > 1
+        ? t('picker.confirmCount', { count: picked.size })
+        : t('picker.confirm');
+    };
 
     /** 空的时候说清楚是「没有」还是「没权限」，那是两件不同的事。 */
     const showNotice = (message, action) => {
@@ -206,12 +219,14 @@ export function openDevicePdfPicker({ title } = {}) {
       const list = document.createElement('div');
       list.className = 'pdf-picker-list';
       list.setAttribute('role', 'listbox');
+      list.setAttribute('aria-multiselectable', 'true');
       for (const file of rows) {
+        const on = picked.has(file.uri);
         const row = document.createElement('button');
         row.type = 'button';
-        row.className = `pdf-picker-row${chosen?.uri === file.uri ? ' is-chosen' : ''}`;
+        row.className = `pdf-picker-row${on ? ' is-chosen' : ''}`;
         row.setAttribute('role', 'option');
-        row.setAttribute('aria-selected', String(chosen?.uri === file.uri));
+        row.setAttribute('aria-selected', String(on));
         row.innerHTML = `
           <span class="pdf-picker-tick" aria-hidden="true"></span>
           <span class="pdf-picker-name"></span>
@@ -221,20 +236,38 @@ export function openDevicePdfPicker({ title } = {}) {
         row.querySelector('.pdf-picker-name').textContent = file.name || '';
         row.title = file.folder ? `${file.folder}${file.name}` : (file.name || '');
         row.addEventListener('click', () => {
-          chosen = chosen?.uri === file.uri ? null : file;
+          if (picked.has(file.uri)) picked.delete(file.uri);
+          else picked.set(file.uri, file);
           syncConfirm();
-          render();
+          // 只改这一行和底下那个数，不重画整张单子：重画会把人滚到的位置冲掉——多选的时候人是一路往下
+          // 滚着勾的。
+          const now = picked.has(file.uri);
+          row.classList.toggle('is-chosen', now);
+          row.setAttribute('aria-selected', String(now));
+          syncCount(rows.length);
         });
-        // 双击直接就是「选它并导入」——列表最常见的用法是找到那一本就走。
-        row.addEventListener('dblclick', () => { chosen = file; finish(chosen); });
+        // 双击就是「连同它一起，导入」——只找一本的时候，找到就走。
+        row.addEventListener('dblclick', () => {
+          picked.set(file.uri, file);
+          finish(pickedList());
+        });
         list.appendChild(row);
       }
       body.replaceChildren(list);
       foot.replaceChildren();
       const count = document.createElement('span');
       count.className = 'pdf-picker-count';
-      count.textContent = t('picker.count', { count: rows.length });
       foot.appendChild(count);
+      syncCount(rows.length);
+    };
+
+    /** 底下那个数：勾了几份就说「已选几份 · 共几份」，一份没勾只说共几份。 */
+    const syncCount = (total) => {
+      const count = foot.querySelector('.pdf-picker-count');
+      if (!count) return;
+      count.textContent = picked.size
+        ? t('picker.selected', { count: picked.size, total })
+        : t('picker.count', { count: total });
     };
 
     const load = async () => {
@@ -274,7 +307,7 @@ export function openDevicePdfPicker({ title } = {}) {
 
     search.addEventListener('input', render);
     overlay.querySelector('[data-role="cancel"]').addEventListener('click', () => finish(null));
-    confirm.addEventListener('click', () => { if (chosen) finish(chosen); });
+    confirm.addEventListener('click', () => { if (picked.size) finish(pickedList()); });
     // 点面板以外的地方也算取消，和应用里其它那几张覆盖层一致。
     overlay.addEventListener('pointerdown', (e) => { if (e.target === overlay) finish(null); });
 

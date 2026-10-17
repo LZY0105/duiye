@@ -62,6 +62,7 @@ import {
   LABEL_MAX, hasBookmark, renameBookmark, toggleBookmark,
 } from './bookmark-state.js';
 import { forgetBookmarks, loadBookmarks, saveBookmarks } from './bookmark-store.js';
+import { derivedFrom, forgetDerived } from './derived-store.js';
 import {
   createPanelState,
   selectTab as panelSelectTab,
@@ -131,6 +132,8 @@ import { verifyPair } from './pair-verifier.js';
 import { PAIR_STATUS } from './decision.js';
 import { renderAnswerMatches, renderAnswerNotice, renderAnswerLoading } from './answer-panel.js';
 import { InkToolbar, overlaps } from '../ink/ink-toolbar.js';
+import { ImagePicker } from '../ink/ink-image-picker.js';
+import { prepareImage } from '../ink/ink-image.js';
 import { CORNERS, EDGES, TOOLBAR_PHASE } from '../ink/toolbar-state.js';
 import Logger from '../core/logger.js';
 
@@ -413,6 +416,8 @@ export class PdfWorkspace {
       onSubmit: (question) => this.submitAgentQuestion(question),
       onClear: () => this.clearAgentConversation(),
       onClose: () => { this.agentTarget = null; },
+      // 拖到了另一边、另一个高度：贴边的工具栏挡不挡它，要重新量。
+      onPlace: () => this._syncAgentFab(),
     });
 
     // 空工作区上那两颗按钮和横杠上的「导入」是同一个动作，所以走同一条路——
@@ -443,7 +448,7 @@ export class PdfWorkspace {
         // 笔一落到纸上，工具栏就该让开——前提是人在设置里要过这件事。
         onInkDraw: () => this.toolbar?.minimizeOnDraw?.(),
         onInkHistoryChange: () => this._syncSlotChrome(slot),
-        onInkDragOver: (at) => this._markInkDropTarget(slot, at),
+        onInkDragOver: (at) => this._previewInkDrag(slot, at),
         onInkDragDrop: (payload) => this._dropInkIntoOtherSlot(slot, payload),
       });
       this.strips[slot] = new DeckStrip(this.elSlots[slot], {
@@ -476,6 +481,9 @@ export class PdfWorkspace {
         getBookmarks: () => this._bookmarksIn(slot),
         onToggleBookmark: (page) => this._toggleBookmark(slot, page),
         onNameBookmark: (mark) => this._nameBookmark(slot, mark),
+        // 书签那一页底下的「书签成书」：本子也有书签，但只有书做得了，见 canMakeBookFromMarks。
+        canMakeBookFromMarks: () => this.canMakeBookFromMarks(slot),
+        onBookFromMarks: () => this.bookFromMarksSlot(slot),
         getInkDocId: () => {
           const entry = this._entryOnScreen(slot);
           // 本子的笔迹和书的走同一条路（ink-store 按 (id, 页码) 存），所以缩略
@@ -588,23 +596,15 @@ export class PdfWorkspace {
   }
 
   /**
-   * 拖动途中：把手指底下那一栏点亮。
+   * 拖动途中：越过分隔条的那一截，在对面那一栏当场画出来。
    *
-   * 一片被拖到半空中的笔迹，如果没有任何东西表示它会落在哪，人只会以为自己把它
-   * 拖丢了——于是松手前就缩回来了，这个功能等于不存在。
+   * 原来还会给手指底下那一栏描一圈蓝框，表示「松手会落在这儿」。拿掉了：对面已经
+   * 实时画出了这一片本身，落在哪一眼就看得见，再框一圈只是多一层蓝。
    */
-  _markInkDropTarget(fromSlot, at) {
-    // 预览要先做，而且每一次移动都要做：下面那个「目标没变就直接回去」的短路是
-    // 给描边用的（描边一次手势只变两下），而这一片是每一帧都在动的。
-    this._showInkGhost(fromSlot, at?.ghost || null);
-
-    const hit = at?.outside ? this._inkSurfaceAt(at.clientX, at.clientY) : null;
-    const target = hit && hit.slot !== fromSlot ? hit.slot : null;
-    if (this._inkDropSlot === target) return;
-    this._inkDropSlot = target;
-    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
-      this.elSlots?.[slot]?.classList.toggle('is-ink-drop', slot === target);
-    }
+  _previewInkDrag(fromSlot, at) {
+    // 每一次移动都要做：这一片是每一帧都在动的。回的是「这一片探进对面那一栏了没有」：源画布拿它判断松在
+    // 原栏时要不要把探过去的那一截收回来（见 InkSurface._offerDragOut）。
+    return this._showInkGhost(fromSlot, at?.ghost || null);
   }
 
   /**
@@ -618,7 +618,7 @@ export class PdfWorkspace {
   _dropInkIntoOtherSlot(fromSlot, { strokes, clientX, clientY, scale, origin } = {}) {
     const hit = this._inkSurfaceAt(clientX, clientY);
     if (!hit || hit.slot === fromSlot) {
-      this._markInkDropTarget(fromSlot, null);
+      this._previewInkDrag(fromSlot, null);
       return null;
     }
     // 回的不是「接住了没有」，是一组把手：源那边要把「撤销拖走」接到这一份上，
@@ -628,7 +628,7 @@ export class PdfWorkspace {
     const landed = hit.view.ink.adoptStrokes(strokes, clientX, clientY, scale, origin);
     // 先落地再撤预览。反过来的话中间会空一帧——那一帧上这一片哪儿都不在，看着就
     // 是闪了一下。
-    this._markInkDropTarget(fromSlot, null);
+    this._previewInkDrag(fromSlot, null);
     if (landed) {
       // 落过去之后那一栏就是活动栏：人接下来要动的是它。
       this._markActive(hit.slot);
@@ -645,13 +645,19 @@ export class PdfWorkspace {
    * 边。按手指判的话，那半边会一直被切掉，直到手指自己也过去。
    */
   _showInkGhost(fromSlot, ghost) {
+    let reached = false;
     for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
       if (slot === fromSlot) continue;
       const surface = this._loadedViewIn(slot)?.ink;
       if (!surface) continue;
-      if (ghost && this._ghostReaches(surface, ghost.bounds)) surface.showDragGhost(ghost);
-      else surface.clearDragGhost();
+      if (ghost && this._ghostReaches(surface, ghost.bounds)) {
+        surface.showDragGhost(ghost);
+        reached = true;
+      } else {
+        surface.clearDragGhost();
+      }
     }
+    return reached;
   }
 
   _ghostReaches(surface, bounds) {
@@ -1730,35 +1736,46 @@ export class PdfWorkspace {
     const width = column ? rect.width : this._toolbarColumnWidth(fractions, rect);
 
     this.toolbar.fitTo({ height: rect.height, column: width });
+    // Agent 那颗按钮也不进栏头：拖不进去，记着的高度落进去了也往下让。
+    this._agentSafe = safe;
+    this.agentPanel?.setSafeArea?.(safe.top, safe.bottom);
     this._syncAgentFab(rect);
   }
 
   /**
-   * Agent 那颗圆按钮给贴在右边的工具栏让路。
+   * Agent 那颗圆按钮给贴边的工具栏让路。
    *
-   * 那颗按钮钉在工作区右边、正中间，48px；工具栏贴右边时也在那儿，而且更长——
-   * 按钮正好压在它中间那两格上（多半是颜色），层级还比它高，那两格就点不到了。
-   * 两样东西都是浮在工作区上的，谁也不知道谁，所以由这里来量：横杠展开着、贴右
-   * 边、竖着方向上和按钮相交，按钮就挪到它左边，隔 8px。收成球、贴别的边、或者
-   * 根本不相交的时候，它回原处。
+   * 那颗按钮默认钉在工作区右边、正中间，48px；人可以把它拖到左边或右边的任何高度
+   * （agent-panel.js）。工具栏贴在同一条边上时也在那儿，而且更长——按钮正好压在它某两格
+   * 上（多半是颜色），层级还比它高，那两格就点不到了。两样东西都是浮在工作区上的，谁也不
+   * 知道谁，所以由这里来量：横杠展开着、贴着按钮那一边、竖着方向上和按钮相交，按钮就挪到
+   * 它里侧，隔 8px。收成球、贴别的边、或者根本不相交的时候，它回原处。
    *
    * 用的是横杠停稳之后的位置（toolbar.rect），不是这一帧画在哪儿，理由同
    * _toolbarSafeArea：展开的头几百毫秒它还在从球的位置飞过来。
    */
-  _syncAgentFab(rect = this.root?.getBoundingClientRect?.()) {
+  _syncAgentFab(rect = this.root?.getBoundingClientRect?.(), safe = this._agentSafe) {
     const layer = this.root?.querySelector?.('.pdf-agent-layer');
     if (!layer || !rect?.height) return;
+    const { side, y } = this.agentPanel?.placement?.() || { side: 'right', y: 0.5 };
+    const onLeft = side === 'left';
     const state = this.toolbar?.state;
     const bar = this.toolbar?.rect?.();
     const FAB = 48;
-    let right = 14;
-    if (state?.phase === TOOLBAR_PHASE.EXPANDED && state.edge === EDGES.RIGHT && bar?.width) {
-      const middle = rect.top + rect.height / 2;
+    const MARGIN = 14;
+    // 按钮占的那一条竖带：和样式表里一样，正中在 y 处，上面不进栏头、下面留 14px。
+    const top = Math.min(
+      Math.max(y * rect.height - FAB / 2, (safe?.top || 0) + MARGIN),
+      rect.height - (safe?.bottom || 0) - MARGIN - FAB,
+    );
+    const middle = rect.top + top + FAB / 2;
+    let inset = MARGIN;
+    if (state?.phase === TOOLBAR_PHASE.EXPANDED && state.edge === (onLeft ? EDGES.LEFT : EDGES.RIGHT) && bar?.width) {
       if (bar.top < middle + FAB / 2 && bar.bottom > middle - FAB / 2) {
-        right = Math.round(rect.right - bar.left) + 8;
+        inset = Math.round(onLeft ? bar.right - rect.left : rect.right - bar.left) + 8;
       }
     }
-    layer.style.setProperty('--agent-fab-right', `${right}px`);
+    layer.style.setProperty(onLeft ? '--agent-fab-left' : '--agent-fab-right', `${inset}px`);
   }
 
   /**
@@ -1848,8 +1865,6 @@ export class PdfWorkspace {
     // underneath, and the slot knows which it is showing.
     on('zoom-out', () => this.viewFor(slot)?.zoomOut());
     on('zoom-in', () => this.viewFor(slot)?.zoomIn());
-    on('fit-width', () => pane.fitWidth());
-    on('fit-page', () => pane.fitPage());
 
     on('scratch-origin', () => this.scratchPanes[slot]?.returnToOrigin());
     on('scratch-fit', () => {
@@ -1879,8 +1894,11 @@ export class PdfWorkspace {
       const entry = activeEntryIn(this.state, slot);
       if (entry) this.removeEntry(slot, entry.id);
     });
+    on('insert-image', () => { this._closeSlotMenus(); this.insertImage(slot); });
     on('organize', () => { this._closeSlotMenus(); this.organize(slot, null); });
     on('export-pdf', () => { this._closeSlotMenus(); this.exportSlot(slot); });
+    on('marks-book', () => { this._closeSlotMenus(); this.bookFromMarksSlot(slot); });
+    on('marks-sync', () => { this._closeSlotMenus(); this.syncFromSourceSlot(slot); });
     on('scratch-style', () => {
       this._closeSlotMenus();
       const kind = activeEntryIn(this.state, slot)?.kind;
@@ -2024,6 +2042,8 @@ export class PdfWorkspace {
       n.setAttribute('aria-label', label);
     };
     set('scratch-origin', n => labelled(n, t('scratch.origin')));
+    // 栏上那颗「插入图片」：只有图标，字在提示和读屏里。书、本子、草稿纸都有。
+    set('insert-image', n => { labelled(n, t('image.insert')); n.disabled = !loaded; });
     set('scratch-fit', n => labelled(n, t('scratch.fitAll')));
     set('scratch-save', n => {
       const state = scratchPane?.saveState || SAVE_STATES.SAVED;
@@ -2054,6 +2074,16 @@ export class PdfWorkspace {
     set('close', n => { n.textContent = t('deck.removeFromPane'); });
     set('organize', n => { n.textContent = t('deck.organize'); });
     set('export-pdf', n => { n.textContent = t('export.menu'); });
+    // 只给标过书签的书：没有书签时这一项点进去什么都挑不出来，不如不摆。
+    set('marks-book', n => {
+      n.hidden = !loaded || !this.canMakeBookFromMarks(slot);
+      n.textContent = t('marksBook.menu');
+    });
+    // 书签成书做出来的书：从母本把那几页的最新批注拉过来。
+    set('marks-sync', n => {
+      n.hidden = !loaded || !this.canSyncFromSource(slot);
+      n.textContent = t('marksBook.syncMenu');
+    });
     set('scratch-style', n => {
       n.hidden = !scratch && !note;
       n.textContent = note ? t('note.style') : t('scratch.style');
@@ -2409,6 +2439,44 @@ export class PdfWorkspace {
     this._persist();
   }
 
+  /**
+   * 「插入图片」（栏头上缩放后面那一颗）：这一栏显示着的那一页上先占一个框，旁边一张单子挑图（ink-image-picker.js），挑好了
+   * 等比放进那个框里（InkSurface.insertImage）。书、本子、草稿纸都行——图是这一层里的一笔，存盘、导出、套索、
+   * 撤销都和笔迹走一样的路。书页上框收在这一页里面，不落到页外面的灰边上。
+   *
+   * @returns {boolean} 单子打开了
+   */
+  insertImage(slot) {
+    const view = this.viewFor(slot);
+    const surface = view?.ink;
+    if (!surface || !view.isLoaded?.()) return false;
+    const size = view.pageSize;
+    const limit = size?.width > 0 && size?.height > 0
+      ? { minX: 0, minY: 0, maxX: size.width, maxY: size.height } : null;
+    let box = surface.imageSlotBox(limit);
+    const viewport = surface.viewportSize();
+    const host = surface.canvas?.parentElement;
+    if (!box || !viewport || !host) return false;
+    this._imagePicker?.close();
+    const picker = new ImagePicker(host, {
+      // 窄的那一栏里框给单子让了地方：图放进挪过去的那个框里。
+      onSlotMove: (rect) => { box = surface.docBoxOf(rect); },
+      onPick: async (blob) => {
+        try {
+          const prepared = await prepareImage(blob);
+          return !!(await surface.insertImage(prepared, box));
+        } catch (error) {
+          Logger.warn('PDF', `插入图片没放进去：${error?.message || error}`);
+          return false;
+        }
+      },
+      onClose: () => { if (this._imagePicker === picker) this._imagePicker = null; },
+    });
+    this._imagePicker = picker;
+    picker.open(surface.screenRectOf(box), viewport);
+    return true;
+  }
+
   // ── decks: showing, cycling, removing ─────────────────────────────────────
 
   /** The pane this slot's ACTIVE entry belongs to — a book's or a pad's. */
@@ -2459,7 +2527,7 @@ export class PdfWorkspace {
       onInkDraw: () => this.toolbar?.minimizeOnDraw?.(),
       onInkHistoryChange: () => this._syncSlotChrome(slot),
       onSaveStateChange: () => this._syncSlotChrome(slot),
-      onInkDragOver: (at) => this._markInkDropTarget(slot, at),
+      onInkDragOver: (at) => this._previewInkDrag(slot, at),
       onInkDragDrop: (payload) => this._dropInkIntoOtherSlot(slot, payload),
     });
     this.scratchPanes[slot] = pane;
@@ -2918,6 +2986,56 @@ export class PdfWorkspace {
     if (!entry?.resourceId) return;
     const name = this.describeEntry(slot, entry)?.name || '';
     this.onExport?.({ kind: entry.kind, id: entry.resourceId, name });
+  }
+
+  /**
+   * 这一栏的书能不能「书签成书」：是一本书（不是本子、草稿纸），而且标过书签。
+   *
+   * 本子的页也能记书签，但本子不是文档库里的一份 PDF，拷不出「原书的那几页」，所以只给书。
+   */
+  canMakeBookFromMarks(slot) {
+    const entry = this._entryOnScreen(slot);
+    return entry?.kind === ENTRY_KINDS.PDF && !!entry.resourceId && this._bookmarksIn(slot).length > 0;
+  }
+
+  /** 这一栏的书是书签成书做出来的、母本还在：本栏 ⋯ 里给「从母本更新」。 */
+  canSyncFromSource(slot) {
+    const entry = this._entryOnScreen(slot);
+    return entry?.kind === ENTRY_KINDS.PDF && !!derivedFrom(entry.resourceId);
+  }
+
+  /** 「从母本更新」：交给界面层（onSyncFromSource，见 pdf-workspace-ui.js 的 syncFromSource）。 */
+  syncFromSourceSlot(slot) {
+    if (!this.canSyncFromSource(slot)) return;
+    const entry = this._entryOnScreen(slot);
+    this.onSyncFromSource?.({ id: entry.resourceId, name: this.describeEntry(slot, entry)?.name || '' });
+  }
+
+  /**
+   * 一页笔迹被整份换过了（从母本更新）：两栏里正显示着这一页的，就地换上（见 PdfPane.replaceInk）。
+   * 没显示着的不用管——它们下次翻到这一页时从存储里读，读到的就是新的。
+   */
+  replaceInkOnScreen(resourceId, page, strokes) {
+    for (const slot of [SLOTS.PRIMARY, SLOTS.SECONDARY]) {
+      if (this._entryOnScreen(slot)?.resourceId !== resourceId) continue;
+      this.panes[slot]?.replaceInk?.(resourceId, page, strokes);
+    }
+  }
+
+  /**
+   * 「书签成书」：把这一栏的书、它的书签交给界面层（onBookFromMarks，见 pdf-workspace-ui.js 的
+   * makeBookFromMarks）。挑页、做文件、存进文档库或导出都是那边的事，和导出一样。
+   */
+  bookFromMarksSlot(slot) {
+    if (!this.canMakeBookFromMarks(slot)) return;
+    const entry = this._entryOnScreen(slot);
+    const name = this.describeEntry(slot, entry)?.name || '';
+    this.onBookFromMarks?.({
+      id: entry.resourceId,
+      name,
+      slot,
+      marks: this._bookmarksIn(slot),
+    });
   }
 
   /**
@@ -3474,6 +3592,8 @@ export class PdfWorkspace {
     // The marks describe pages of a document that is about to stop existing.
     forgetBookmarks(resourceId);
     if (this._marks) delete this._marks[resourceId];
+    // 书签成书的那根线：它是新书就断线，它是母本，从它做出来的新书也没有母本可更新了。
+    forgetDerived(resourceId);
     // An association naming a book that no longer exists would send the next
     // lookup after bytes that are not there.
     forgetPairsFor(resourceId);
@@ -4551,14 +4671,18 @@ function slotChrome(slot) {
                   stroke-linejoin="round"/>
           </svg>
         </button>
+        <!-- 翻页这一组到此为止：后面是缩放。和后面几组一样用一道线隔开（草稿纸没有这一组，线跟着一起藏）。 -->
+        <span class="pdf-slot-sep"></span>
       </span>
+      <!-- 缩放只剩「−」「+」：「适合宽度」「整页」两颗拿掉了（人说「去掉右边两个按钮」），两指捏合照样缩放。 -->
       <button type="button" class="pdf-slot-btn" data-role="zoom-out" title="缩小" aria-label="缩小"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg></button>
       <span class="pdf-slot-zoom" data-role="zoom-label"></span>
       <button type="button" class="pdf-slot-btn" data-role="zoom-in" title="放大" aria-label="放大"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg></button>
-      <span class="pdf-slot-group is-pdf-only">
-        <button type="button" class="pdf-slot-btn" data-role="fit-width" title="适合宽度" aria-label="适合宽度"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5v13M20 5.5v13"/><path d="M7.5 12h9"/><path d="m10 9.5-2.5 2.5 2.5 2.5M14 9.5l2.5 2.5-2.5 2.5"/></svg></button>
-        <button type="button" class="pdf-slot-btn" data-role="fit-page" title="整页" aria-label="整页"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 4.5h5v5M9.5 19.5h-5v-5M19.5 4.5l-5.8 5.8M4.5 19.5l5.8-5.8"/></svg></button>
-      </span>
+      <!-- 插入图片：这一栏显示着的那一页（本子、草稿纸也行）上先占一个框，旁边一张单子挑图，见 insertImage。原来在 ⋯
+           菜单里，人说「从菜单栏移出来成为个单独的按钮吧，刚好代替删去那两个按钮留下来的空隙」——就是「适合宽度」
+           「整页」原来的位置。图标是一张照片（框、山、太阳）缺了右下角，那儿一个加号：和栏上别的图标一样的线、
+           一样的粗细。字在 title、aria-label 里（换语言时由 _syncSlotChrome 写）。 -->
+      <button type="button" class="pdf-slot-btn" data-role="insert-image" title="插入图片" aria-label="插入图片"><svg class="pdf-slot-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 19.5H6.5a2 2 0 0 1-2-2v-11a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2V13"/><circle cx="9.2" cy="9.4" r="1.6"/><path d="m4.8 16.4 4.1-4.1 2.7 2.7 2-2 1.6 1.6"/><path d="M18 15v6M15 18h6"/></svg></button>
       <!-- A scratchpad has no outline, no page controls, no question label and
            no answer lookup, because it has no pages and takes no part in
            matching. What it has instead is a way back to the origin, a way to
@@ -4597,6 +4721,10 @@ function slotChrome(slot) {
       <button type="button" class="pdf-slot-menu-item" role="menuitem" data-role="organize"></button>
       <!-- 把这一栏正显示着的那一份导出成 PDF：书连同批注，本子和草稿纸连同纸样。 -->
       <button type="button" class="pdf-slot-menu-item" role="menuitem" data-role="export-pdf"></button>
+      <!-- 书签成书：把这本书标过书签的页挑出来，存成一本新书或导出。只在标过书签的书上出现。 -->
+      <button type="button" class="pdf-slot-menu-item" role="menuitem" data-role="marks-book" hidden></button>
+      <!-- 书签成书做出来的书：把母本那几页的最新批注拉过来。只在这样的书上出现。 -->
+      <button type="button" class="pdf-slot-menu-item" role="menuitem" data-role="marks-sync" hidden></button>
       <!-- Relabelled from 关闭文档. Removing an entry detaches it from this
            pane; the resource stays in its library, and the pane falls to
            whatever was underneath rather than emptying. -->

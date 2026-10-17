@@ -143,9 +143,25 @@ export function parseSubQuestionLine(line) {
 export function idFromOutlineTitle(title) {
   const text = String(title ?? '').trim();
   if (!text) return '';
-  const example = text.match(new RegExp(String.raw`例\s*题\s*(${ID_BODY})`));
-  if (example) return normalizeId(example[1]);
+  const marked = text.match(OUTLINE_MARKED_ID);
+  if (marked) return normalizeId(marked[1] ?? marked[2]);
   const leading = text.match(new RegExp(String.raw`^\s*(${ID_BODY})(?!\d)`));
   if (leading) return normalizeId(leading[1]);
   return '';
 }
+
+/**
+ * A question marker followed by an id, anywhere in a bookmark title.
+ *
+ * The same marker vocabulary the outline classifier accepts. It used to be 例题
+ * alone, which is the form the 考研 books use — and the classifier, which
+ * recognises 习题 too, then declared a cohort of "习题 1.1" bookmarks to be
+ * questions while every node in it was left without an id. Measured on the
+ * 2026-09 textbook corpus: the 绿皮书 exercise book carries 87 such bookmarks
+ * and indexed as nothing. A marker the classifier trusts is a marker the id
+ * parser has to read.
+ */
+const OUTLINE_MARKED_ID = new RegExp(
+  String.raw`(?:(?:例\s*题|习\s*题|练习题|例|Example|Exercise|Problem)\s*(${ID_BODY})(?!\d)|第\s*(${ID_BODY})\s*题)`,
+  'i',
+);

@@ -277,6 +277,20 @@ await test('点开那一段演完：横杠不再被切，邻居停在终点', ()
   dock.destroy();
 });
 
+await test('那一排收着时：接不住（spotFor 为空），只回答藏到哪儿（tuckSpot，和 spotFor 同一套）', () => {
+  const { dock } = dockPage();
+  assert.equal(dock.tuckSpot(430), null, '那一排没收着：归 spotFor');
+  const visible = dock.spotFor(430);
+  document.body.classList.add('is-top-hidden');
+  assert.equal(dock.spotFor(430), null);
+  assert.deepEqual(dock.tuckSpot(430), visible, '收着时藏到的地方，就是它看得见时会停的地方');
+  assert.equal(dock.tuckSpot(900).perch, 'right');
+  document.body.classList.add('is-library-open');
+  assert.equal(dock.tuckSpot(430), null, '书架盖着');
+  document.body.classList.remove('is-library-open', 'is-top-hidden');
+  dock.destroy();
+});
+
 await test('拖着经过这一排：靠近顶上（到栏头那一带）才算；收起了、在设置页上、专注着都不算', () => {
   const { dock } = dockPage();
   assert.equal(dock.zoneAt(900, 30), 'right');
@@ -376,8 +390,10 @@ function fakeRow() {
     away: () => host.isAway,
     travel: () => 54,
     progress: () => (host.isAway ? 1 : 0),
-    zoneAt: (x, y) => (host.ok && y < 150 ? (x < 600 ? 'left' : 'right') : null),
-    spotFor: (x) => (host.ok ? { perch: x < 600 ? 'left' : 'right', at: (x - 10) / 1180 } : null),
+    // 和真的一样：那一排收着的时候接不住（zoneAt / spotFor / 拖着时贴着它走），只回答藏到哪儿（tuckSpot）。
+    zoneAt: (x, y) => (host.ok && !host.isAway && y < 150 ? (x < 600 ? 'left' : 'right') : null),
+    spotFor: (x) => (host.ok && !host.isAway ? { perch: x < 600 ? 'left' : 'right', at: (x - 10) / 1180 } : null),
+    tuckSpot: (x) => (host.ok && host.isAway ? { perch: x < 600 ? 'left' : 'right', at: (x - 10) / 1180 } : null),
     ballBox: (perch, size, at) => (Number.isFinite(at) ? ballAtX(10 + at * 1180)
       : perch === 'left'
         ? { left: 423, top: 10, width: 44, height: 44, right: 467, bottom: 54 }
@@ -396,7 +412,7 @@ function fakeRow() {
         start(px, py) { live = true; this.move(px, py); },
         move(px, py) {
           x = px;
-          inRow = host.ok && py < 150;
+          inRow = host.ok && !host.isAway && py < 150;
           side = inRow ? (px < 600 ? 'left' : 'right') : null;
           root.style.left = `${px}px`;
           root.style.top = `${inRow ? 32 : py}px`;
@@ -821,8 +837,138 @@ await test('没有那一排（setPerchHost 没给）：拖到顶上照旧落在�
   assert.equal(bar.state.perch, null);
 });
 
+// 人说：「工具栏如果在顶部菜单栏隐藏的情况下拖到最上方位置，则不应该在那展开，应该也自己隐藏到上方位置，
+// 隐藏后呼出菜单栏时一并出现，位置关系要正确，偏左就在左边空位，偏右就在右边空位，动画要适配。」
+
+await test('那一排收着时拖到最上面：不在顶边展开，收成球藏进松手那一侧的空当（偏左左边、偏右右边），记下「藏着」', () => {
+  let { bar } = mount({ away: true });
+  dragTo(bar, 300, 64 + 120);   // 工作区里 y = 120：离顶边最近
+  assert.equal(bar.state.perch, 'left', '偏左：左边那处空当');
+  assert.equal(bar.state.phase, 'docked', '收成球，不展开');
+  assert.equal(bar.state.tucked, true);
+  assert.equal(bar.state.offRow, null, '不借住到左边');
+  assert.ok(near(bar.state.perchX, (300 - 10) / 1180), '停在松手的那个地方');
+  assert.ok(bar.root.classList.contains('is-perched'), '按停在那一排里画：跟着收起的那一排在屏幕上面、看不见');
+  assert.equal(JSON.parse(dom.window.localStorage.getItem('ls_ink_toolbar')).tucked, true, '存下来');
+  ({ bar } = mount({ away: true }));
+  dragTo(bar, 900, 64 + 120);
+  assert.equal(bar.state.perch, 'right', '偏右：右边那处空当');
+  assert.equal(bar.state.tucked, true);
+});
+
+await test('那一排收着时拖到顶上那一带：不另亮一圈提示（人说「不要加亮圈」）；上面那两个角也不鼓起来——松在那儿是藏进去', () => {
+  const { bar, row } = mount({ away: true });
+  const handle = bar.root.querySelector('[data-role="handle"]');
+  pointer('pointerdown', { x: 20, y: 200, target: handle });
+  pointer('pointermove', { x: 160, y: 300 });
+  pointer('pointermove', { x: 300, y: 64 + 120 });
+  pointer('pointermove', { x: 40, y: 64 + 40 });   // 左上角
+  assert.ok(row.calls.preview.every((z) => z === null), '一圈都不亮');
+  assert.ok(!bar.root.classList.contains('is-corner-armed'), '左上角不鼓：松在那儿不是停角上');
+  pointer('pointerup', { x: 40, y: 64 + 40 });
+  assert.equal(bar.state.tucked, true, '藏进去');
+  assert.equal(bar.state.perch, 'left');
+  assert.equal(bar.state.corner, null);
+});
+
+await test('藏着的时候拉回那一排：它就在那处空当里、跟着那一排一起出来；「藏着」清掉，之后再收起那一排照旧借住到左边', () => {
+  const { bar, row } = mount({ away: true });
+  dragTo(bar, 300, 64 + 120);
+  row.isAway = false;
+  row.fire({ away: false });
+  assert.equal(bar.state.perch, 'left');
+  assert.ok(near(bar.state.perchX, (300 - 10) / 1180));
+  assert.equal(bar.state.tucked, false);
+  assert.equal(bar.state.phase, 'docked');
+  assert.ok(bar.root.classList.contains('is-perched'));
+  assert.equal(bar.state.offRow, null);
+  assert.equal(JSON.parse(dom.window.localStorage.getItem('ls_ink_toolbar')).tucked, false);
+  row.isAway = true;
+  row.fire({ away: true });
+  assert.ok(bar.state.offRow, '再收起那一排：照「停在里面的借住到左边」那一套');
+  assert.ok(bar.root.classList.contains('is-off-row'));
+});
+
+await test('藏着的时候那一排又说了一遍「收起了」：不借住到左边，还藏着', () => {
+  const { bar, row } = mount({ away: true });
+  dragTo(bar, 900, 64 + 120);
+  row.fire({ away: true });
+  assert.equal(bar.state.perch, 'right');
+  assert.equal(bar.state.tucked, true);
+  assert.equal(bar.state.offRow, null);
+  assert.ok(!bar.root.classList.contains('is-off-row'));
+});
+
+await test('藏着时关掉应用：下次开机那一排还收着，它还藏着（不借住到左边）；开机时那一排没收着，藏的那一笔作废', () => {
+  const { bar } = mount({ away: true });
+  dragTo(bar, 300, 64 + 120);
+  const saved = JSON.parse(dom.window.localStorage.getItem('ls_ink_toolbar'));
+  const again = mount({ saved, away: true });
+  assert.equal(again.bar.state.perch, 'left');
+  assert.equal(again.bar.state.tucked, true);
+  assert.equal(again.bar.state.offRow, null);
+  assert.ok(!again.bar.root.classList.contains('is-off-row'));
+  const shown = mount({ saved, away: false });
+  assert.equal(shown.bar.state.perch, 'left');
+  assert.equal(shown.bar.state.tucked, false);
+});
+
+await test('藏进去那一下：从松手的地方飞向那处空当，后一段淡没；用 translate / scale / opacity，不碰 transform', async () => {
+  const { bar, row } = mount({ away: true });
+  await withAnimations(bar, ({ played }) => {
+    // 松手时球画在 (278, 162)、56 见方；停好之后（跟着收起的那一排在屏幕上面）画在 (268, -50)、44 见方。
+    bar.root.getBoundingClientRect = () => (bar.state.tucked
+      ? { left: 268, top: -50, right: 312, bottom: -6, width: 44, height: 44 }
+      : { left: 278, top: 162, right: 334, bottom: 218, width: 56, height: 56 });
+    const handle = bar.root.querySelector('[data-role="handle"]');
+    pointer('pointerdown', { x: 20, y: 200, target: handle });
+    pointer('pointermove', { x: 160, y: 300 });
+    pointer('pointermove', { x: 300, y: 64 + 120 });
+    pointer('pointerup', { x: 300, y: 64 + 120 });
+    const tuck = played.find((a) => a.el === bar.root && touches(a, 'opacity') && touches(a, 'translate'));
+    assert.ok(tuck, '演了那一段');
+    assert.ok(!touches(tuck, 'transform'), 'transform 归「跟着那一排收起」那条公式');
+    const first = tuck.keyframes[0];
+    const last = tuck.keyframes.at(-1);
+    assert.equal(first.translate, `${306 - 290}px ${190 - -28}px`, '从松手的地方出发');
+    assert.equal(last.translate, '0px 0px');
+    assert.equal(first.opacity, 1);
+    assert.equal(last.opacity, 0, '最后淡没');
+    assert.ok(tuck.keyframes.some((k) => k.offset > 0 && k.offset < 1 && k.opacity === 1), '前一段不淡');
+    assert.ok(tuck.opts.duration >= 320);
+    row.isAway = false;
+    row.fire({ away: false });
+    assert.equal(tuck.cancelled, true, '还没藏好就把那一排拉回来：这一段作罢，跟着那一排出来');
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════
 group('4. 状态');
+
+await test('藏进收着的那一排：endDrag 带 tucked；拿起来清掉；不借住；untuck 清掉；存盘、开机都带着', () => {
+  const vp = { width: 1200, height: 672 };
+  const s0 = stateMod.createToolbarState({ tool: 'marker' });
+  const tucked = stateMod.endDrag(stateMod.startDrag(s0, { x: 1, y: 1 }), { x: 300, y: 40 }, vp,
+    { perch: 'left', perchX: 0.25, tucked: true });
+  assert.equal(tucked.perch, 'left');
+  assert.equal(tucked.phase, 'docked');
+  assert.equal(tucked.tucked, true);
+  assert.equal(stateMod.isTucked(tucked), true);
+  assert.equal(tucked.tool, 'marker', '工具不动');
+  assert.equal(stateMod.stepOffRow(tucked), tucked, '藏着的不借住到左边');
+  const saved = stateMod.serializeToolbarState(tucked);
+  assert.equal(saved.tucked, true);
+  assert.equal(stateMod.createToolbarState(saved).tucked, true);
+  assert.equal(stateMod.startDrag(tucked, { x: 1, y: 1 }).tucked, false, '拿起来就不藏了');
+  const shown = stateMod.untuck(tucked);
+  assert.equal(shown.tucked, false);
+  assert.equal(shown.perch, 'left', '还停在那一排里');
+  assert.equal(stateMod.serializeToolbarState(shown).tucked, false);
+  assert.equal(stateMod.perchAt(tucked, 'right').tucked, false);
+  assert.equal(stateMod.createToolbarState({ tucked: true }).tucked, false, '没停在那一排里谈不上藏');
+  const plain = stateMod.endDrag(stateMod.startDrag(s0, { x: 1, y: 1 }), { x: 300, y: 40 }, vp, { perch: 'left' });
+  assert.equal(plain.tucked, false, '那一排看得见时停进去，不是藏');
+});
 
 await test('停哪儿只是一个字段：工具、颜色、粗细一样不动', () => {
   const s0 = stateMod.createToolbarState({ tool: 'marker', color: '#dc2626', width: 7 });
@@ -1066,23 +1212,98 @@ await test('横躺的那一条（贴底边）：左右划', () => {
   assert.equal(bar.state.tool, 'lasso');
 });
 
-await test('划到横杠外面老远再松手、系统把手势收走：算反悔，什么都不拿', () => {
+const awhile = (ms) => new Promise((r) => setTimeout(r, ms));
+
+await test('划到横杠外面老远、在外面待住：玻璃回到原来那一支、哪一格都不亮；这时松手算反悔；划回来接着挑', async () => {
   const { bar } = mount();
   const L = layoutBar(bar);
   const pen = { name: 'pen', ...L.tool('pen') };
   const marker = L.tool('marker');
   slide(bar, pen, marker);
-  touch('pointermove', marker.x + 120, marker.y);
-  touch('pointerup', marker.x + 120, marker.y); // 横杠右边 59，+44 之外
-  assert.equal(bar.state.tool, 'pen');
-  slide(bar, pen, marker, { id: 33 });
-  touch('pointercancel', marker.x, marker.y, dom.window, 33);
-  assert.equal(bar.state.tool, 'pen');
+  touch('pointermove', marker.x + 120, marker.y); // 横杠右边 59，+44 之外
+  assert.ok(bar.root.querySelector('[data-tool="marker"]').classList.contains('is-scrub-target'), '刚出去：还不算');
+  await awhile(230);
+  const [drop] = drops();
+  assert.ok(drop.classList.contains('is-away'), '待住了：算划出去');
+  assert.equal(drop.style.translate, `${32 - 19}px ${pen.y - 19}px`, '玻璃回到原来那一支上');
+  assert.equal(bar.root.querySelectorAll('.is-scrub-target').length, 0, '哪一格都不亮');
+  touch('pointerup', marker.x + 120, marker.y);
+  assert.equal(bar.state.tool, 'pen', '这时松手：什么都不拿');
   assert.ok(!bar.root.querySelector('.ink-tools').classList.contains('is-scrubbing'));
+  // 划出去待住以后才被系统收走：一样不拿。
+  slide(bar, pen, marker, { id: 33 });
+  touch('pointermove', marker.x + 120, marker.y, dom.window, 33);
+  await awhile(230);
+  touch('pointercancel', 0, 0, dom.window, 33);
+  assert.equal(bar.state.tool, 'pen');
+  // 划出去又划回来：玻璃重新浮起来跟手，接着挑。
+  const lasso = L.tool('lasso');
+  slide(bar, pen, marker, { id: 35 });
+  touch('pointermove', marker.x + 120, marker.y, dom.window, 35);
+  await awhile(230);
+  touch('pointermove', lasso.x, lasso.y, dom.window, 35);
+  assert.ok(!drops().at(-1).classList.contains('is-away'));
+  assert.ok(bar.root.querySelector('[data-tool="lasso"]').classList.contains('is-scrub-target'));
+  touch('pointerup', lasso.x, lasso.y, dom.window, 35);
+  assert.equal(bar.state.tool, 'lasso');
   // 在横杠边上一点点松手（44 以内）还算：手指没离开多远。
-  slide(bar, pen, marker, { id: 34 });
+  slide(bar, { name: 'lasso', ...lasso }, marker, { id: 34 });
   touch('pointerup', marker.x + 50, marker.y, dom.window, 34);
   assert.equal(bar.state.tool, 'marker');
+});
+
+await test('快甩着松手、抬手那一下甩出了横杠（录屏里那一下）：不算反悔，拿玻璃停着的那一格，玻璃落在那一格上', () => {
+  // 人录的屏：按住选中的「形状」（最后一格）往下拖进颜色那一排，再往上一甩松手；手顺势往右偏，抬手那一点在
+  // 横杠右边老远。玻璃跟到了最上面那一格，原来按抬手那一点判「划出去了」，又飞回「形状」，什么都没换。
+  const { bar } = mount();
+  const L = layoutBar(bar);
+  bar.root.querySelector('[data-tool="shape"]').click();
+  assert.equal(bar.state.tool, 'shape');
+  const shape = { name: 'shape', ...L.tool('shape') };
+  slide(bar, shape, L.swatch(3), { id: 39 });
+  assert.ok(bar.root.querySelector('[data-tool="shape"]').classList.contains('is-scrub-target'), '拖出工具那一组：停在最后一格上');
+  // WebView 一帧才给一下，一下比一下跳得远，越往上往右偏得越多。
+  const top = L.tool('pen');
+  for (const [dx, y] of [[8, L.swatch(1).y], [14, L.tool('eraser').y], [24, L.tool('marker').y], [40, top.y]]) {
+    touch('pointermove', shape.x + dx, y, dom.window, 39);
+  }
+  assert.ok(bar.root.querySelector('[data-tool="pen"]').classList.contains('is-scrub-target'));
+  touch('pointermove', shape.x + 130, top.y - 60, dom.window, 39); // 最后一下甩出了横杠
+  touch('pointerup', shape.x + 160, top.y - 90, dom.window, 39);
+  assert.equal(bar.state.tool, 'pen', '拿最上面那一格');
+  const drop = drops().at(-1);
+  assert.ok(!drop.classList.contains('is-on'));
+  assert.ok(!drop.classList.contains('is-away'));
+  assert.equal(drop.style.translate, `${32 - 19}px ${top.y - 19}px`, '玻璃落在拿到的那一格上，不飞回「形状」');
+});
+
+await test('系统把手势收走：和松手一样，拿玻璃停着的那一格，它自己带的坐标不作数；玻璃落在拿到的那一格上', () => {
+  // 同样一甩，这一回是被系统收走了（安卓上收走时带的坐标常常是 0）。
+  const { bar } = mount();
+  const L = layoutBar(bar);
+  bar.root.querySelector('[data-tool="shape"]').click();
+  assert.equal(bar.state.tool, 'shape');
+  const shape = { name: 'shape', ...L.tool('shape') };
+  slide(bar, shape, L.swatch(3), { id: 37 });
+  assert.ok(bar.root.querySelector('[data-tool="shape"]').classList.contains('is-scrub-target'), '拖出工具那一组：停在最后一格上');
+  // 往上一甩：WebView 一帧才给一下，一下比一下跳得远。
+  const top = L.tool('pen');
+  for (const y of [L.swatch(1).y, L.tool('eraser').y, L.tool('marker').y, top.y]) {
+    touch('pointermove', shape.x + 8, y, dom.window, 37);
+  }
+  assert.ok(bar.root.querySelector('[data-tool="pen"]').classList.contains('is-scrub-target'));
+  touch('pointercancel', 0, 0, dom.window, 37); // 安卓上收走时带的坐标常常是 0
+  assert.equal(bar.state.tool, 'pen', '按最后跟到的那一格算，和松在那儿一样');
+  assert.ok(!bar.root.querySelector('.ink-tools').classList.contains('is-scrubbing'));
+  assert.equal(bar.root.querySelectorAll('.is-scrub-target').length, 0);
+  const drop = drops().at(-1);
+  assert.ok(!drop.classList.contains('is-on'));
+  assert.equal(drop.style.translate, `${32 - 19}px ${top.y - 19}px`, '落回拿到的那一格');
+  // 横杠自己丢了捕获（也是被收走）：一样。
+  const lost = new dom.window.PointerEvent('lostpointercapture', { bubbles: true, pointerId: 38, pointerType: 'touch' });
+  slide(bar, { name: 'pen', ...top }, L.tool('lasso'), { id: 38 });
+  bar.root.dispatchEvent(lost);
+  assert.equal(bar.state.tool, 'lasso');
 });
 
 await test('颜色那一排也能划；「更多颜色」那一格是动作，不算', () => {
@@ -1099,7 +1320,7 @@ await test('颜色那一排也能划；「更多颜色」那一格是动作，�
   assert.equal(bar.state.openCard, null, '没有开颜色卡片');
 });
 
-await test('开始划时按下的那一格丢了隐式捕获：不是手势被收走，接着划；横杠自己丢了捕获才算反悔', () => {
+await test('开始划时按下的那一格丢了隐式捕获：不是手势被收走，接着划；横杠自己丢了捕获才算被收走', () => {
   // 平板上（WebView 138）的那一串：手指按在钢笔上，浏览器隐式地把指针交给钢笔；走过 10px、横杠接住
   // 指针的那一刻，钢笔收到 lostpointercapture。原来把它当成了被收走，划动刚开始就取消了。
   const { bar } = mount();
@@ -1115,11 +1336,13 @@ await test('开始划时按下的那一格丢了隐式捕获：不是手势被�
   touch('pointermove', L.tool('marker').x, L.tool('marker').y);
   touch('pointerup', L.tool('marker').x, L.tool('marker').y);
   assert.equal(bar.state.tool, 'marker', '松在哪一格拿哪一格');
-  // 横杠自己的捕获丢了（系统把手势收走）：反悔。
+  // 横杠自己的捕获丢了（系统把手势收走）：这一路到此为止，按最后跟到的那一格算；后面再来的松手不算。
   slide(bar, { name: 'marker', ...L.tool('marker') }, L.tool('eraser'), { id: 35 });
   lost(bar.root, 35);
-  touch('pointerup', L.tool('eraser').x, L.tool('eraser').y, dom.window, 35);
-  assert.equal(bar.state.tool, 'marker');
+  assert.equal(bar.state.tool, 'eraser');
+  assert.ok(!bar.root.querySelector('.ink-tools').classList.contains('is-scrubbing'));
+  touch('pointerup', L.tool('pen').x, L.tool('pen').y, dom.window, 35);
+  assert.equal(bar.state.tool, 'eraser');
 });
 
 await test('划起来就不再有动效：按下时的水波纹摘掉；划着时什么都不渐变（这一排玻璃里每动一帧都要重合成）', () => {
@@ -1157,7 +1380,7 @@ await test('松手、被收走这两下照样传到 window 的冒泡阶段：按
     assert.equal(bar.state.tool, 'marker');
     slide(bar, { name: 'marker', ...L.tool('marker') }, L.tool('eraser'), { id: 36 });
     touch('pointercancel', 0, 0, bar.root, 36);
-    assert.equal(bar.state.tool, 'marker');
+    assert.equal(bar.state.tool, 'eraser', '被收走：按最后跟到的那一格算');
   } finally {
     dom.window.removeEventListener('pointerup', onEnd);
     dom.window.removeEventListener('pointercancel', onEnd);

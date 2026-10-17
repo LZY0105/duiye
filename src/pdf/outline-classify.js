@@ -52,6 +52,11 @@ export const NODE_KIND = Object.freeze({
   QUESTION_TYPE: 'QUESTION_TYPE',
   /** An actual question. Only these may enter the question index. */
   QUESTION: 'QUESTION',
+  /**
+   * A bookmark per printed page, titled with the page number. Neither a question
+   * nor a section: it locates nothing a reader would ask about.
+   */
+  PAGE_MARKER: 'PAGE_MARKER',
   /** Undecidable. Treated as SECTION for safety; never as a question. */
   UNKNOWN: 'UNKNOWN',
 });
@@ -105,7 +110,45 @@ const THRESHOLDS = Object.freeze({
    * more likely to be a truncated section list than a very short exercise book.
    */
   minBareQuestionCohort: 20,
+  /**
+   * Numeric nodes needed before a page-number tree can be recognised, and the
+   * share of them whose title must equal their page minus one constant.
+   *
+   * Measured on the 2026-09 textbook corpus: two scanned volumes carry one
+   * bookmark per page titled with the printed page number — 213 and 326 nodes,
+   * every one of them at page = title + 8 and + 12 respectively. Both read as
+   * "dense short-span identifier cohorts" and indexed as 213 and 326 questions
+   * that no book asks. A genuine question cohort does not track the page
+   * counter that closely: even one question per page slips the moment a
+   * question runs long or two share a page.
+   */
+  minPageMarkerCohort: 10,
+  pageMarkerAgreement: 0.9,
 });
+
+/**
+ * Whether a cohort's identifiers are page numbers.
+ *
+ * Flat integers only — a hierarchical id such as 1.31 cannot be a page number.
+ * Every node votes page − id; a single offset carrying pageMarkerAgreement of
+ * the votes, over at least minPageMarkerCohort nodes, is a page-number tree.
+ *
+ * @returns {{offset:number, share:number}|null}
+ */
+function pageMarkerAgreement(withId) {
+  const flat = withId.filter(c => /^\d+$/.test(c.questionId) && Number.isFinite(c.pageNumber));
+  // The flat integers must be the cohort, not a minority inside one that is
+  // otherwise hierarchical.
+  if (flat.length < THRESHOLDS.minPageMarkerCohort || flat.length * 2 < withId.length) return null;
+  const votes = new Map();
+  for (const c of flat) {
+    const offset = c.pageNumber - Number(c.questionId);
+    votes.set(offset, (votes.get(offset) || 0) + 1);
+  }
+  const [offset, count] = [...votes.entries()].sort((a, b) => b[1] - a[1])[0];
+  const share = count / flat.length;
+  return share >= THRESHOLDS.pageMarkerAgreement ? { offset, share } : null;
+}
 
 /** Title with question/section markers and every numeric id token removed. */
 function residueOf(title) {
@@ -157,8 +200,17 @@ function withSpans(nodes, numPages) {
     (a.pageNumber ?? 0) - (b.pageNumber ?? 0) || (a.depth ?? 0) - (b.depth ?? 0));
   return sorted.map((node, i) => {
     if (Number.isFinite(node.endPage)) return { ...node, span: node.endPage - node.pageNumber + 1 };
-    const next = sorted.slice(i + 1).find(n => (n.pageNumber ?? 0) > (node.pageNumber ?? 0));
-    const end = next ? next.pageNumber - 1 : (numPages || node.pageNumber);
+    // The next node at the same or a shallower depth: a section runs until the
+    // next section or chapter, not until its own first subsection. An earlier
+    // version stopped at the next node of ANY depth, which cut every section
+    // down to the page before its first child — and a region locator bounding
+    // itself by that span would have dropped most of a valid book.
+    const next = sorted.slice(i + 1).find(n =>
+      (n.pageNumber ?? 0) > (node.pageNumber ?? 0) && (n.depth ?? 0) <= (node.depth ?? 0));
+    // A last node with no page count has an UNKNOWN end, not a one-page one;
+    // the region locator treats an unknown end as open rather than closed.
+    if (!next && !numPages) return { ...node, endPage: undefined, span: 1 };
+    const end = next ? next.pageNumber - 1 : numPages;
     return { ...node, endPage: Math.max(node.pageNumber ?? 0, end), span: Math.max(1, end - (node.pageNumber ?? 0) + 1) };
   });
 }
@@ -203,6 +255,13 @@ function classifyCohort(cohort) {
   }
   if (withId.length === 0) {
     return { kind: NODE_KIND.SECTION, reason: 'no identifiers' };
+  }
+  // One bookmark per page, titled with the page number. A flat integer title
+  // that tracks the page counter with a constant offset across the whole cohort
+  // is a page marker, whatever else it resembles.
+  const pageMarkers = pageMarkerAgreement(withId);
+  if (pageMarkers) {
+    return { kind: NODE_KIND.PAGE_MARKER, reason: `page-number bookmarks (offset ${pageMarkers.offset}, ${(pageMarkers.share * 100).toFixed(0)}% agree)` };
   }
   // The signal that survives losing the question level. "1.1 极限与连续函数"
   // describes a topic; "例题 1.1" does not.

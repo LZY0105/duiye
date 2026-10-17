@@ -8,10 +8,12 @@
 // 跑的就是 pdf-export.js 里那几个 build*，一个字都不改：它们本来就不碰 DOM。笔记本的笔迹由
 // 主线程先按页收齐（函数传不过来），这里再按页递给 buildNotebookPdf。
 
-import { buildBookPdf, buildNotebookPdf, buildScratchPdf } from './pdf-export.js';
+import { buildBookPdf, buildNotebookPdf, buildPagesPdf, buildScratchPdf } from './pdf-export.js';
 
 const JOBS = {
   book: (input, onProgress) => buildBookPdf({ ...input, onProgress }),
+  // 书签成书：挑出来的几页拷进一份新的 PDF。和整本书一样要把原文件整份读一遍，一样放在这里做。
+  pages: (input, onProgress) => buildPagesPdf({ ...input, onProgress }),
   notebook: (input, onProgress) => buildNotebookPdf({
     ...input,
     strokesFor: async (n) => input.strokesByPage?.[n] || [],

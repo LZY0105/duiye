@@ -12,6 +12,7 @@
 import { t, currentLang, onLangChange, setLang } from '../core/i18n.js';
 import Logger from '../core/logger.js';
 import { saveText } from '../export/save-file.js';
+import { mockOcrSwitchOn, setMockOcrEnabled, syncMockOcr } from '../ocr/ocr-mock.js';
 
 const SKIN_KEY = 'ls_skin';
 const DEFAULT_SKIN = 'liquid-math';
@@ -143,9 +144,17 @@ function initDevTools() {
   devMode?.addEventListener('change', () => {
     try { localStorage.setItem('ls_dev', devMode.checked ? '1' : '0'); } catch (_) {}
     syncDevMode();
+    // 模拟识别跟着开发者模式走：关了开发者模式，套索上那颗「识别」也跟着收起来。
+    syncMockOcr();
   });
   try { if (devMode) devMode.checked = localStorage.getItem('ls_dev') === '1'; } catch (_) {}
   syncDevMode();
+
+  // 识别还没接引擎：这颗开关用一份模拟结果走一遍整条路（src/ocr/ocr-mock.js）。开机时按存的登记一次。
+  const ocrMock = document.getElementById('devOcrMock');
+  if (ocrMock) ocrMock.checked = mockOcrSwitchOn();
+  ocrMock?.addEventListener('change', () => setMockOcrEnabled(ocrMock.checked));
+  syncMockOcr();
 
   const output = document.getElementById('devLogOutput');
 
