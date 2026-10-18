@@ -1973,6 +1973,16 @@ export class PdfWorkspace {
       const bar = el.querySelector('.pdf-slot-toolbar');
       const below = bar ? bar.offsetTop + bar.offsetHeight : 0;
       menu.style.top = `${below + 4}px`;
+      // 横着也量：单子的右边对齐 ⋯ 那一颗的右边。原来写死贴着这一栏的右边（right: 6px）——两栏时栏窄，⋯ 就在
+      // 右边上，看不出来；只开一栏时栏很宽，栏头那条胶囊在正中，⋯ 离栏的右边老远，单子飘在它右下方一大截（人说
+      // 「只显示一个文件的时候，这个菜单有偏移」）。right 从这一栏的内边量，所以先扣掉边框。⋯ 藏着（量出来是 0）
+      // 就照旧贴边。
+      const anchor = button?.getBoundingClientRect?.();
+      if (anchor && anchor.width > 0) {
+        const box = el.getBoundingClientRect();
+        const inner = box.left + el.clientLeft + el.clientWidth;
+        menu.style.right = `${Math.max(6, Math.round(inner - anchor.right))}px`;
+      }
     }
     menu.hidden = !open;
     button?.setAttribute('aria-expanded', String(!!open));

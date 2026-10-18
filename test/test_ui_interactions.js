@@ -1996,6 +1996,45 @@ check('every size on the bar goes through the one multiplier', () => {
   assert.ok(!/--ink-hit: \d+px;/.test(css), 'no absolute hit size may survive');
 });
 
+/**
+ * 一栏，栏头里一颗 ⋯，下面那张单子。jsdom 不排版：栏、⋯ 的位置和栏头的高度都是给定的。
+ * 栏从屏幕 x=10 起、内宽 1200（左右边框各 1）；⋯ 的右边在 moreRight。
+ */
+function slotWithMenu(moreRight) {
+  const doc = dom.window.document;
+  const el = doc.createElement('div');
+  el.innerHTML = `
+    <div class="pdf-slot-toolbar"><button type="button" data-role="slot-more"></button></div>
+    <div class="pdf-slot-menu" data-role="slot-menu" hidden></div>`;
+  doc.body.appendChild(el);
+  Object.defineProperty(el, 'clientLeft', { value: 1 });
+  Object.defineProperty(el, 'clientWidth', { value: 1200 });
+  el.getBoundingClientRect = () => ({ left: 10, top: 0, right: 1212, bottom: 800, width: 1202, height: 800 });
+  const bar = el.querySelector('.pdf-slot-toolbar');
+  Object.defineProperty(bar, 'offsetTop', { value: 8 });
+  Object.defineProperty(bar, 'offsetHeight', { value: 44 });
+  const more = el.querySelector('[data-role="slot-more"]');
+  more.getBoundingClientRect = () => ({ left: moreRight - 36, top: 10, right: moreRight, bottom: 46, width: 36, height: 36 });
+  const ws = Object.create(PdfWorkspace.prototype);
+  ws.elSlots = { [SLOTS.PRIMARY]: el, [SLOTS.SECONDARY]: null };
+  return { ws, el, menu: el.querySelector('[data-role="slot-menu"]') };
+}
+
+check('⋯ 那张单子挂在 ⋯ 底下：右边对齐那一颗，不贴着栏的右边（只开一栏时栏头在正中）', () => {
+  // 只开一栏：栏很宽，栏头那条胶囊在正中，⋯ 的右边在屏幕 x=760。
+  const wide = slotWithMenu(760);
+  wide.ws._setSlotMenu(SLOTS.PRIMARY, true);
+  assert.equal(wide.menu.hidden, false);
+  assert.equal(wide.menu.style.top, `${8 + 44 + 4}px`, '竖着照旧挂在栏头下面');
+  assert.equal(wide.menu.style.right, `${10 + 1 + 1200 - 760}px`, '从栏的内边量到 ⋯ 的右边');
+  wide.el.remove();
+  // ⋯ 贴着栏的右边（两栏时）：至少离边 6，和原来一样。
+  const narrow = slotWithMenu(1209);
+  narrow.ws._setSlotMenu(SLOTS.PRIMARY, true);
+  assert.equal(narrow.menu.style.right, '6px');
+  narrow.el.remove();
+});
+
 // ═══════════════════════════════════════════════════════════════
 group('6. A double-tap opens the row');
 
