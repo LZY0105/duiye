@@ -386,15 +386,19 @@ export class ScratchPane {
    * transform — which is what stops the guides drifting away from the writing
    * that sits on them.
    */
-  _setCamera(camera, { persist = true } = {}) {
+  _setCamera(camera, { persist = true, approximate = false } = {}) {
     if (sameCamera(camera, this.camera)) return;
     this.camera = camera;
-    this._syncTransform();
+    this._syncTransform({ approximate });
     if (persist) this._scheduleCameraSave();
     this.handlers.onStateChange?.(this);
   }
 
-  _syncTransform() {
+  /**
+   * @param {{approximate?: boolean}} [opts] approximate：捏合还没停，缩放每一帧都在变——笔迹借别的缩放下拼好的轮廓
+   *   按比例画，不每一帧整张重拼；手指抬起来再不带它画一遍（见 InkSurface.setTransform）。
+   */
+  _syncTransform({ approximate = false } = {}) {
     const viewport = this._viewport();
     const dpr = pixelRatio();
 
@@ -415,9 +419,10 @@ export class ScratchPane {
       dpr,
     });
 
-    this.ink.resize(viewport.width, viewport.height, dpr);
+    // 不在这里画：下面的 setTransform 会画一遍（原来每挪一下整张纸的笔迹画两遍）。
+    this.ink.resize(viewport.width, viewport.height, dpr, { render: false });
     const t = transformFor(this.camera, viewport);
-    this.ink.setTransform(t.scale, t.offsetX, t.offsetY);
+    this.ink.setTransform(t.scale, t.offsetX, t.offsetY, { approximate });
   }
 
   /** Called when the pane changes size: the world centre and zoom are kept. */
@@ -496,6 +501,8 @@ export class ScratchPane {
     let mouse = null;
     let pan = null;
     let pinch = null;
+    // 攒到逐帧回调里还没算的那一下捏合（见 schedulePinch）。
+    let pinchFrame = 0;
 
     const centre = () => {
       const pts = [...touches.values()];
@@ -504,6 +511,45 @@ export class ScratchPane {
         y: (pts[0].y + pts[1].y) / 2,
         d: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y),
       };
+    };
+
+    /** 按两根手指眼下的位置算一遍捏合。 */
+    const applyPinch = () => {
+      pinchFrame = 0;
+      if (!this.pad || touches.size !== 2 || !pinch) return;
+      const c = centre();
+      const box = vp.getBoundingClientRect();
+      // Zoom about the point between the fingers, then carry the paper along
+      // with their midpoint — the two together are what keep whatever was
+      // between the fingers between the fingers.
+      //
+      // 两样合成一个视角再交出去：每换一次视角，纸和笔迹各整张画一遍。缩放还在变，笔迹先借拼好的轮廓按比例画，
+      // 手指抬起来再准确地画一遍（见 endPinch）。
+      const zoomed = zoomAbout(this.camera, c.d / pinch.d, this._viewport(), c.x - box.left, c.y - box.top);
+      this._setCamera(panByScreen(zoomed, c.x - pinch.x, c.y - pinch.y), { approximate: true });
+      pinch.d = c.d || pinch.d;
+      pinch.x = c.x;
+      pinch.y = c.y;
+    };
+
+    /**
+     * 两根手指各报各的 pointermove：一帧两下，头一下还是这根手指的新位置配那根的旧位置。攒到逐帧回调里按两根手指
+     * 最新的位置算一遍——触摸移动在这一帧的逐帧回调之前派发，算的还是这一帧，不晚一帧。没有逐帧回调就当场算。
+     */
+    const schedulePinch = () => {
+      const raf = globalThis.requestAnimationFrame;
+      if (typeof raf !== 'function') { applyPinch(); return; }
+      if (!pinchFrame) pinchFrame = raf(applyPinch);
+    };
+
+    /** 捏合完了（抬起一根、或者又按下第三根）：攒着的那一下先算掉，笔迹再按停下来的缩放准确地画一遍。 */
+    const endPinch = () => {
+      if (pinchFrame) {
+        globalThis.cancelAnimationFrame?.(pinchFrame);
+        applyPinch();
+      }
+      pinch = null;
+      if (this.pad) this._syncTransform();
     };
 
     const local = (e) => {
@@ -517,6 +563,8 @@ export class ScratchPane {
       if (e.pointerType === 'pen') return;              // the ink surface owns it
 
       if (e.pointerType === 'touch') {
+        // 又按下第三根：捏合到此为止，趁表里还只有那两根手指收尾。
+        if (pinch) endPinch();
         touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (touches.size === 2) {
           const c = centre();
@@ -555,17 +603,7 @@ export class ScratchPane {
 
         if (touches.size !== 2 || !pinch) return;
         e.preventDefault();
-        const c = centre();
-        const box = vp.getBoundingClientRect();
-        // Zoom about the point between the fingers, then carry the paper along
-        // with their midpoint — the two together are what keep whatever was
-        // between the fingers between the fingers.
-        this._setCamera(zoomAbout(this.camera, c.d / pinch.d, this._viewport(),
-          c.x - box.left, c.y - box.top));
-        this._setCamera(panByScreen(this.camera, c.x - pinch.x, c.y - pinch.y));
-        pinch.d = c.d || pinch.d;
-        pinch.x = c.x;
-        pinch.y = c.y;
+        schedulePinch();
         return;
       }
 
@@ -579,6 +617,8 @@ export class ScratchPane {
 
     const end = (e) => {
       if (e.pointerType === 'touch') {
+        // 抬起的是捏合的一根：趁两根手指的位置还凑得齐收尾。
+        if (pinch && touches.has(e.pointerId)) endPinch();
         touches.delete(e.pointerId);
         if (touches.size < 2) pinch = null;
         if (pan && pan.id === e.pointerId) pan = null;

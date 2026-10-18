@@ -472,6 +472,8 @@ export class PdfPane {
 
     // ── two fingers: zoom about the midpoint, and pan with it ──
     let pinch = null;
+    // 攒到逐帧回调里还没算的那一下捏合（见 schedulePinch）。
+    let pinchFrame = 0;
 
     const centre = () => {
       const pts = [...touches.values()];
@@ -493,6 +495,52 @@ export class PdfPane {
       vp.classList.remove('is-panning');
     };
 
+    /** 按两根手指眼下的位置算一遍捏合：缩放、跟着手指平移，再把屏幕上那张位图按比例拉过去。 */
+    const applyPinch = () => {
+      pinchFrame = 0;
+      if (touches.size !== 2 || !pinch || !this.state) return;
+      const c = centre();
+      const ratio = c.d / pinch.d;
+
+      // The point between the fingers, in the viewport's own pixels. Both the
+      // zoom and the pan are worked out against it, so the page stays stuck to
+      // the hand: whatever was between the fingers when the pinch started is
+      // still between them at any zoom.
+      const box = vp.getBoundingClientRect();
+      const anchor = { x: c.x - box.left, y: c.y - box.top };
+
+      // Re-rasterising a PDF page cannot happen once per frame — that is what
+      // made the gesture stutter. The bitmap already on screen is scaled by a
+      // GPU transform for the duration, and the page is rendered once, at the
+      // end, at whatever zoom the fingers settled on.
+      //
+      // 缩放、平移只改状态，最后 _previewZoom 摆一次：每摆一次，笔迹整页画一遍。
+      this._apply(setZoom(this.state, pinch.zoom * ratio), false, anchor, { place: false });
+      this._apply(
+        panBy(this.state, c.x - pinch.x, c.y - pinch.y, this._viewport(), this._contentSize()),
+        false, undefined, { place: false },
+      );
+      this._previewZoom();
+      pinch.x = c.x;
+      pinch.y = c.y;
+    };
+
+    /**
+     * 两根手指各报各的 pointermove：一帧两下，头一下还是这根手指的新位置配那根的旧位置。攒到逐帧回调里按两根手指
+     * 最新的位置算一遍——触摸移动在这一帧的逐帧回调之前派发，算的还是这一帧，不晚一帧。没有逐帧回调就当场算。
+     */
+    const schedulePinch = () => {
+      const raf = globalThis.requestAnimationFrame;
+      if (typeof raf !== 'function') { applyPinch(); return; }
+      if (!pinchFrame) pinchFrame = raf(applyPinch);
+    };
+    /** 攒着的那一下现在就算掉：手指要抬起了，两根手指的位置马上凑不齐。 */
+    const flushPinch = () => {
+      if (!pinchFrame) return;
+      globalThis.cancelAnimationFrame?.(pinchFrame);
+      applyPinch();
+    };
+
     vp.addEventListener('pointerdown', (e) => {
       if (!this.doc) return;
       this.handlers.onFocus?.();
@@ -502,6 +550,13 @@ export class PdfPane {
       if (e.pointerType === 'pen') return;
 
       if (e.pointerType === 'touch') {
+        // 又按下第三根：捏合到此为止。趁表里还只有那两根手指把攒着的那一下算掉，书页按停下来的缩放画好——原来
+        // 这里只是把捏合扔了，拉伸着的位图（和借来的笔迹轮廓）要等下一回别的什么重画才换掉。
+        if (pinch) {
+          flushPinch();
+          pinch = null;
+          this._commitPreviewZoom();
+        }
         touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (touches.size === 2) { beginPinch(); return; }
         if (touches.size > 2) { pinch = null; swipe = null; return; }
@@ -587,28 +642,7 @@ export class PdfPane {
         if (touches.size !== 2 || !pinch) return;
 
         e.preventDefault();
-        const c = centre();
-        const ratio = c.d / pinch.d;
-
-        // The point between the fingers, in the viewport's own pixels. Both the
-        // zoom and the pan are worked out against it, so the page stays stuck to
-        // the hand: whatever was between the fingers when the pinch started is
-        // still between them at any zoom.
-        const box = vp.getBoundingClientRect();
-        const anchor = { x: c.x - box.left, y: c.y - box.top };
-
-        // Re-rasterising a PDF page cannot happen once per frame — that is what
-        // made the gesture stutter. The bitmap already on screen is scaled by a
-        // GPU transform for the duration, and the page is rendered once, at the
-        // end, at whatever zoom the fingers settled on.
-        this._apply(setZoom(this.state, pinch.zoom * ratio), false, anchor);
-        this._apply(
-          panBy(this.state, c.x - pinch.x, c.y - pinch.y, this._viewport(), this._contentSize()),
-          false,
-        );
-        this._previewZoom();
-        pinch.x = c.x;
-        pinch.y = c.y;
+        schedulePinch();
         return;
       }
 
@@ -648,6 +682,7 @@ export class PdfPane {
 
     const endTouch = (e) => {
       const from = swipe && swipe.id === e.pointerId ? swipe : null;
+      if (pinch) flushPinch();
       touches.delete(e.pointerId);
       if (touches.size < 2 && pinch) {
         pinch = null;
@@ -1193,7 +1228,11 @@ export class PdfPane {
     }
   }
 
-  _apply(nextState, needsRepaint, anchor) {
+  /**
+   * @param {{place?: boolean}} [opts] place: false——只改状态，先不摆书页、不同步笔迹：调用方紧接着还要再改、最后
+   *   自己摆一次（捏合一下先后改缩放、平移，再按比例拉位图；每摆一次笔迹整页画一遍）。
+   */
+  _apply(nextState, needsRepaint, anchor, { place = true } = {}) {
     // The floor applies to a MANUAL zoom here. A fit clamps itself inside
     // applyFit and keeps its mode; forcing setZoom on it would drop the mode to
     // NONE and stop the pane responding to resizes at all.
@@ -1234,7 +1273,7 @@ export class PdfPane {
     if (needsRepaint || pageChanged) {
       // The page waits for its own annotations — see _render.
       this._render(inkReady);
-    } else {
+    } else if (place) {
       this._position();
     }
     this.handlers.onStateChange?.(this.state);
@@ -1253,7 +1292,8 @@ export class PdfPane {
   _syncInk() {
     if (!this.state) return;
     const viewport = this._viewport();
-    this.ink.resize(viewport.width, viewport.height, inkPixelRatio());
+    // 不在这里画：下面的 setTransform 会画一遍（原来这里先画一遍，每挪一下整页笔迹画两遍）。
+    this.ink.resize(viewport.width, viewport.height, inkPixelRatio(), { render: false });
     // Ink is drawn in page space, so it has to sit under the SAME origin the
     // page does. Reading scroll directly would leave annotations pinned to the
     // top-left while a centred page moved out from under them.
@@ -1265,7 +1305,10 @@ export class PdfPane {
     // it: drifting off the words it belongs to, and drifting the opposite way
     // in each pane, because one was growing while the other shrank.
     const scale = this._drawnScale();
-    this.ink.setTransform(scale, -x / scale, -y / scale);
+    // 书页还是一张被拉伸的位图（捏合、点放大缩小、拖两栏之间那条线，_previewScale 不是 1）：笔迹也先按比例借用
+    // 拼好的轮廓，不每一帧整页重拼；书页按真的大小重画那一下（_showCanvas 把它归 1）笔迹跟着按准确的缩放重拼。
+    const previewing = Number.isFinite(this._previewScale) && this._previewScale !== 1;
+    this.ink.setTransform(scale, -x / scale, -y / scale, { approximate: previewing });
   }
 
   /**

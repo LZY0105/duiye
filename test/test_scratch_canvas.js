@@ -38,6 +38,7 @@ import {
 
 import { drawScratchBackground } from '../src/scratch/scratch-background.js';
 import { PATTERNS, TONES, createScratchStyle, guideSpacing, paperColor } from '../src/scratch/scratch-style.js';
+import { ScratchPane } from '../src/scratch/scratch-pane.js';
 
 let PASS = 0, FAIL = 0;
 function pass(l) { PASS++; console.log(`  ✅ ${l}`); }
@@ -426,6 +427,125 @@ check('the two handwriting grids keep their cell walls and drop the inner guides
   assert.ok(roomy.strokes.length > tight.strokes.length,
     'the inner guides come back once there is room for them');
 });
+
+// ═══════════════════════════════════════════════════════════════
+group('5. 捏合：一帧算一遍，笔迹先借拼好的轮廓，抬手再准确地画');
+
+/**
+ * 一块收得到指针事件的草稿纸：只给捏合用得着的那几样。ink 记下每次 setTransform 的缩放、带没带 approximate；
+ * paper 记下纸画了几遍。
+ */
+function pinchablePad() {
+  const listeners = {};
+  const vp = {
+    addEventListener: (type, fn) => { listeners[type] = fn; },
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: VIEW.width, height: VIEW.height }),
+    classList: { add() {}, remove() {} },
+  };
+  const sets = [];
+  const paper = { drawn: 0 };
+  const ctx = recordingContext();
+  const paperCtx = new Proxy(ctx, {
+    get: (t, k) => (k === 'fillRect' ? (...a) => { paper.drawn++; return t.fillRect(...a); } : t[k]),
+  });
+  const pane = Object.create(ScratchPane.prototype);
+  Object.assign(pane, {
+    pad: { id: 'pad-1' },
+    camera: createCamera(),
+    style: createScratchStyle({ patternId: PATTERNS.PLAIN }),
+    handlers: {},
+    elViewport: vp,
+    elPaper: { width: 0, height: 0, style: {} },
+    paperCtx,
+    ink: {
+      resize() {},
+      setTransform: (scale, offsetX, offsetY, opts) => sets.push({ scale, approximate: !!opts?.approximate }),
+    },
+    _scheduleCameraSave() {},
+  });
+  pane._bindGestures();
+  const fire = (type, id, x, y) => listeners[type]({
+    type, pointerType: 'touch', pointerId: id, clientX: x, clientY: y, preventDefault() {},
+  });
+  return { pane, sets, paper, fire };
+}
+
+/** 换上一个攒着不放的逐帧回调，跑完换回去。 */
+function withFrames(fn) {
+  const frames = new Map();
+  let next = 0;
+  const raf = globalThis.requestAnimationFrame;
+  const caf = globalThis.cancelAnimationFrame;
+  globalThis.requestAnimationFrame = (cb) => { frames.set(++next, cb); return next; };
+  globalThis.cancelAnimationFrame = (id) => { frames.delete(id); };
+  const runFrame = () => { const due = [...frames.values()]; frames.clear(); due.forEach((cb) => cb(0)); };
+  try { return fn(frames, runFrame); } finally {
+    if (raf === undefined) delete globalThis.requestAnimationFrame; else globalThis.requestAnimationFrame = raf;
+    if (caf === undefined) delete globalThis.cancelAnimationFrame; else globalThis.cancelAnimationFrame = caf;
+  }
+}
+
+check('两根手指一帧各报一下：攒到逐帧回调里按两根手指最新的位置算一遍，纸和笔迹各画一遍，笔迹借拼好的轮廓', () => withFrames((frames, runFrame) => {
+  const { pane, sets, paper, fire } = pinchablePad();
+  fire('pointerdown', 1, 540, 400);
+  fire('pointerdown', 2, 740, 400);            // 相距 200
+  fire('pointermove', 1, 440, 400);
+  fire('pointermove', 2, 840, 400);            // 相距 400：放大到 2 倍
+  assert.equal(sets.length, 0, '手指一动不当场画');
+  assert.equal(frames.size, 1, '一帧只要一次逐帧回调');
+  runFrame();
+  assert.equal(sets.length, 1, '这一帧笔迹画一遍（原来两根手指各两遍）');
+  assert.equal(paper.drawn, 1, '纸也只画一遍');
+  assert.ok(near(pane.camera.zoom, 2), `按两根手指最新的位置算：${pane.camera.zoom}`);
+  assert.equal(sets[0].approximate, true, '缩放还在变：借拼好的轮廓按比例画');
+}));
+
+check('捏合和平移合成一个视角：和先缩放、再跟着手指中点平移的结果一样', () => withFrames((frames, runFrame) => {
+  const { pane, fire } = pinchablePad();
+  fire('pointerdown', 1, 540, 400);
+  fire('pointerdown', 2, 740, 400);
+  fire('pointermove', 1, 500, 430);
+  fire('pointermove', 2, 900, 470);
+  const start = createCamera();
+  const d = Math.hypot(400, 40);
+  const expected = panByScreen(zoomAbout(start, d / 200, VIEW, 700, 450), 700 - 640, 450 - 400);
+  runFrame();
+  assert.ok(sameCamera(pane.camera, expected), JSON.stringify(pane.camera) + ' / ' + JSON.stringify(expected));
+}));
+
+check('抬起一根手指：攒着的那一下先算掉，笔迹按停下来的缩放准确地画一遍', () => withFrames((frames) => {
+  const { pane, sets, fire } = pinchablePad();
+  fire('pointerdown', 1, 540, 400);
+  fire('pointerdown', 2, 740, 400);
+  fire('pointermove', 1, 340, 400);            // 相距 400
+  fire('pointerup', 1, 340, 400);
+  assert.equal(frames.size, 0, '没留到下一帧');
+  assert.ok(near(pane.camera.zoom, 2), `${pane.camera.zoom}`);
+  assert.deepEqual(sets.map((x) => x.approximate), [true, false], '先近似画到位，再准确画一遍');
+  assert.ok(near(sets[1].scale, sets[0].scale), '准确的那一遍是同一个缩放');
+}));
+
+check('又按下第三根手指：捏合到此为止，笔迹也准确地画一遍', () => withFrames(() => {
+  const { sets, fire } = pinchablePad();
+  fire('pointerdown', 1, 540, 400);
+  fire('pointerdown', 2, 740, 400);
+  fire('pointermove', 2, 940, 400);
+  fire('pointerdown', 3, 600, 600);
+  assert.deepEqual(sets.map((x) => x.approximate), [true, false]);
+  fire('pointerup', 3, 600, 600);
+  fire('pointerup', 2, 940, 400);
+  fire('pointerup', 1, 540, 400);
+  assert.equal(sets.length, 2, '后面松手不再重画');
+}));
+
+check('一根手指拖着平移照旧当场画、准确地画（平移不变缩放，拼好的轮廓本来就对得上）', () => withFrames((frames) => {
+  const { sets, fire } = pinchablePad();
+  fire('pointerdown', 1, 540, 400);
+  fire('pointermove', 1, 600, 400);
+  fire('pointermove', 1, 640, 420);
+  assert.equal(frames.size, 0);
+  assert.ok(sets.length >= 1 && sets.every((x) => !x.approximate));
+}));
 
 console.log('\n═══════════════════════════════════════════════════════════════');
 console.log(`  ${PASS} passed, ${FAIL} failed`);

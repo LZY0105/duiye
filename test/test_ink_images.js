@@ -184,6 +184,45 @@ await test('转过的图：变换跟着四个角转', () => {
   assert.deepEqual(ctx.calls.find((c) => c[0] === 'transform').slice(1), [0, 40, -30, 0, 0, 0]);
 });
 
+await test('画在屏幕上用缩小版：挑边长不小于要画的大小的最小一档，后台生成，好了叫画布重画；比原图还大就画原图', async () => {
+  const made = [];
+  const saved = globalThis.createImageBitmap;
+  globalThis.createImageBitmap = async (source, opts) => {
+    const bitmap = { width: opts.resizeWidth, height: opts.resizeHeight, from: source, closed: false, close() { this.closed = true; } };
+    made.push(bitmap);
+    return bitmap;
+  };
+  const heard = [];
+  const off = I.onImageReady((id) => heard.push(id));
+  try {
+    const full = fakeBitmap(2048, 600);
+    I.rememberDecoded('img_lv', full);
+    heard.length = 0;
+    // 屏幕上 500×146 设备像素：1/4（512×150）是不小于它的最小一档。
+    assert.equal(I.imageForSize('img_lv', 500, 146), full, '还没生成好：先画原图');
+    assert.equal(made.length, 1);
+    assert.deepEqual([made[0].width, made[0].height, made[0].from], [512, 150, full]);
+    assert.equal(I.imageForSize('img_lv', 500, 146), full, '正在生成：不重复要');
+    assert.equal(made.length, 1);
+    await new Promise((r) => setTimeout(r, 0));
+    assert.deepEqual(heard, ['img_lv'], '生成好了叫一声，画布重画');
+    assert.equal(I.imageForSize('img_lv', 500, 146), made[0], '好了就画它');
+    // 再小一点：1/8 那一档还没好，先用已经有的 1/4。
+    assert.equal(I.imageForSize('img_lv', 200, 60), made[0]);
+    assert.equal(made.length, 2);
+    // 比原图的一半还大：画原图。
+    assert.equal(I.imageForSize('img_lv', 1400, 400), full);
+    assert.equal(I.imageFor('img_lv'), full, '导出、识别用的还是原图');
+    // 原图换掉（又放进来一遍）：旧的缩小版放掉。
+    I.rememberDecoded('img_lv', fakeBitmap(2048, 600));
+    assert.ok(made[0].closed);
+  } finally {
+    off();
+    if (saved === undefined) delete globalThis.createImageBitmap;
+    else globalThis.createImageBitmap = saved;
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════
 group('3. 库：存、取，放在哪一层位置，放多大');
 

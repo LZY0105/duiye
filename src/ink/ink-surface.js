@@ -208,6 +208,8 @@ const SELECTION_SCALE_MAX = 5;
 
 /** 从另一栏探过来的那一片怎么画：图片画简笔画（见 showDragGhost）。 */
 const GHOST_DRAW = Object.freeze({ sketch: true });
+/** 缩放还在变的那几帧整层怎么画：别的缩放下拼好的轮廓按比例拿来用（见 setTransform）。 */
+const APPROXIMATE_DRAW = Object.freeze({ approximate: true });
 /** 图片落到这一栏以后，盖在照片上的简笔画多久淡完，毫秒（见 _startReveal）。 */
 const REVEAL_MS = 260;
 /**
@@ -553,13 +555,29 @@ export class InkSurface {
   setEnabled(enabled) { this.enabled = !!enabled; }
 
   /** Called by the host pane whenever its zoom or pan changes. */
-  setTransform(scale, offsetX, offsetY) {
+  /**
+   * @param {{approximate?: boolean}} [opts] approximate：缩放还在变（捏合、点放大缩小、拖两栏之间那条线——书页那时
+   *   也只是一张被拉伸的位图），笔迹拿别的缩放下拼好的轮廓按比例画，不每一帧整页重拼；停下来那一下不带它，按准确的
+   *   缩放重拼（见 ink-renderer.js 的 cachedShape）。
+   */
+  setTransform(scale, offsetX, offsetY, { approximate = false } = {}) {
     this.transform = createTransform(scale, offsetX, offsetY);
+    this._approximate = !!approximate;
     this.render();
   }
 
-  /** Resizes the backing store to match the CSS box; contents are repainted. */
-  resize(cssWidth, cssHeight, dpr = 1) {
+  /** 整层重画时交给 renderLayer 的选项。 */
+  _drawOpts() {
+    return this._approximate ? APPROXIMATE_DRAW : null;
+  }
+
+  /**
+   * Resizes the backing store to match the CSS box; contents are repainted.
+   *
+   * @param {{render?: boolean}} [opts] render: false——调用方紧接着就 setTransform（那一下会重画），这里就别先画
+   *   一遍：栏里每挪一下都是先 resize 再 setTransform，原来整页笔迹每一下画两遍（平板上量到拖书页一帧两次重画）。
+   */
+  resize(cssWidth, cssHeight, dpr = 1, { render = true } = {}) {
     const w = Math.max(1, Math.floor(cssWidth * dpr));
     const h = Math.max(1, Math.floor(cssHeight * dpr));
 
@@ -581,7 +599,7 @@ export class InkSurface {
     }
     this._viewport = { width: cssWidth, height: cssHeight };
     // The repaint stays: the transform may have moved even when the size did not.
-    this.render();
+    if (render) this.render();
   }
 
   // ── layer lifecycle ───────────────────────────────────────────────────────
@@ -652,7 +670,7 @@ export class InkSurface {
         cache.canvas.height = main.height;
       }
       cache.ctx.setTransform(this._dpr, 0, 0, this._dpr, 0, 0);
-      renderLayer(cache.ctx, this.layer, this.transform, this._viewport);
+      renderLayer(cache.ctx, this.layer, this.transform, this._viewport, this._drawOpts());
       cache.key = key;
       cache.print = this._layerPrint();
       this._layerCache = cache;
@@ -689,6 +707,8 @@ export class InkSurface {
       this.layer, strokes, strokes.length,
       this.transform.scale, this.transform.offsetX, this.transform.offsetY,
       main.width, main.height, this._dpr, this._viewport.width, this._viewport.height,
+      // 缩放还在变的那几帧画的是借来的轮廓（setTransform 的 approximate）：停下来按准确的缩放画时不能拿它顶。
+      !!this._approximate,
     ];
   }
 
@@ -763,7 +783,7 @@ export class InkSurface {
     if (!this._viewport) return;
     // 已经落笔的那一层不重画：贴一张缓存的图（见 _blitLayerCache）。贴不上就照旧整页重画。
     if (!this._blitLayerCache(buildCache)) {
-      renderLayer(this.ctx, this.layer, this.transform, this._viewport);
+      renderLayer(this.ctx, this.layer, this.transform, this._viewport, this._drawOpts());
     }
     // The in-progress stroke is drawn on top so it appears live, before it is
     // committed to the layer on pointerup.

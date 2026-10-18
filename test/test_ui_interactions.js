@@ -715,7 +715,7 @@ check('ink is transformed at the scale the page is painted at', () => {
   const at = code.indexOf('  _syncInk() {');
   const sync = code.slice(at, at + 500);
   assert.ok(/const scale = this\._drawnScale\(\);/.test(sync)
-    && /setTransform\(scale, -x \/ scale, -y \/ scale\)/.test(sync),
+    && /setTransform\(scale, -x \/ scale, -y \/ scale[,)]/.test(sync),
     'reading state.zoom left the handwriting at its old size on a page that '
     + 'had changed size under it — drifting the opposite way in each pane');
 });
@@ -1400,9 +1400,106 @@ check('the pinch passes the midpoint, and does not re-rasterise per frame', () =
   const pinch = src.slice(src.indexOf('const ratio = c.d / pinch.d'), src.indexOf('pinch.x = c.x'));
   assert.ok(/anchor = \{ x: c\.x - box\.left, y: c\.y - box\.top \}/.test(pinch),
     'the zoom has to be told where the fingers are');
-  assert.ok(/setZoom\(this\.state, pinch\.zoom \* ratio\), false, anchor\)/.test(pinch),
+  assert.ok(/setZoom\(this\.state, pinch\.zoom \* ratio\), false, anchor[,)]/.test(pinch),
     'and must not ask for a repaint on every frame of the gesture');
   assert.ok(/_previewZoom\(\)/.test(pinch), 'the bitmap on screen stands in until the fingers lift');
+});
+
+/**
+ * 一块真的会收指针事件的 PDF 栏：只给捏合用得着的那几样，逐帧回调攒在 frames 里由测试自己放。
+ * placed：书页摆了几次（每摆一次笔迹整页画一遍）；committed：捏合完了按真的大小重画了几次。
+ */
+function pinchablePane() {
+  const pane = zoomablePane({ zoom: 1, scrollX: 100, scrollY: 100 });
+  const vp = document.createElement('div');
+  vp.getBoundingClientRect = () => ({ left: 0, top: 0, right: 400, bottom: 500, width: 400, height: 500 });
+  pane.elViewport = vp;
+  pane.doc = {};
+  pane.handlers = {};
+  pane._contentSize = () => ({ width: 600 * pane.state.zoom, height: 800 * pane.state.zoom });
+  pane._renderedZoom = 1;
+  pane._previewScale = 1;
+  pane.elHolder = { style: {} };
+  const seen = { placed: 0, committed: 0 };
+  pane._position = () => { seen.placed++; };
+  pane._commitPreviewZoom = () => { seen.committed++; };
+  pane._bindGestures();
+  const fire = (type, id, x, y) => vp.dispatchEvent(new dom.window.PointerEvent(type, {
+    bubbles: true, cancelable: true, pointerId: id, pointerType: 'touch', clientX: x, clientY: y,
+  }));
+  return { pane, seen, fire };
+}
+
+/** 换上一个攒着不放的逐帧回调，跑完换回去。 */
+function withFrames(fn) {
+  const frames = new Map();
+  let next = 0;
+  const raf = globalThis.requestAnimationFrame;
+  const caf = globalThis.cancelAnimationFrame;
+  globalThis.requestAnimationFrame = (cb) => { frames.set(++next, cb); return next; };
+  globalThis.cancelAnimationFrame = (id) => { frames.delete(id); };
+  const runFrame = () => { const due = [...frames.values()]; frames.clear(); due.forEach((cb) => cb(0)); };
+  try { return fn(frames, runFrame); } finally {
+    globalThis.requestAnimationFrame = raf;
+    globalThis.cancelAnimationFrame = caf;
+  }
+}
+
+check('捏合：两根手指一帧各报一下，攒到这一帧的逐帧回调里按两根手指最新的位置算一遍，书页只摆一次', () => withFrames((frames, runFrame) => {
+  const { pane, seen, fire } = pinchablePane();
+  fire('pointerdown', 1, 150, 250);
+  fire('pointerdown', 2, 250, 250);           // 两指相距 100
+  seen.placed = 0;
+  fire('pointermove', 1, 100, 250);
+  fire('pointermove', 2, 300, 250);           // 相距 200
+  assert.equal(seen.placed, 0, '手指一动不当场摆');
+  assert.equal(frames.size, 1, '一帧只要一次逐帧回调');
+  runFrame();
+  assert.equal(seen.placed, 1, '这一帧摆一次（原来两根手指各摆三次）');
+  assert.ok(Math.abs(pane.state.zoom - 2) < 1e-9, `按两根手指最新的位置算：${pane.state.zoom}`);
+  assert.ok(Math.abs(pane._previewScale - 2) < 1e-9, '屏幕上那张位图按比例拉过去');
+}));
+
+check('捏合：手指抬起时还攒着一下，先按那两根手指算掉，再按真的大小重画', () => withFrames((frames) => {
+  const { pane, seen, fire } = pinchablePane();
+  fire('pointerdown', 1, 150, 250);
+  fire('pointerdown', 2, 250, 250);
+  fire('pointermove', 1, 50, 250);            // 相距 200
+  assert.equal(frames.size, 1);
+  fire('pointerup', 1, 50, 250);
+  assert.equal(frames.size, 0, '攒着的那一下取消了，没留到下一帧');
+  assert.ok(Math.abs(pane.state.zoom - 2) < 1e-9, `抬手前最后那一下算进去了：${pane.state.zoom}`);
+  assert.equal(seen.committed, 1, '按停下来的缩放重画');
+}));
+
+check('捏合：又按下第三根手指，捏合到此为止，书页按停下来的缩放重画（不留着拉伸的位图）', () => withFrames(() => {
+  const { pane, seen, fire } = pinchablePane();
+  fire('pointerdown', 1, 150, 250);
+  fire('pointerdown', 2, 250, 250);
+  fire('pointermove', 2, 350, 250);           // 相距 200
+  fire('pointerdown', 3, 200, 400);
+  assert.ok(Math.abs(pane.state.zoom - 2) < 1e-9, `${pane.state.zoom}`);
+  assert.equal(seen.committed, 1);
+  fire('pointerup', 3, 200, 400);
+  fire('pointerup', 2, 350, 250);
+  fire('pointerup', 1, 150, 250);
+  assert.equal(seen.committed, 1, '只重画一次');
+}));
+
+check('没有逐帧回调的地方（测试环境）捏合照旧当场算', () => {
+  const raf = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = undefined;
+  try {
+    const { pane, seen, fire } = pinchablePane();
+    fire('pointerdown', 1, 150, 250);
+    fire('pointerdown', 2, 250, 250);
+    seen.placed = 0;
+    fire('pointermove', 2, 350, 250);
+    assert.equal(seen.placed, 1);
+    assert.ok(Math.abs(pane.state.zoom - 2) < 1e-9);
+  } finally {
+    globalThis.requestAnimationFrame = raf;
+  }
 });
 
 check('the page is drawn for real once the fingers lift', () => {

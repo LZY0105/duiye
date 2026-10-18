@@ -9,7 +9,7 @@
 // and never receives the PDF canvas, so painting ink cannot disturb the page.
 
 import { INK_TOOLS, TOOL_DEFAULTS, isImageStroke } from './stroke.js';
-import { imageFor } from './ink-image.js';
+import { imageForSize } from './ink-image.js';
 import { paintSketch, sketchFor } from './ink-image-sketch.js';
 
 /**
@@ -206,8 +206,14 @@ function outlineSamples(stroke, transform, points) {
  * translucent ink, and one draw call for the whole mark.
  */
 function traceStroke(ctx, pts) {
-  const n = pts.length;
   ctx.beginPath();
+  tracePath(ctx, pts);
+  ctx.fill();
+}
+
+/** traceStroke 拼的那一套小块，交给画布的当前路径或者一个 Path2D（两样都有 moveTo / lineTo / arc / closePath）。 */
+function tracePath(ctx, pts) {
+  const n = pts.length;
 
   for (let i = 0; i < n - 1; i++) {
     const a = pts[i];
@@ -241,8 +247,83 @@ function traceStroke(ctx, pts) {
     ctx.moveTo(pts[i].x + pts[i].r, pts[i].y);
     ctx.arc(pts[i].x, pts[i].y, pts[i].r, 0, Math.PI * 2);
   }
+}
 
-  ctx.fill();
+/**
+ * 一笔拼好的轮廓，存成 Path2D，按「文档坐标 × 缩放」记——不带平移，每一笔记一份。
+ *
+ * 拖书页、栏头收起时书页跟着挪、两栏之间那条线挪动……这些只改平移。原来平移一下，整页每一笔都要按新位置重新
+ * 换算、重新平滑，再把几十个小圆、小四边形一个一个交给画布：平板上一页一千来笔，重画一次十二万多次画布调用、
+ * 三十多毫秒，拖书页一帧七十多毫秒（10-18 机上量的）。拼好的轮廓和平移无关，存下来，画的时候平移交给画布的
+ * 变换，一笔一次 fill / stroke。缩放变了（捏合）才重拼；点被原地挪过（搬、转、缩、撤销）时点数组或边界会变，
+ * 也重拼——和 outlineSamples 同一套认法，只是不认平移。没有 Path2D 的地方（测试里的 jsdom）照旧一笔一笔拼。
+ */
+const shapes = new WeakMap();
+const canCachePaths = () => typeof Path2D === 'function';
+
+/**
+ * 这一笔在这个缩放下的样子：手写的（变粗细）是中心线上的点和半宽（smooth：沿平滑后的中心线，形状不平滑），
+ * 等宽的笔（荧光笔）是一条中心线。path（和铅笔外圈 outer）用到时才拼。
+ */
+function cachedShape(stroke, scale, points, kind, approximate = false) {
+  const b = stroke.bounds;
+  const hit = shapes.get(points);
+  // approximate：缩放还在变（捏合、点放大缩小、拖两栏之间那条线）的那几帧，别的缩放下拼好的也拿来用，画的时候按
+  // 比例放大缩小——书页那时也只是一张被拉伸的位图；停下来那一下（书页按真的大小重画）再按准确的缩放重拼。
+  if (hit && hit.kind === kind && hit.length === points.length && (approximate || hit.scale === scale)
+    && hit.width === stroke.width && hit.tool === stroke.tool
+    && hit.minX === b?.minX && hit.minY === b?.minY && hit.maxX === b?.maxX && hit.maxY === b?.maxY) {
+    return hit;
+  }
+  const entry = {
+    kind,
+    length: points.length,
+    scale,
+    width: stroke.width,
+    tool: stroke.tool,
+    minX: b?.minX,
+    minY: b?.minY,
+    maxX: b?.maxX,
+    maxY: b?.maxY,
+    pts: null,
+    path: null,
+    outer: null,
+    box: null,
+  };
+  if (kind !== 'line') {
+    const samples = screenSamples(stroke, { scale, offsetX: 0, offsetY: 0 }, points);
+    entry.pts = kind === 'smooth' ? smoothSamples(samples) : samples;
+  }
+  shapes.set(points, entry);
+  return entry;
+}
+
+/** 拼好的小块（traceStroke 那一套）装进一个 Path2D。 */
+function outlinePath(pts) {
+  const path = new Path2D();
+  tracePath(path, pts);
+  return path;
+}
+
+/** 等宽的笔那一条中心线（过相邻采样点中点的二次曲线），「文档坐标 × 缩放」。 */
+function centerlinePath(points, scale) {
+  const path = new Path2D();
+  const at = (pt) => ({ x: pt.x * scale, y: pt.y * scale });
+  const first = at(points[0]);
+  path.moveTo(first.x, first.y);
+  if (points.length === 2) {
+    const only = at(points[1]);
+    path.lineTo(only.x, only.y);
+    return path;
+  }
+  for (let i = 1; i < points.length - 1; i++) {
+    const control = at(points[i]);
+    const end = at({ x: (points[i].x + points[i + 1].x) / 2, y: (points[i].y + points[i + 1].y) / 2 });
+    path.quadraticCurveTo(control.x, control.y, end.x, end.y);
+  }
+  const last = at(points[points.length - 1]);
+  path.lineTo(last.x, last.y);
+  return path;
 }
 
 /**
@@ -379,6 +460,46 @@ function drawPencil(ctx, stroke, pts, alpha, scale) {
 }
 
 /**
+ * drawPencil 的同一套，轮廓用存好的 Path2D（「文档坐标 × 缩放」，见 cachedShape），平移是 (tx, ty)，r 是这一回的
+ * 缩放和拼的时候的缩放之比（准确时是 1）。
+ */
+function drawPencilShape(ctx, stroke, shape, tx, ty, r, alpha, scale) {
+  const target = ctx.canvas;
+  const b = shape.box || (shape.box = boundsOf(shape.pts, 2));
+  const box = { x: b.x * r + tx, y: b.y * r + ty, w: b.w * r, h: b.h * r };
+  const pane = scratchFor(target ? target.width : 0, target ? target.height : 0);
+  const pattern = pane && pane.getContext ? grainPattern(pane.getContext('2d'), scale) : null;
+  const path = shape.path || (shape.path = outlinePath(shape.pts));
+  if (!pane || !pattern) {
+    ctx.globalAlpha = alpha;
+    ctx.translate(tx, ty);
+    if (r !== 1) ctx.scale(r, r);
+    ctx.fill(path);
+    return;
+  }
+
+  const s = pane.getContext('2d');
+  s.save();
+  s.clearRect(box.x, box.y, box.w, box.h);
+  s.fillStyle = stroke.color;
+  s.translate(tx, ty);
+  if (r !== 1) s.scale(r, r);
+  s.globalAlpha = alpha * 0.30;
+  s.fill(shape.outer || (shape.outer = outlinePath(shape.pts.map((p) => ({ ...p, r: p.r * 1.45 })))));
+  s.globalAlpha = alpha * 0.95;
+  s.fill(path);
+  s.setTransform(1, 0, 0, 1, 0, 0);
+  s.globalCompositeOperation = 'destination-out';
+  s.globalAlpha = 1;
+  s.fillStyle = pattern;
+  s.fillRect(box.x, box.y, box.w, box.h);
+  s.restore();
+
+  ctx.globalAlpha = 1;
+  ctx.drawImage(pane, box.x, box.y, box.w, box.h, box.x, box.y, box.w, box.h);
+}
+
+/**
  * 一张贴在页上的图片：拿它四个角里的三个（左上、右上、左下）搭一个仿射变换，把整张图画进那个平行四边形里。
  * 搬、转、缩放都只动了这四个点，画出来自然跟着转、跟着缩。图还没解好（刚翻到这一页，正从库里读）就先画一块
  * 淡灰占着位置，解好了画布会重画（ink-image.js 的 onImageReady）。
@@ -400,7 +521,12 @@ function drawImageStroke(ctx, stroke, transform, opts) {
       return;
     }
   }
-  const image = imageFor(stroke.image.id);
+  // 画多大（设备像素）：画布的变换里带着 dpr。照这个大小挑一份差不多一比一的缩小版（见 ink-image.js 的
+  // imageForSize），不每画一次都把原图整张缩一遍。
+  const m = typeof ctx.getTransform === 'function' ? ctx.getTransform() : null;
+  const k = m && Number.isFinite(m.a) ? Math.hypot(m.a, m.b) || 1 : 1;
+  const image = imageForSize(stroke.image.id,
+    Math.hypot(tr.x - tl.x, tr.y - tl.y) * k, Math.hypot(bl.x - tl.x, bl.y - tl.y) * k);
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.globalCompositeOperation = 'source-over';
@@ -423,7 +549,8 @@ function drawImageStroke(ctx, stroke, transform, opts) {
  * of local pieces filled once — see traceStroke for why it is neither stroked
  * segment by segment nor traced as one long outline.
  *
- * @param {{sketch?: boolean, alpha?: number}} [opts] 只管图片：见 drawImageStroke
+ * @param {{sketch?: boolean, alpha?: number, approximate?: boolean}} [opts] sketch、alpha 只管图片：见 drawImageStroke；
+ *   approximate：缩放还在变的那几帧，别的缩放下拼好的轮廓按比例拿来用（见 cachedShape）
  */
 export function drawStroke(ctx, stroke, transform, opts = null) {
   const points = stroke.points;
@@ -481,6 +608,21 @@ export function drawStroke(ctx, stroke, transform, opts = null) {
   const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, p: (a.p + b.p) / 2 });
 
   const constantWidth = !defaults.pressureRange;
+  // 拼好的轮廓存着（见 cachedShape）：画的时候只把平移（缩放还在变的那几帧连同比例）交给画布的变换。
+  const cached = canCachePaths();
+  const approximate = !!opts?.approximate;
+  const tx = -transform.offsetX * transform.scale;
+  const ty = -transform.offsetY * transform.scale;
+  if (constantWidth && cached) {
+    const line = cachedShape(stroke, transform.scale, points, 'line', approximate);
+    const r = transform.scale / line.scale;
+    ctx.lineWidth = Math.max(0.4, stroke.width * transform.scale) / r;
+    ctx.translate(tx, ty);
+    if (r !== 1) ctx.scale(r, r);
+    ctx.stroke(line.path || (line.path = centerlinePath(points, line.scale)));
+    ctx.restore();
+    return;
+  }
   if (constantWidth) {
     ctx.lineWidth = Math.max(0.4, stroke.width * transform.scale);
     ctx.beginPath();
@@ -509,6 +651,24 @@ export function drawStroke(ctx, stroke, transform, opts = null) {
   //
   // 手写的沿平滑后的中心线拼（smoothSamples，按笔记一份：outlineSamples）；形状（矩形、三角形……）的角是
   // 真的角，不能削圆。
+  if (cached) {
+    const shape = cachedShape(stroke, transform.scale, points, stroke.shape ? 'shape' : 'smooth', approximate);
+    const r = transform.scale / shape.scale;
+    if (shape.pts.length === 1) {
+      const p = shape.pts[0];
+      ctx.beginPath();
+      ctx.arc(p.x * r + tx, p.y * r + ty, Math.max(0.4, p.r * r), 0, Math.PI * 2);
+      ctx.fill();
+    } else if (defaults.grain) {
+      drawPencilShape(ctx, stroke, shape, tx, ty, r, stroke.opacity, transform.scale);
+    } else {
+      ctx.translate(tx, ty);
+      if (r !== 1) ctx.scale(r, r);
+      ctx.fill(shape.path || (shape.path = outlinePath(shape.pts)));
+    }
+    ctx.restore();
+    return;
+  }
   const pts = stroke.shape
     ? screenSamples(stroke, transform, points)
     : outlineSamples(stroke, transform, points);
@@ -530,11 +690,11 @@ export function drawStroke(ctx, stroke, transform, opts = null) {
  * The canvas is cleared first — this canvas holds only ink, so clearing it can
  * never remove page content.
  */
-export function renderLayer(ctx, layer, transform, viewport) {
+export function renderLayer(ctx, layer, transform, viewport, opts = null) {
   ctx.clearRect(0, 0, viewport.width, viewport.height);
   for (const stroke of layer.getAll()) {
     if (!isVisible(stroke, transform, viewport)) continue;
-    drawStroke(ctx, stroke, transform);
+    drawStroke(ctx, stroke, transform, opts);
   }
 }
 

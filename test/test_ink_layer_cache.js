@@ -542,6 +542,45 @@ await test('要不到 2D 上下文（内存不够之类）：这一笔只试一�
 });
 
 // ═══════════════════════════════════════════════════════════════
+group('6. 缩放还在变的那几帧（setTransform 带 approximate）：借拼好的轮廓按比例画');
+
+await test('捏合、拖分栏线时整层重画借别的缩放下拼好的轮廓；停下来那一下按准确的缩放重拼', async () => {
+  const made = [];
+  class FakePath2D {
+    constructor() { made.push(this); }
+    moveTo() {} lineTo() {} arc() {} closePath() {} quadraticCurveTo() {}
+  }
+  const saved = globalThis.Path2D;
+  globalThis.Path2D = FakePath2D;
+  try {
+    setOffscreen({ enabled: false });
+    const { surface, log } = mount();
+    inked(surface.layer, '#a00000', 100, 100);
+    inked(surface.layer, '#00a000', 100, 200);
+    surface.setTransform(1, 0, 0);
+    assert.equal(made.length, 2, '两条各拼一个');
+    log.length = 0;
+    for (const k of [1.1, 1.25, 1.4]) surface.setTransform(k, 0, 0, { approximate: true });
+    assert.equal(made.length, 2, '缩放在变的那几帧不重拼');
+    assert.equal(calls(log, 'scale').length, 6, '每帧两条各按比例缩放一次');
+    surface.setTransform(1.4, 0, 0);
+    assert.equal(made.length, 4, '停下来按准确的缩放重拼');
+  } finally {
+    if (saved === undefined) delete globalThis.Path2D;
+    else globalThis.Path2D = saved;
+  }
+});
+
+await test('写字那张缓存图的键记着是不是近似画的：停下来那一下不拿近似画的图顶', async () => {
+  setOffscreen({ enabled: true });
+  const { surface } = mount();
+  surface.setTransform(1.5, 0, 0, { approximate: true });
+  const roughKey = surface._layerCacheKey();
+  surface.setTransform(1.5, 0, 0);
+  assert.notDeepEqual(surface._layerCacheKey(), roughKey);
+});
+
+// ═══════════════════════════════════════════════════════════════
 console.log('\n═══════════════════════════════════════════════════════════════');
 console.log(`  ${passed} passed, ${failed} failed`);
 console.log('═══════════════════════════════════════════════════════════════');

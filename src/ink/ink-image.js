@@ -161,6 +161,56 @@ export function imageFor(id) {
   return entry.state === 'ready' ? entry.image : null;
 }
 
+/** 缩小版最多缩到几档（每档边长减半：1/2、1/4、1/8）。 */
+const LEVEL_MAX = 3;
+const PENDING = 'pending';
+
+/**
+ * 画在屏幕上用的那一份：边长不小于要画的大小（设备像素）的最小一档缩小版——每帧画的是差不多一比一的小图，
+ * 不用把整张原图（最大 2048）按最高质量缩一遍。人说「有照片时整个页面的一些动画掉帧会非常严重」：拖书页、
+ * 缩放、栏头收起这些都会让笔迹那一层整页重画，每画一次都缩一遍原图。
+ *
+ * 缩小版用 createImageBitmap 在后台生成（每档一次，跟着原图记着，原图被放掉时一起放掉）；还没生成好的先画原图，
+ * 生成好了叫一声（onImageReady），画布重画一遍换上。导出、截图识别用的仍是原图（imageFor）。
+ */
+export function imageForSize(id, wantWidth, wantHeight) {
+  const full = imageFor(id);
+  if (!full) return null;
+  const entry = decoded.get(id);
+  const fw = full.width || full.naturalWidth || 0;
+  const fh = full.height || full.naturalHeight || 0;
+  if (!entry || !fw || !fh || !(wantWidth > 0) || !(wantHeight > 0) || typeof createImageBitmap !== 'function') return full;
+  let level = 0;
+  while (level < LEVEL_MAX && fw / 2 ** (level + 1) >= wantWidth && fh / 2 ** (level + 1) >= wantHeight) level += 1;
+  if (!level) return full;
+  const levels = entry.levels || (entry.levels = new Map());
+  const ready = levels.get(level);
+  if (ready && ready !== PENDING) return ready;
+  if (!ready) {
+    levels.set(level, PENDING);
+    createImageBitmap(full, {
+      resizeWidth: Math.max(1, Math.round(fw / 2 ** level)),
+      resizeHeight: Math.max(1, Math.round(fh / 2 ** level)),
+      resizeQuality: 'high',
+    }).then((bitmap) => {
+      if (decoded.get(id) !== entry || entry.image !== full) { bitmap.close?.(); return; }
+      levels.set(level, bitmap);
+      announce(id);
+    }).catch(() => { levels.delete(level); });
+  }
+  // 这一档还没好：先用已经有的、比它大的那一档（没有就原图）。
+  for (let l = level - 1; l >= 1; l--) {
+    const larger = levels.get(l);
+    if (larger && larger !== PENDING) return larger;
+  }
+  return full;
+}
+
+function closeLevels(entry) {
+  for (const bitmap of entry?.levels?.values() || []) if (bitmap !== PENDING) bitmap.close?.();
+  if (entry) entry.levels = null;
+}
+
 /** 这张图解到哪一步了：0 还没好，1 好了，-1 解不出来。画布拿它判断缓存的那张图还对不对。 */
 export function imageVersion(id) {
   return decoded.get(id)?.version ?? 0;
@@ -182,6 +232,7 @@ export function whenImagesReady(ids) {
 export function rememberDecoded(id, image) {
   if (!id || !image) return;
   seen.add(id);
+  closeLevels(decoded.get(id));
   decoded.set(id, { state: 'ready', image, version: 1, promise: Promise.resolve(image) });
   trim();
   announce(id);
@@ -223,6 +274,7 @@ function trim() {
     if (decoded.size <= DECODED_MAX) return;
     if (entry.state === 'loading') continue;
     decoded.delete(id);
+    closeLevels(entry);
     entry.image?.close?.();
   }
 }

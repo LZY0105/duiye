@@ -1468,6 +1468,177 @@ check('a finished lasso can be grabbed from just outside its line', () => {
     'two points are a line, not a loop, at any margin');
 });
 
+// ═══════════════════════════════════════════════════════════════
+group('8. 平移不重拼：拼好的轮廓存成 Path2D，画的时候只换平移');
+
+/** 假的 Path2D：记下拼了几个、每个里面的命令。测试环境本来没有 Path2D（那时照旧一笔一笔拼）。 */
+function withPath2D(fn) {
+  const made = [];
+  class FakePath2D {
+    constructor() { this.ops = []; made.push(this); }
+    moveTo(...a) { this.ops.push(['moveTo', ...a]); }
+    lineTo(...a) { this.ops.push(['lineTo', ...a]); }
+    arc(...a) { this.ops.push(['arc', ...a]); }
+    closePath() { this.ops.push(['closePath']); }
+    quadraticCurveTo(...a) { this.ops.push(['quadraticCurveTo', ...a]); }
+  }
+  const saved = globalThis.Path2D;
+  globalThis.Path2D = FakePath2D;
+  try { return fn(made); } finally {
+    if (saved === undefined) delete globalThis.Path2D;
+    else globalThis.Path2D = saved;
+  }
+}
+
+/** 记下每一次调用的假画布（属性照存，方法只记）。 */
+function recordingCtx() {
+  const calls = [];
+  const ctx = new Proxy({}, {
+    get: (t, k) => (k in t ? t[k] : (...a) => { calls.push([String(k), ...a]); }),
+    set: (t, k, v) => { t[k] = v; return true; },
+  });
+  return { ctx, calls };
+}
+
+/** 一笔变粗细的手写：压力起伏、来回弯。 */
+const penStroke = () => {
+  const st = createStroke({ tool: INK_TOOLS.PEN, color: '#111', width: 2.2 });
+  for (let i = 0; i < 40; i++) appendPoint(st, 10 + i * 3, 50 + Math.sin(i / 4) * 12, 0.3 + 0.5 * Math.abs(Math.sin(i / 7)), 0);
+  recomputeBounds(st);
+  return st;
+};
+
+check('平移（缩放不变）：同一个轮廓接着用、不重拼，一笔一次 fill，平移交给画布的变换', () => withPath2D((made) => {
+  const st = penStroke();
+  const a = recordingCtx();
+  drawStroke(a.ctx, st, createTransform(1.5, 4, 6));
+  assert.equal(made.length, 1, '头一回拼一个');
+  const b = recordingCtx();
+  drawStroke(b.ctx, st, createTransform(1.5, -30.5, 12.25));
+  assert.equal(made.length, 1, '平移以后还是那一个');
+  assert.deepEqual(b.calls.find((c) => c[0] === 'translate'), ['translate', 30.5 * 1.5, -12.25 * 1.5]);
+  const fills = b.calls.filter((c) => c[0] === 'fill');
+  assert.equal(fills.length, 1);
+  assert.equal(fills[0][1], made[0], '填的就是存着的那个轮廓');
+  assert.ok(!b.calls.some((c) => ['arc', 'lineTo', 'moveTo'].includes(c[0])), '不再一小块一小块交给画布');
+}));
+
+check('拼出来的和原来一笔一笔拼的是同一个轮廓（加上平移，一条命令一条命令对得上）', () => {
+  const st = penStroke();
+  const t = createTransform(1.5, -30.5, 12.25);
+  const old = recordingCtx();
+  drawStroke(old.ctx, st, t);
+  const oldOps = old.calls.filter((c) => ['moveTo', 'lineTo', 'arc', 'closePath'].includes(c[0]));
+  withPath2D((made) => {
+    const now = recordingCtx();
+    drawStroke(now.ctx, st, t);
+    const [, tx, ty] = now.calls.find((c) => c[0] === 'translate');
+    const ops = made[0].ops.map(([k, ...a]) => {
+      if (k === 'moveTo' || k === 'lineTo') return [k, a[0] + tx, a[1] + ty];
+      if (k === 'arc') return [k, a[0] + tx, a[1] + ty, ...a.slice(2)];
+      return [k];
+    });
+    assert.equal(ops.length, oldOps.length, `命令一样多：${ops.length} / ${oldOps.length}`);
+    ops.forEach((op, i) => {
+      assert.equal(op[0], oldOps[i][0]);
+      op.slice(1).forEach((v, j) => assert.ok(Math.abs(v - oldOps[i][j + 1]) < 1e-6, `第 ${i} 条差了：${v} / ${oldOps[i][j + 1]}`));
+    });
+  });
+});
+
+check('缩放变了、点被原地挪过（搬、转、缩、撤销都换新的点数组或者边界）：重拼', () => withPath2D((made) => {
+  const st = penStroke();
+  drawStroke(recordingCtx().ctx, st, createTransform(1.5, 0, 0));
+  drawStroke(recordingCtx().ctx, st, createTransform(2, 0, 0));
+  assert.equal(made.length, 2, '缩放变了重拼');
+  transformSelection({ strokes: [st] }, null, [st.id], { dx: 5, dy: 0 });
+  drawStroke(recordingCtx().ctx, st, createTransform(2, 0, 0));
+  assert.equal(made.length, 3, '搬过了重拼');
+}));
+
+check('等宽的笔（荧光笔）：中心线也存着，平移只换变换，一笔一次 stroke', () => withPath2D((made) => {
+  const st = createStroke({ tool: INK_TOOLS.HIGHLIGHTER, color: '#fde047', width: 12 });
+  for (let i = 0; i < 20; i++) appendPoint(st, 10 + i * 5, 80 + (i % 3), 0.5, 0);
+  recomputeBounds(st);
+  const a = recordingCtx();
+  drawStroke(a.ctx, st, createTransform(1.25, 3, 4));
+  const b = recordingCtx();
+  drawStroke(b.ctx, st, createTransform(1.25, 9, -2));
+  assert.equal(made.length, 1);
+  assert.ok(made[0].ops.some((op) => op[0] === 'quadraticCurveTo'), '还是过中点的二次曲线');
+  assert.equal(b.calls.filter((c) => c[0] === 'stroke').length, 1);
+  assert.equal(b.ctx.lineWidth, 12 * 1.25);
+}));
+
+check('栏里挪一下只画一遍：面板先 resize（不画）再 setTransform（画）', () => {
+  const pane = $code('src/pdf/pdf-pane.js');
+  assert.ok(/this\.ink\.resize\(viewport\.width, viewport\.height, inkPixelRatio\(\), \{ render: false \}\)/.test(pane));
+  const scratch = $code('src/scratch/scratch-pane.js');
+  assert.ok(/this\.ink\.resize\(viewport\.width, viewport\.height, dpr, \{ render: false \}\)/.test(scratch));
+  const surface = $code('src/ink/ink-surface.js');
+  assert.ok(/if \(render\) this\.render\(\);/.test(surface));
+});
+
+check('缩放还在变（approximate）：借别的缩放下拼好的轮廓，按比例交给画布的变换，不重拼', () => withPath2D((made) => {
+  const st = penStroke();
+  drawStroke(recordingCtx().ctx, st, createTransform(1.5, 0, 0));
+  assert.equal(made.length, 1);
+  const a = recordingCtx();
+  drawStroke(a.ctx, st, createTransform(2.25, 4, 6), { approximate: true });
+  assert.equal(made.length, 1, '借来用，不重拼');
+  assert.deepEqual(a.calls.find((c) => c[0] === 'translate'), ['translate', -4 * 2.25, -6 * 2.25], '平移照这一回的缩放');
+  assert.deepEqual(a.calls.find((c) => c[0] === 'scale'), ['scale', 1.5, 1.5], '2.25 / 1.5：按比例放大');
+  const fills = a.calls.filter((c) => c[0] === 'fill');
+  assert.equal(fills.length, 1);
+  assert.equal(fills[0][1], made[0], '填的就是借来的那个轮廓');
+}));
+
+check('停下来那一下（不带 approximate）按准确的缩放重拼；之后近似画借新的那个，比例是 1 就不缩放', () => withPath2D((made) => {
+  const st = penStroke();
+  drawStroke(recordingCtx().ctx, st, createTransform(1.5, 0, 0));
+  drawStroke(recordingCtx().ctx, st, createTransform(2.25, 0, 0), { approximate: true });
+  assert.equal(made.length, 1);
+  drawStroke(recordingCtx().ctx, st, createTransform(2.25, 0, 0));
+  assert.equal(made.length, 2, '准确地重拼了一个');
+  const b = recordingCtx();
+  drawStroke(b.ctx, st, createTransform(2.25, 7, 7), { approximate: true });
+  assert.equal(made.length, 2);
+  assert.ok(!b.calls.some((c) => c[0] === 'scale'), '缩放对得上，不再缩放');
+}));
+
+check('近似画也认点有没有被原地挪过：搬过的照样重拼', () => withPath2D((made) => {
+  const st = penStroke();
+  drawStroke(recordingCtx().ctx, st, createTransform(1.5, 0, 0));
+  transformSelection({ strokes: [st] }, null, [st.id], { dx: 5, dy: 0 });
+  drawStroke(recordingCtx().ctx, st, createTransform(2, 0, 0), { approximate: true });
+  assert.equal(made.length, 2);
+}));
+
+check('等宽的笔近似画：中心线按比例放大，线宽先除回去，画出来还是「宽 × 这一回的缩放」', () => withPath2D((made) => {
+  const st = createStroke({ tool: INK_TOOLS.HIGHLIGHTER, color: '#fde047', width: 12 });
+  for (let i = 0; i < 20; i++) appendPoint(st, 10 + i * 5, 80 + (i % 3), 0.5, 0);
+  recomputeBounds(st);
+  drawStroke(recordingCtx().ctx, st, createTransform(1, 0, 0));
+  const a = recordingCtx();
+  drawStroke(a.ctx, st, createTransform(2, 0, 0), { approximate: true });
+  assert.equal(made.length, 1);
+  assert.deepEqual(a.calls.find((c) => c[0] === 'scale'), ['scale', 2, 2]);
+  assert.equal(a.ctx.lineWidth * 2, 12 * 2, '放大以后是 24');
+}));
+
+check('铅笔近似画：轮廓借来按比例画，不重拼（这里没有离屏画布，直接填）', () => withPath2D((made) => {
+  const st = createStroke({ tool: INK_TOOLS.PENCIL, color: '#333', width: 2.6 });
+  for (let i = 0; i < 30; i++) appendPoint(st, 20 + i * 4, 60 + Math.cos(i / 5) * 9, 0.4 + 0.3 * Math.abs(Math.sin(i / 6)), 0);
+  recomputeBounds(st);
+  drawStroke(recordingCtx().ctx, st, createTransform(1, 0, 0));
+  const n = made.length;
+  const a = recordingCtx();
+  drawStroke(a.ctx, st, createTransform(1.6, 0, 0), { approximate: true });
+  assert.equal(made.length, n, '不重拼');
+  assert.deepEqual(a.calls.find((c) => c[0] === 'scale'), ['scale', 1.6, 1.6]);
+  assert.equal(a.calls.filter((c) => c[0] === 'fill').length, 1);
+}));
+
 console.log('\n═══════════════════════════════════════════════════════════════');
 console.log(`  ${PASS} passed, ${FAIL} failed`);
 console.log('═══════════════════════════════════════════════════════════════');
