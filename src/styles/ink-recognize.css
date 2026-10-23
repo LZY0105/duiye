@@ -1,11 +1,11 @@
-/* 套索「识别」那一整段界面（src/ink/ink-recognize.js）：认着时圈里的东西像水面一样起伏、流动的圈线、进度小条（字
- * 跟着浪起伏）、认出来的框、结果单子。
+/* 套索「识别」那一整段界面（src/ink/ink-recognize.js）：认着时圈里的东西像水面一样起伏、进度小条（字跟着浪起伏）、
+ * 认出来的框、结果单子。圈线就是套索那条，这里不另画别的线。
  *
  * 小条和套索那条小条一个样子（深色、圆头）；结果单子和「导入」那张弹出的单子同一种材质（--lg-glass-thick、
  * --lg-blur、--lg-rim/--lg-edge/--lg-lift，liquid.css 定的那几个），三套皮肤各自的变量会把它染对。纸里单子是一张纸条
  * （paper.css），液态玻璃里小条和单子都是透明的玻璃（liquid-glass-react.css），和套索那一条、导入那张单子一起。
  *
- * 动画只动 transform / translate / opacity / stroke-dashoffset：不碰排版。扫的时候整块界面挂着 data-lens-moving，液态玻璃
+ * 动画只动 transform / translate / opacity：不碰排版。扫的时候整块界面挂着 data-lens-moving，液态玻璃
  * 那边会换成便宜的那一版（第 53 节量过：静止那一版每帧几十毫秒）。
  * 系统开了「减少动态效果」：不涌、不流动、不弹，只留静态的提示（最底下那一段）。 */
 
@@ -37,7 +37,7 @@
 }
 
 /* 圈里的东西像水面一样起伏（人说「不止识别提示字样，圈的内容动画也是」）：书页的底色、字、笔迹、贴着的图，JS 一帧
-   一帧错开画在这块画布上，位置、按圈裁的 clip-path 也是 JS 给的。它压在原来那一块上，上面只有圈线。 */
+   一帧错开画在这块画布上，位置、按圈裁的 clip-path 也是 JS 给的。它压在原来那一块上，上面只有套索线。 */
 .ink-recognize-ripple {
   position: absolute;
   top: 0;
@@ -46,20 +46,20 @@
 }
 .ink-recognize-ripple[hidden] { display: none; }
 
-/* 圈线：认着的时候是流动的虚线（「它在动」），和套索线同一个虚线节奏。 */
+/* 套索线：认着的时候不另画一条、不流动（人说「识别时套索的边界线周围也不要有蓝色虚线，保留波浪的动画即可」；原来
+   这里是一条主题蓝、一直往前走的虚线，叠在套索线上）。可起伏的那块画布按圈裁、盖在笔迹画布上面，套索线靠里的那半边
+   被它压住了，看着变细——所以它露着的时候，照套索线原样在上面再描一遍：同一个金色、同一个虚线节奏、一样粗、不动
+   （ink-renderer.js 的 LASSO_STROKE、LASSO_DASH、drawLasso），和点「识别」以前一模一样；画布收起了它也收。 */
 .ink-recognize-outline {
   fill: none;
-  stroke: currentColor;
+  stroke: #d97706;
   stroke-width: 1.6;
   stroke-dasharray: 7 5;
   stroke-linejoin: round;
+  stroke-linecap: round;
   opacity: 0;
 }
-.ink-recognize[data-state="scanning"] .ink-recognize-outline {
-  opacity: 0.9;
-  animation: ink-rec-ants 0.9s linear infinite;
-}
-@keyframes ink-rec-ants { to { stroke-dashoffset: -24; } }
+.ink-recognize-ripple:not([hidden]) ~ .ink-recognize-scan .ink-recognize-outline { opacity: 1; }
 
 /* 认出来的那几处：一个接一个框出来，告诉人「是这几处」。 */
 .ink-recognize-box {
@@ -157,9 +157,13 @@
   color: inherit;
   font: inherit;
   cursor: pointer;
+  transition: opacity 0.2s ease;
 }
 .ink-recognize-pill-btn[hidden] { display: none; }
 .ink-recognize-pill-btn:active { background: rgba(255, 255, 255, 0.28); }
+/* 刚冒出来的那一会儿（ink-recognize.js 的 CANCEL_ARM_MS）还不算数：淡着，按下去也不变色。 */
+.ink-recognize-pill-btn.is-arming { opacity: 0.4; cursor: default; }
+.ink-recognize-pill-btn.is-arming:active { background: rgba(255, 255, 255, 0.14); }
 
 @keyframes ink-rec-rise {
   from { opacity: 0; translate: 0 6px; }
@@ -383,7 +387,6 @@
 @media (prefers-reduced-motion: reduce) {
   .ink-recognize[data-state="scanning"] .ink-recognize-wash { fill-opacity: 0.06; }
   .ink-recognize-ch { animation: none; }
-  .ink-recognize[data-state="scanning"] .ink-recognize-outline { animation: none; }
   .ink-recognize[data-state="scanning"] .ink-recognize-crest { display: none; }
   .ink-recognize[data-state="scanning"] .ink-recognize-label {
     position: static;
@@ -397,12 +400,12 @@
   .ink-recognize-pill,
   .ink-recognize-dots i { animation: none; opacity: 1; }
   .ink-recognize-panel { transition: none; translate: none; }
-  .ink-recognize-btn { transition: none; }
+  .ink-recognize-btn,
+  .ink-recognize-pill-btn { transition: none; }
 }
 .ink-recognize.is-reduced .ink-recognize-ripple { display: none; }
 @media (prefers-reduced-motion: reduce) { .ink-recognize-ripple { display: none; } }
 .ink-recognize.is-reduced[data-state="scanning"] .ink-recognize-wash { fill-opacity: 0.06; }
-.ink-recognize.is-reduced .ink-recognize-outline { animation: none; }
 .ink-recognize.is-reduced .ink-recognize-dots i { animation: none; opacity: 1; }
 
 /* 系统开了「降低透明度」：单子不磨，一块实在的白（纸本来就是实的，paper.css 那条更具体，压得住这条）。 */

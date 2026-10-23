@@ -3,9 +3,10 @@
 // 识别要一会儿（本机跑模型，一两秒到十几秒）。这一会儿里人得一直知道三件事：它在认（没卡死）、认的是哪一块、
 // 不想等了怎么停。所以：
 //   - 扫描：圈里的东西自己像水面一样起伏——书页的底色、字、笔迹、贴着的图，一竖条一竖条地上下错开（ripple）；不另外
-//     铺颜色（人说「识别动画的波浪不要有颜色，让下面的背景和字像波浪一样动就行」），圈外一点不碰；圈线变成流动的
-//     虚线。圈下面一个小条：三个点、「正在识别…」、有进度就带百分比，右边「取消」；点和字跟着同一个节拍一个接一个
-//     涌起来、亮一下，像浪从头传到尾。认得久了（4 秒）小条上补一句「内容多会久一点」。
+//     铺颜色（人说「识别动画的波浪不要有颜色，让下面的背景和字像波浪一样动就行」），圈外一点不碰；圈线还是套索那条
+//     金色虚线，不另画一条、不流动（人说「识别时套索的边界线周围也不要有蓝色虚线，保留波浪的动画即可」）。圈下面
+//     一个小条：三个点、「正在识别…」、有进度就带百分比，右边「取消」；点和字跟着同一个节拍一个接一个涌起来、亮一下，
+//     像浪从头传到尾。认得久了（4 秒）小条上补一句「内容多会久一点」。「取消」冒出来先淡着，过 CANCEL_ARM_MS 才算数。
 //   - 找到了：起伏慢慢平下去（认得再快也至少起伏 RIPPLE_HOLD_MS），认出来的那几处在图上依次框出来（「是这几处」），
 //     框完结果单子从下面浮上来。
 //   - 结果单子：一条一行，公式按排好的样子显示（KaTeX），文字照原样；默认全选，点一行选上 / 取消；认错的点 ✎ 改；
@@ -29,6 +30,13 @@ const EDGE = 8;
 const SLOW_MS = 4000;
 /** 框框都框完再浮出单子：一个框 70ms，最多等这么久。 */
 const BOXES_MAX_MS = 420;
+/**
+ * 小条上的按钮冒出来以后先淡着、等这么久才算数，之后也只认在它上面按下去的那一下（见 _counts）。小条正好冒在「识别」
+ * 那颗按钮原来的地方：点「识别」抬手时浏览器补的那一下 click、手指抖一下多碰的、连点两下的第二下，都会落在「取消」上，
+ * 刚开始认就被取消了（人说「取消识别的按钮不应该点了识别后就立即生效，有些时候他们会冲突」）。点「识别」抬手补的那一下
+ * click 那边另外吞了一道（ink-selection-bar.js 的 _swallowClickOf），可它只认同一根指针，挡不全。
+ */
+export const CANCEL_ARM_MS = 600;
 
 /**
  * 小条上的点和字：一个接一个涌起来，前后隔这么久；整个节拍这么长（样式表 ink-rec-crest 那一段用的是同一个数）。
@@ -128,6 +136,10 @@ export class RecognizeOverlay {
     this._points = null;
     this._viewport = null;
     this._timers = [];
+    // 小条上的按钮从什么时候起算数、最近一次在小条上按下去的是哪颗按钮（见 _arm、_counts）。
+    this._armedAt = 0;
+    this._armTimer = 0;
+    this._down = null;
     this._onKey = (e) => {
       if (e.key !== 'Escape' || this._state === RECOGNIZE_STATES.IDLE) return;
       if (this.el?.querySelector('.ink-recognize-edit:not([hidden])') === document.activeElement) return;
@@ -152,6 +164,47 @@ export class RecognizeOverlay {
     this._timers = [];
   }
 
+  /**
+   * 小条上的按钮先淡着、不算数，ms 以后才算（见 CANCEL_ARM_MS）。计时不和 _timers 放在一起：认得快的时候，等着的
+   * 这一会儿里小条就换成了「知道了」「再试一次」，换的时候会清掉 _timers，按钮就一直淡着了。
+   */
+  _arm(ms) {
+    clearTimeout(this._armTimer);
+    this._armedAt = nowMs() + ms;
+    this._down = null;
+    this._syncArmed();
+    this._armTimer = setTimeout(() => {
+      this._armTimer = 0;
+      // 计时器和 nowMs 不是同一块表，可能早到零点几毫秒：到点了就是到点了。
+      this._armedAt = Math.min(this._armedAt, nowMs());
+      this._syncArmed();
+    }, ms);
+  }
+
+  _syncArmed() {
+    if (!this.el) return;
+    const arming = nowMs() < this._armedAt;
+    for (const role of ['pill-close', 'retry']) {
+      const button = this._$(role);
+      button.classList.toggle('is-arming', arming);
+      if (arming) button.setAttribute('aria-disabled', 'true');
+      else button.removeAttribute('aria-disabled');
+    }
+  }
+
+  /**
+   * 小条上这一下 click 算不算数：按钮冒出来 CANCEL_ARM_MS 以内不算；之后也只认在这颗按钮上按下去的那一下——点「识别」
+   * 抬手时补来的 click、等着的时候就按下去的、按在别处滑过来松开的，都不算。键盘按的（回车、空格）、程序点的没有指针，
+   * 也就没有按下那一下，过了等的那一会儿照算。手点、笔点的认 pointerType，不认 detail：平板 WebView 里手指点出来的
+   * click，detail 也是 0（10-23 机上记到的）。
+   */
+  _counts(e, button) {
+    if (nowMs() < this._armedAt) return false;
+    if (!e?.pointerType) return true;
+    const down = this._down;
+    return !!down && down.button === button && down.at >= this._armedAt;
+  }
+
   _build() {
     if (this.el) return;
     const id = this._id;
@@ -166,6 +219,7 @@ export class RecognizeOverlay {
           <clipPath id="ink-rec-clip-${id}"><path data-role="clip"></path></clipPath>
         </defs>
         <path class="ink-recognize-wash" data-role="wash"></path>
+        <!-- 起伏的那块画布压住了套索线靠里的半边：照套索线的样子在上面再描一遍（不是另一条线，见 ink-recognize.css）。 -->
         <path class="ink-recognize-outline" data-role="outline"></path>
         <g class="ink-recognize-boxes" data-role="boxes"></g>
       </svg>
@@ -197,11 +251,18 @@ export class RecognizeOverlay {
       part.addEventListener('pointerdown', (e) => e.stopPropagation());
       part.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
     }
-    $('pill-close').addEventListener('click', () => {
+    // 小条上按下去的是哪颗按钮、什么时候：松开时的那一下 click 要对得上它才算（见 _counts）。
+    $('pill').addEventListener('pointerdown', (e) => {
+      this._down = { button: e.target?.closest?.('button') || null, at: nowMs() };
+    });
+    $('pill-close').addEventListener('click', (e) => {
+      if (!this._counts(e, $('pill-close'))) return;
       if (this._state === RECOGNIZE_STATES.SCANNING) this.handlers.onCancel?.();
       else this.handlers.onClose?.();
     });
-    $('retry').addEventListener('click', () => this.handlers.onRetry?.());
+    $('retry').addEventListener('click', (e) => {
+      if (this._counts(e, $('retry'))) this.handlers.onRetry?.();
+    });
     $('close').addEventListener('click', () => this.handlers.onClose?.());
     $('copy').addEventListener('click', () => this._act('copy'));
     $('convert').addEventListener('click', () => this._act('convert'));
@@ -243,6 +304,8 @@ export class RecognizeOverlay {
     this._crestStart = nowMs();
     this._$('crest').replaceChildren();
     this._pill(t('ocr.scanning'), { close: t('ocr.cancel') });
+    // 小条冒在「识别」那颗按钮原来的地方：「取消」先淡着，等一会儿才算数（见 CANCEL_ARM_MS）。
+    this._arm(CANCEL_ARM_MS);
     this.place(points, viewport);
     this._later(() => {
       if (this._state === RECOGNIZE_STATES.SCANNING) this._setLabel(t('ocr.scanningSlow'));
@@ -499,6 +562,8 @@ export class RecognizeOverlay {
 
   close() {
     this._clearTimers();
+    clearTimeout(this._armTimer);
+    this._armTimer = 0;
     if (!this.el) return;
     this._stopRipple();
     this._setState(RECOGNIZE_STATES.IDLE);

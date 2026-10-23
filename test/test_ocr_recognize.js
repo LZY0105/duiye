@@ -59,9 +59,12 @@ const { thin, tracePaths, simplifyPath, maskToPaths } = await import('../src/ocr
 const { registerInkTypesetter, typesetToStrokes } = await import('../src/ocr/ink-typeset.js');
 const { InkSurface } = await import('../src/ink/ink-surface.js');
 const { SelectionBar, SELECTION_ACTIONS } = await import('../src/ink/ink-selection-bar.js');
+const { CANCEL_ARM_MS } = await import('../src/ink/ink-recognize.js');
 const { INK_TOOLS, appendPoint, createStroke, recomputeBounds } = await import('../src/ink/stroke.js');
 
 const flush = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+/** 等小条上的按钮过了「先淡着、不算数」的那一会儿（CANCEL_ARM_MS）。 */
+const armed = () => flush(CANCEL_ARM_MS + 40);
 
 /** 一个由测试自己决定什么时候回话的引擎。 */
 function controlledProvider(id = 'test', extra = {}) {
@@ -680,7 +683,7 @@ await test('草稿纸（没有「文件里的字」可截）：接了识别也�
   assert.ok(!barActions(env.surface).includes(SELECTION_ACTIONS.RECOGNIZE));
 });
 
-await test('点「识别」：截圈里那一块交给引擎；流动的圈线、小条上「正在识别…」和「取消」；套索那条让位', async () => {
+await test('点「识别」：截圈里那一块交给引擎；小条上「正在识别…」和「取消」（先淡着）；套索那条让位', async () => {
   resetOcrProviders();
   const p = controlledProvider();
   registerOcrProvider(p.provider);
@@ -698,6 +701,7 @@ await test('点「识别」：截圈里那一块交给引擎；流动的圈线�
   const el = overlay(env.host);
   assert.equal(el.dataset.state, 'scanning');
   assert.ok(el.hasAttribute('data-lens-moving'), '告诉液态玻璃「有东西在动」，换便宜的那一版');
+  // 那条 path 是套索线的补描（起伏的画布露着时才显出来，见样式表那几条），跟着圈走。
   assert.ok($o(env.host, 'outline').getAttribute('d').startsWith('M'));
   // 圈里不另铺颜色、也没有那几层彩色的浪（人说「识别动画的波浪不要有颜色」）：动的是圈里的东西自己，画在 ripple
   // 那块画布上（jsdom 没有 2D 画布，这里不画；怎么画见下一条）。
@@ -714,6 +718,8 @@ await test('点「识别」：截圈里那一块交给引擎；流动的圈线�
   assert.ok(first.every((d, i) => i === 0 || d - first[i - 1] === 65), `一个接一个隔 65ms：${first}`);
   assert.ok(first[0] <= 3 * 65 && first[0] > 3 * 65 - 40, `排在三个点后面：${first[0]}`);
   assert.equal($o(env.host, 'pill-close').textContent, '取消');
+  assert.ok($o(env.host, 'pill-close').classList.contains('is-arming'), '「取消」刚冒出来先淡着');
+  assert.equal($o(env.host, 'pill-close').getAttribute('aria-disabled'), 'true');
   assert.equal($o(env.host, 'retry').hidden, true);
   assert.equal($o(env.host, 'panel').hidden, true);
   assert.equal(barVisible(env.surface), false, '两样东西不挤在圈旁边');
@@ -1027,6 +1033,7 @@ await test('取消：引擎那边停下，界面收起，识别区域留着（�
   registerOcrProvider(p.provider);
   const env = mount();
   await startRecognition(env);
+  await armed();
   $o(env.host, 'pill-close').click();
   await flush();
   assert.equal(p.last().ctx.signal.aborted, true);
@@ -1036,6 +1043,63 @@ await test('取消：引擎那边停下，界面收起，识别区域留着（�
   p.last().resolve({ items: [{ text: 'late' }] });
   await flush();
   assert.equal(overlay(env.host).dataset.state, 'idle', '取消以后才回来的结果不要');
+});
+
+await test('「取消」冒出来先淡着、不算数（小条正好冒在「识别」原来的地方）：抬手补的 click、连点的第二下都不取消；之后也只认在它上面按下去的那一下', async () => {
+  resetOcrProviders();
+  const p = controlledProvider();
+  registerOcrProvider(p.provider);
+  const env = mount();
+  await startRecognition(env);
+  const cancel = $o(env.host, 'pill-close');
+  const pill = $o(env.host, 'pill');
+  // 手点出来的 click 带着指针——照平板 WebView 上记到的样子：pointerType 是 touch、detail 是 0（不能拿 detail 认键盘）；
+  // cancel.click() 那样的没有指针，算键盘按的。
+  const tapClick = () => cancel.dispatchEvent(new dom.window.PointerEvent('click', {
+    bubbles: true, cancelable: true, pointerType: 'touch', pointerId: 3, detail: 0,
+  }));
+  const downOn = (node) => node.dispatchEvent(new dom.window.Event('pointerdown', { bubbles: true, cancelable: true }));
+  assert.ok(cancel.classList.contains('is-arming'));
+  tapClick();                       // 点「识别」抬手时浏览器补的那一下
+  downOn(cancel);
+  tapClick();                       // 紧跟着又点了一下
+  cancel.click();                   // 键盘按的，等的时候也不算
+  await flush();
+  assert.equal(p.last().ctx.signal.aborted, false, '还在认');
+  assert.equal(overlay(env.host).dataset.state, 'scanning');
+  await armed();
+  assert.ok(!cancel.classList.contains('is-arming'), '过了那一会儿亮起来');
+  assert.equal(cancel.hasAttribute('aria-disabled'), false);
+  tapClick();
+  assert.equal(overlay(env.host).dataset.state, 'scanning', '按下去是在等的时候（冲着「识别」去的那一下），松开在后面：不算');
+  downOn(pill);
+  tapClick();
+  assert.equal(overlay(env.host).dataset.state, 'scanning', '按在小条别处、滑到「取消」上松开：不算');
+  downOn(cancel);
+  tapClick();
+  await flush();
+  assert.equal(p.last().ctx.signal.aborted, true, '在「取消」上按下去、松开：取消');
+  assert.equal(overlay(env.host).dataset.state, 'idle');
+});
+
+await test('认得快、等的那一会儿里小条就换成「知道了」：一样先淡着、不会被那一下 click 直接关掉；到点照样亮起来', async () => {
+  resetOcrProviders();
+  const p = controlledProvider();
+  registerOcrProvider(p.provider);
+  const env = mount();
+  await startRecognition(env);
+  p.last().resolve({ items: [{ text: '  ' }] });
+  await flush();
+  assert.equal(overlay(env.host).dataset.state, 'empty');
+  const ok = $o(env.host, 'pill-close');
+  assert.equal(ok.textContent, '知道了');
+  assert.ok(ok.classList.contains('is-arming'));
+  ok.click();
+  assert.equal(overlay(env.host).dataset.state, 'empty', '那句话还在');
+  await armed();
+  assert.ok(!ok.classList.contains('is-arming'), '换成「知道了」时清掉的计时没连累它');
+  ok.click();
+  assert.equal(overlay(env.host).dataset.state, 'idle');
 });
 
 await test('Esc 取消；结果开着时 Esc 关单子', async () => {
@@ -1102,6 +1166,7 @@ await test('没认出：小条上说一句，不跳了，按钮是「知道了�
   assert.ok($o(env.host, 'pill').classList.contains('is-still'));
   assert.equal($o(env.host, 'pill-close').textContent, '知道了');
   assert.equal($o(env.host, 'retry').hidden, true);
+  await armed();
   $o(env.host, 'pill-close').click();
   assert.equal(overlay(env.host).dataset.state, 'idle');
 });
@@ -1118,10 +1183,12 @@ await test('认失败：说「识别没成功」，能「再试一次」，再�
   assert.equal($o(env.host, 'label').textContent, '识别没成功');
   assert.equal($o(env.host, 'retry').hidden, false);
   assert.equal($o(env.host, 'retry').textContent, '再试一次');
+  await armed();
   $o(env.host, 'retry').click();
   await flush(); await flush();
   assert.equal(p.calls.length, 2);
   assert.equal(overlay(env.host).dataset.state, 'scanning');
+  assert.ok($o(env.host, 'pill-close').classList.contains('is-arming'), '重新扫：「取消」又先淡着');
   env.surface.clearSelection();
 });
 
@@ -1199,23 +1266,23 @@ await test('样式表在笔迹栏那份后面引入', async () => {
   assert.ok(a > 0 && b > a);
 });
 
-await test('动画只动 transform / translate / opacity / stroke-dashoffset：不碰排版', async () => {
+await test('动画只动 transform / translate / opacity：不碰排版', async () => {
   const body = noComments(css);
   const frames = [...body.matchAll(/@keyframes\s+([\w-]+)\s*\{([\s\S]*?)\}\s*\}/g)];
-  assert.ok(frames.length >= 4, `${frames.length} 段动画`);
+  assert.ok(frames.length >= 3, `${frames.length} 段动画`);
   for (const [, name, inner] of frames) {
     const props = [...inner.matchAll(/([\w-]+)\s*:/g)].map((m) => m[1]);
     for (const prop of props) {
-      assert.ok(['transform', 'translate', 'opacity', 'stroke-dashoffset'].includes(prop), `${name} 动了 ${prop}`);
+      assert.ok(['transform', 'translate', 'opacity'].includes(prop), `${name} 动了 ${prop}`);
     }
   }
 });
 
-await test('减少动态效果：圈里的起伏、起伏的字、圈线、框、行、小圆点都停；字就是 label 本身；圈里改铺一层淡底色', async () => {
+await test('减少动态效果：圈里的起伏、起伏的字、框、行、小圆点都停；字就是 label 本身；圈里改铺一层淡底色', async () => {
   const body = noComments(css);
   const reduced = body.slice(body.indexOf('@media (prefers-reduced-motion: reduce)'));
   for (const sel of ['.ink-recognize-ripple', '.ink-recognize-wash', '.ink-recognize-ch', '.ink-recognize-crest',
-    '.ink-recognize-outline', '.ink-recognize-box', '.ink-recognize-row', '.ink-recognize-dots i', '.ink-recognize-panel']) {
+    '.ink-recognize-box', '.ink-recognize-row', '.ink-recognize-dots i', '.ink-recognize-panel', '.ink-recognize-pill-btn']) {
     assert.ok(reduced.includes(sel), `${sel} 没管`);
   }
   assert.ok(body.includes('.ink-recognize.is-reduced .ink-recognize-ripple'), '系统设置读得到时 JS 也挂一个类');
@@ -1223,6 +1290,43 @@ await test('减少动态效果：圈里的起伏、起伏的字、圈线、框�
   // 挂了那个类，JS 也不去排一个字一个 span 的那一份。
   const src = $read('src/ink/ink-recognize.js');
   assert.match(src, /_syncCrest\(\) \{[\s\S]*?classList\.contains\('is-reduced'\)[\s\S]*?replaceChildren\(\);/);
+});
+
+await test('认着的时候不另画一条蓝色的流动虚线：那条 path 照套索线原样（同色、同虚线、同粗、不动），只在起伏的画布露着时补描', async () => {
+  const body = noComments(css);
+  assert.ok(!/ink-rec-ants|stroke-dashoffset/.test(body), '没有往前走的虚线');
+  const at = body.indexOf('.ink-recognize-outline {');
+  const outline = body.slice(at, body.indexOf('}', at));
+  // 和画布上那条套索线是同一个样子：ink-renderer.js 的 LASSO_STROKE、LASSO_DASH、drawLasso 的线宽。
+  const renderer = $read('src/ink/ink-renderer.js');
+  const stroke = renderer.match(/export const LASSO_STROKE = '(#[0-9a-f]{6})';/)[1];
+  const dash = renderer.match(/const LASSO_DASH = \[(\d+), (\d+)\];/).slice(1).join(' ');
+  const width = renderer.match(/export function drawLasso[\s\S]*?ctx\.lineWidth = ([\d.]+);/)[1];
+  assert.ok(outline.includes(`stroke: ${stroke};`), `套索线的金色，不是主题蓝：${outline}`);
+  assert.ok(!outline.includes('currentColor'));
+  assert.ok(outline.includes(`stroke-dasharray: ${dash};`));
+  assert.ok(outline.includes(`stroke-width: ${width};`));
+  assert.ok(outline.includes('stroke-linecap: round;') && outline.includes('stroke-linejoin: round;'));
+  assert.match(outline, /opacity: 0;/, '平常不显');
+  assert.ok(!/animation/.test(outline));
+  // 让它显出来的只有一条：起伏的画布露着（它压住了套索线靠里的半边）。按「正在认」显出来的那条没了。
+  const showing = [...body.matchAll(/([^{}]*\.ink-recognize-outline[^{}]*)\{([^}]*)\}/g)]
+    .filter(([, , decl]) => /opacity:\s*(?!0[;\s])[\d.]+/.test(decl))
+    .map(([, sel]) => sel.trim());
+  assert.deepEqual(showing, ['.ink-recognize-ripple:not([hidden]) ~ .ink-recognize-scan .ink-recognize-outline']);
+  // 起伏的画布排在那块 svg 前面，那条兄弟选择器才挑得到。
+  const src = $read('src/ink/ink-recognize.js');
+  assert.ok(src.indexOf('class="ink-recognize-ripple"') < src.indexOf('class="ink-recognize-scan"'));
+});
+
+await test('小条上的按钮等着的时候淡着、按下去不变色；减少动态效果时不渐变', async () => {
+  const body = noComments(css);
+  assert.match(body, /\.ink-recognize-pill-btn\.is-arming \{[^}]*opacity: 0\.4/);
+  assert.match(body, /\.ink-recognize-pill-btn \{[^}]*transition: opacity/);
+  const reduced = body.slice(body.indexOf('@media (prefers-reduced-motion: reduce)'));
+  assert.match(reduced, /\.ink-recognize-pill-btn \{ transition: none; \}/);
+  const src = $read('src/ink/ink-recognize.js');
+  assert.match(src, /export const CANCEL_ARM_MS = \d+;/);
 });
 
 await test('圈里不铺颜色（只有减少动态效果时铺一层淡底色）；小条上的点和字是同一个节拍', async () => {
