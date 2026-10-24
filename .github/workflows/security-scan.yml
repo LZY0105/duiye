@@ -39,6 +39,9 @@ jobs:
             | tar -xz gitleaks
           # 不加 `|| true`：发现密钥就让这个 job 红。--redact 保证日志里不会
           # 把泄漏的值再印一遍 —— Actions 日志对任何能看见仓库的人都是公开的。
+          #
+          # 核实过的误报写进仓库根的 .gitleaks.toml（gitleaks 会自己读），写明是什么、
+          # 为什么不是密钥；别在这一行加参数绕过。
           ./gitleaks detect --source . --redact --verbose
 
   deps:

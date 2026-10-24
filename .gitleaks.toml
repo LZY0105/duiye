@@ -1,0 +1,21 @@
+# gitleaks 的配置：默认规则照用，只放过一类核实过的误报。
+#
+# 安全检查（.github/workflows/security-scan.yml）扫全部历史，从 10-17 合进公式识别起
+# 每次都红。报的全在 android/app/src/main/assets/ocr/formula/model.properties：538 行
+# token.N=<base64> 是模型词表里的 LaTeX 记号（XExBUkdF 解出来就是 \LARGE），加一行
+# tokenizer_sha256 是词表文件的校验和。键名里有 token、值又像随机串，generic-api-key
+# 就把它们当成了 115 个 API key。
+#
+# 只放过「这个文件里的这两种键」：同一个文件里哪天真写进了别的东西，照样会报。
+# 不用 .gitleaksignore 一条条记指纹——模型一换，词表的每一行都是新提交、新指纹，
+# 检查又会红。
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "公式识别模型的词表（token.N）和词表校验和（tokenizer_sha256），不是密钥"
+condition = "AND"
+paths = ['''^android/app/src/main/assets/ocr/formula/model\.properties$''']
+regexTarget = "match"
+regexes = ['''^(?:token\.\d+|tokenizer_sha256)=''']
