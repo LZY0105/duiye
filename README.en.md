@@ -21,6 +21,10 @@ whichever question you are on, the engine finds which page, and where on it, the
 
 </div>
 
+<p align="center">
+  <img src="docs/screenshots/workspace.png" width="100%" alt="The two-pane workspace: an exercise book with red and blue pen marks on the left, its answer key on the right">
+</p>
+
 <br>
 
 <table>
@@ -58,7 +62,6 @@ Books, ink, scratch paper and formula recognition all live and run on the tablet
 - **One book in both panes**: an exercise book with the answers at the back no longer means flipping back and forth. Each pane keeps its own page and zoom; the ink is shared, so writing on one side shows on the other at once.
 - **Automatic answer matching**: question numbers on the page are listed with the location of their answers and a confidence level. On four real textbooks every one of 508 questions was resolved with zero errors. A pure scan with neither bookmarks nor a readable text layer is reported as unmatchable rather than guessed.
 - **Page turns that fold**: drag a corner over; turning forward pins the left edge, turning back pins the right, and a flick counts too. Zoomed in, one finger pans instead.
-- **Smooth zooming**: PDF pages are rasterised on a separate thread and the most recent ones are kept. While you pinch, the page is a scaled stand-in but the ink stays sharp; the page is redrawn at its true size once your fingers stop.
 
 ### Writing
 
@@ -67,7 +70,6 @@ Books, ink, scratch paper and formula recognition all live and run on the tablet
 - **Lasso**: move, rotate and scale what you circled, recolour it, resize, copy, cut or delete it; a whole gesture is one undo step. Drag it towards the other pane and the part past the divider is drawn there live.
 - **Pictures**: place a recent photo, a fresh camera shot or a gallery image on the page and write on top of it. Dragged across panes, a photo shows as a quick sketch on the far side and becomes the photo when you let go.
 - **Toolbar**: park it on either side, along the bottom, in a corner or up in the top row; slide along it with one finger to change tools; optionally have it tuck itself away as soon as the pen touches the page.
-- **Pen writes, fingers navigate**: the stylus writes; fingers and the mouse turn and pan. A palm resting on the screen does not select text or bring up menus.
 
 ### Formula recognition
 
@@ -76,7 +78,11 @@ Lasso a printed formula on the page (or inside a picture placed on it) and tap "
 - **Copy**: formulas are written as `$LaTeX$`, so they paste anywhere as formulas;
 - **Convert to ink**: written below the circle at the printed size, and from then on it moves, scales and recolours like your own handwriting.
 
-The model runs on the tablet: a reduced build of ONNX Runtime with a purpose-built INT8 formula model of a little over 4 MB. It reads one printed formula at a time, in a few hundred milliseconds.
+The model runs on the tablet (a reduced build of ONNX Runtime with a purpose-built INT8 formula model) and reads one printed formula at a time.
+
+<p align="center">
+  <img src="docs/screenshots/recognize.png" width="460" alt="A lasso around a printed limit; the recognised LaTeX is listed with Copy and Convert to ink below it">
+</p>
 
 > [!NOTE]
 > Chinese text and running paragraphs are not recognised yet.
@@ -86,21 +92,28 @@ The model runs on the tablet: a reduced build of ONNX Runtime with a purpose-bui
 - **Infinite scratch paper**: no edge in any direction, 25%–400% zoom; eight rulings (blank, dots, squares, lines, graph, isometric, tianzige, mizige) and four paper tones.
 - **Notebooks**: a stack of pages you turn like a book. Set the page count when you create one and add pages at the end when it fills up; notebooks take bookmarks and export too.
 
+<p align="center">
+  <img src="docs/screenshots/scratch.png" width="100%" alt="Example 1.11 in the exercise book on the left; a hand-drawn sketch of y = x³ − 3x on graph-ruled scratch paper on the right">
+</p>
+
 ### Organising
 
 - **Library**: books are recognised by their covers. The first slot is always the user guide.
 - **Folders**: sort books when there are many; delete a folder and everything in it comes back out.
 - **Combinations**: once questions are on the left and answers on the right, save the arrangement as one tile, and a tap restores both panes — pages included. You can also pick several items for each side and compose one freely.
-- **Import**: every PDF on the tablet is listed, newest first, searchable and multi-selectable; even a book of several hundred megabytes is in within seconds.
+- **Import**: every PDF on the tablet is listed, newest first, searchable and multi-selectable.
 - **Bookmarks to book**: pick the pages you bookmarked and save them as a new book or export them directly; if the original gains new notes later, "Update from source" brings them over.
 - **Export PDF**: ink is drawn as vectors on top of the original pages, so the text stays selectable and searchable. Notebooks and scratch pads export too, into Documents/对页.
 
+<p align="center">
+  <img src="docs/screenshots/library.png" width="100%" alt="A folder in the library holding the exercise book, the answer key and a scratch pad, shown by their covers">
+</p>
+
 ### Interface
 
-- **Three skins**: Liquid Glass, Frosted Glass and Paper. Liquid Glass is a native-DOM rewrite of [liquid-glass-react](https://github.com/rdev/liquid-glass-react)'s approach; all three share one set of dimensions, so switching skins moves nothing by a single pixel.
+- **Three skins**: Liquid Glass, Frosted Glass and Paper. Liquid Glass is a native-DOM rewrite of [liquid-glass-react](https://github.com/rdev/liquid-glass-react)'s approach.
 - **The top row**: import, library, combinations and new paper on the left, "Practice / Settings" in the middle, "Close all" on the right; push it up to hand the whole screen to the books.
 - **Three languages**: Simplified Chinese, Traditional Chinese, English.
-- **Accessibility**: reduced transparency, increased contrast and reduced motion are all honoured.
 
 ## Privacy and permissions
 
