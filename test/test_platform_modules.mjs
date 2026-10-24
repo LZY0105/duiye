@@ -4,7 +4,11 @@
 // 里每写一条日志就会记两遍、下拉列表在语言切换后停在旧文字上，都是没人发现的。
 // 这里用 JSDOM 跑真实的 DOM 交互，不看源码形状，只看行为。
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 import { JSDOM } from 'jsdom';
 
@@ -207,8 +211,9 @@ await check('非 GET 不碰', () => {
 // 经典脚本跑起来，喂给它一个假的 self、一份放在内存里的 caches 和一个永远回 200
 // 的 fetch，再派发事件，看缓存里最后剩下什么。
 
-/** 跑一份 sw.js：回它注册的事件处理器、它用的那份假缓存，和它都干了些什么。 */
-function bootServiceWorker() {
+/** 跑一份 sw.js（默认是 public/ 里那份源码）：回它注册的事件处理器、它用的那份假
+ * 缓存，和它都干了些什么。 */
+function bootServiceWorker(source = swSource) {
   const keyOf = (req) => new URL(typeof req === 'string' ? req : req.url, 'http://localhost/').href;
   const stores = new Map();
   const cacheOf = (store) => ({
@@ -240,8 +245,10 @@ function bootServiceWorker() {
     URL,
     console: { ...console, warn: (...args) => sw.warnings.push(args.join(' ')) },
   });
-  vm.runInContext(swSource, context, { filename: 'sw.js' });
+  vm.runInContext(source, context, { filename: 'sw.js' });
   sw.cacheName = vm.runInContext('CACHE_NAME', context);
+  const assets = vm.runInContext('BUILD_ASSETS', context);
+  sw.buildAssets = assets && [...assets];   // 抄一份到这边：vm 里的数组和这边的原型不是同一个
   return sw;
 }
 
@@ -313,6 +320,99 @@ await check('设备文件副本删不掉也不挡 claim', async () => {
   await dispatchActivate(sw);
   assert.ok(sw.claimed);
   assert.match(sw.warnings.join('\n'), /存储出错/);
+});
+
+// 旧构建那道闸要一份真的构建产物：清单是 vite build 时才写进 dist/sw.js 的。这里照
+// CI 上 npm run build 那样跑一次 vite build，出到临时目录。另起一个进程跑，因为这个
+// 文件开头把 JSDOM 的 window、navigator、URL 装到了全局上，Vite 不该在那种环境里跑。
+const { injectBuildAssets } = await import('../scripts/sw-build-assets.mjs');
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const VITE = join(ROOT, 'node_modules', 'vite', 'bin', 'vite.js');
+let built = null;   // 构建出来的 sw.js、dist/assets/ 下的文件、index.html
+
+await check('构建把 dist/assets/ 下的全部文件写进 sw.js，别处一个字不动', async () => {
+  const outDir = await mkdtemp(join(tmpdir(), 'duiye-sw-'));
+  try {
+    execFileSync(process.execPath, [VITE, 'build', '--outDir', outDir, '--emptyOutDir', '--logLevel', 'error'],
+      { cwd: ROOT, stdio: 'pipe' });
+    built = {
+      sw: await readFile(join(outDir, 'sw.js'), 'utf8'),
+      files: (await readdir(join(outDir, 'assets'))).map((name) => `/assets/${name}`),
+      html: await readFile(join(outDir, 'index.html'), 'utf8'),
+    };
+  } finally {
+    await rm(outDir, { recursive: true, force: true });
+  }
+
+  // 和源码只差清单那一行，而那一行只取决于这批文件：没有时间戳，两次一样的构建
+  // 出来的 sw.js 一字不差，浏览器不会白白重装。
+  assert.equal(built.sw, injectBuildAssets(swSource, built.files));
+  assert.deepEqual(bootServiceWorker(built.sw).buildAssets, [...built.files].sort());
+
+  // 清单比 index.html 点名的多得多：语言包、worker、字体都是用到时才取的。只照
+  // index.html 去删，这一版的这些文件每次换版都会被一起删掉。
+  const named = new Set([...built.html.matchAll(/\/assets\/[^"']+/g)].map((m) => m[0]));
+  assert.ok(named.size > 0 && [...named].every((path) => built.files.includes(path)), 'index.html 点名的都在清单里');
+  assert.ok(built.files.some((path) => /worker/.test(path) && !named.has(path)), '有 index.html 没点名的 worker');
+  assert.ok(built.files.some((path) => /\.woff2$/.test(path) && !named.has(path)), '有 index.html 没点名的字体');
+});
+
+await check('清单跟 bundle 里的先后无关；那一行或清单没了就让构建失败', () => {
+  const files = ['/assets/index-B.js', '/assets/en-A.js'];
+  assert.equal(injectBuildAssets(swSource, files), injectBuildAssets(swSource, [...files].reverse()),
+    '同一批文件换个顺序，sw.js 不该变');
+  // 都是改了一边忘了另一边。默默出一个不清理的 sw.js，缓存就又只进不出，而且哪里都
+  // 不报错。
+  assert.throws(() => injectBuildAssets(swSource.replace('const BUILD_ASSETS = null;', 'let BUILD_ASSETS = null;'), files),
+    /BUILD_ASSETS/, 'sw.js 里那一行换了写法');
+  assert.throws(() => injectBuildAssets(swSource, []), /assets/, 'assetsDir 不叫 assets 了');
+});
+
+await check('activate 删掉旧构建的 /assets/，这一版的和别处的都留着', async () => {
+  // 平板上量过：duiye-v1 里 /assets/ 有 147 条、39.3 MiB，每一版用到过的文件都在。
+  assert.ok(built, '上面那次构建没成功');
+  const sw = bootServiceWorker(built.sw);
+  const cache = await sw.caches.open(sw.cacheName);
+  const thisBuild = sw.buildAssets.map((path) => `http://localhost${path}`);
+  const oldBuild = [
+    'http://localhost/assets/index-0ldBu1ld.js',
+    'http://localhost/assets/index-0ldBu1ld.css',
+    'http://localhost/assets/zh-CN-0ldBu1ld.js',
+    'http://localhost/assets/pdf-render-worker-0ldBu1ld.js',
+  ];
+  const elsewhere = [
+    'http://localhost/',
+    'http://localhost/manifest.json',
+    'http://localhost/icon.svg',
+    'http://localhost/vendor/pdf.worker.min.js',
+    'http://localhost/vendor/cmaps/UniGB-UCS2-H.bcmap',
+    'http://localhost/vendor/standard_fonts/FoxitSerif.pfb',
+  ];
+  for (const url of [...thisBuild, ...oldBuild, ...elsewhere, ...DEVICE_FILES]) await cache.put(url, new Response('存过的'));
+
+  await dispatchActivate(sw);
+
+  const left = (await cache.keys()).map((request) => request.url);
+  assert.deepEqual(left.sort(), [...thisBuild, ...elsewhere].sort(), '只删旧构建和设备文件');
+  assert.ok(sw.claimed, '清完照旧 claim');
+
+  // 对照：同样一份缓存交给没经过构建的源码（vite dev 发的就是它），/assets/ 一条不少。
+  // 没有清单就不知道哪些是这一版的，宁可不删。
+  const dev = bootServiceWorker();
+  const devCache = await dev.caches.open(dev.cacheName);
+  for (const url of [...thisBuild, ...oldBuild, ...elsewhere]) await devCache.put(url, new Response('存过的'));
+  await dispatchActivate(dev);
+  assert.equal((await devCache.keys()).length, thisBuild.length + oldBuild.length + elsewhere.length);
+  assert.deepEqual(dev.warnings, [], '也不该当成出错');
+});
+
+await check('旧构建清不掉也不挡 claim', async () => {
+  assert.ok(built, '上面那次构建没成功');
+  const sw = bootServiceWorker(built.sw);
+  sw.caches.open = async () => { throw new Error('存储出错'); };
+  await dispatchActivate(sw);
+  assert.ok(sw.claimed);
+  assert.match(sw.warnings.join('\n'), /旧版本的应用代码 — 存储出错/);
 });
 
 console.log(`\n  ${PASS} passed, ${FAIL} failed`);

@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { swBuildAssets } from './scripts/sw-build-assets.mjs';
 
 const dirname = fileURLToPath(new URL('.', import.meta.url));
 const pkg = JSON.parse(readFileSync(resolve(dirname, 'package.json'), 'utf-8'));
@@ -22,6 +23,10 @@ export default defineConfig({
         );
       },
     },
+
+    // 把这次构建的文件清单写进 dist/sw.js。public/sw.js 构建之间一个字不变，浏览器
+    // 就不会换 SW，旧版本的 /assets/ 便在缓存里越攒越多。见 scripts/sw-build-assets.mjs。
+    swBuildAssets(),
   ],
 
   define: {

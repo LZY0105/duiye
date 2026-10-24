@@ -11,7 +11,7 @@
 // ONNX 权重 —— 那套识别栈这个应用已经没有了。改名就是把那块空间还回去的办法。
 //
 // 但改名是整个缓存一起扔，攒下来的字符映射表、字体也跟着没了。只想清掉某一类
-// 条目时别动它，照 forgetDeviceFiles 那样在 activate 里挑出来删。
+// 条目时别动它，照 forgetDeviceFiles、forgetOldBuilds 那样在 activate 里挑出来删。
 const CACHE_NAME = 'duiye-v1';
 
 /**
@@ -41,6 +41,26 @@ const PRE_CACHE = [
   '/vendor/pdf.worker.min.js',
   '/vendor/katex.min.css',
 ];
+
+/**
+ * 这一版构建出来的应用代码：dist/assets/ 下每一个文件的网址。
+ *
+ * public/ 里这份写的是 null，构建时 scripts/sw-build-assets.mjs 把它换成真的清单，
+ * 只有 dist/sw.js 里才有。它只用来认出缓存里哪些 /assets/ 条目已经过时（见
+ * forgetOldBuilds），不拿来预缓存：一次构建出来的文件大半是 KaTeX 字体，每种都有
+ * woff2、woff、ttf 三份，浏览器只会取其中一份。
+ *
+ * 要的是全部文件，不是 index.html 点名的那几个。index.html 只点名入口、样式和几个
+ * 预加载；语言包、两个 worker、字体都是用到时才取的。照 index.html 去删，每次换版
+ * 都会把这一版的这些文件也删掉，当 PWA 用时，下次断网打开就缺语言包、缺渲染 worker。
+ *
+ * 这份清单也就是这一版的构建号。sw.js 原本在构建之间一个字不变，浏览器就不会装
+ * 新的 SW，activate 也就不跑；清单写进来以后，只要有一个文件换了名字，sw.js 就跟着
+ * 变。反过来，两次构建产物一样，sw.js 也一字不差，不会白白重装一次。
+ *
+ * 是 null 时（vite dev 直接发的就是这份源码）一条都不删：不知道哪些是这一版的。
+ */
+const BUILD_ASSETS = null;
 
 /**
  * 设备存储上的文件换成同源网址之后的两个前缀。
@@ -125,6 +145,34 @@ async function forgetDeviceFiles() {
   }
 }
 
+/** 把旧构建留下的应用代码从缓存里删掉。
+ *
+ * /assets/ 下的文件每次构建都换一批名字，fetch 处理器又对它们网络优先、顺手存一份，
+ * 于是每一版用到过的文件都留在缓存里，从来没人删：平板上量过，duiye-v1 里 /assets/
+ * 有 147 条、39.3 MiB，而一次构建的全部产物才 3 MB 多。
+ *
+ * 只删 /assets/ 下、又不在 BUILD_ASSETS 里的。这一版的文件不管是什么时候存进来的
+ * 都留着：换版那一刻，新页面要的文件是旧 SW 替它取、替它存的；内容没变的文件哈希
+ * 也不变，换版之后照样命中。/vendor/、index.html 这些不归它管。
+ *
+ * 清单里的网址先过一遍 URL，和缓存里的网址按同一种转义来比。和 forgetDeviceFiles
+ * 一样，删不掉不算错，不挡后面的 clients.claim()。
+ */
+async function forgetOldBuilds() {
+  if (!BUILD_ASSETS) return;
+  try {
+    const current = new Set(BUILD_ASSETS.map((path) => new URL(path, self.location.origin).pathname));
+    const cache = await caches.open(CACHE_NAME);
+    const stale = (await cache.keys()).filter((request) => {
+      const { pathname } = new URL(request.url);
+      return pathname.startsWith('/assets/') && !current.has(pathname);
+    });
+    await Promise.all(stale.map((request) => cache.delete(request)));
+  } catch (err) {
+    console.warn('SW: 没能清掉旧版本的应用代码 —', err.message);
+  }
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
@@ -144,6 +192,7 @@ self.addEventListener('activate', (event) => {
     const names = await caches.keys();
     await Promise.all(names.filter((n) => n !== CACHE_NAME).map((n) => caches.delete(n)));
     await forgetDeviceFiles();
+    await forgetOldBuilds();
     await self.clients.claim();
   })());
 });
