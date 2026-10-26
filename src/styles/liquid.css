@@ -995,6 +995,13 @@ html[data-skin] .deck-dialog-btn.is-danger {
 html[data-skin] .deck-actions + .deck-dialog-actions .deck-dialog-btn:only-child {
   flex: 1;
 }
+/* 整理内容、自由组合顶上和标题并排的那几颗：小一号。原来是底下动作那一行的大小，46 高、110 宽，比一行内容还高。 */
+html[data-skin] .organizer-head .deck-dialog-btn {
+  min-height: 38px;
+  min-width: 0;
+  padding: 0 20px;
+  font-size: 15px;
+}
 
 html[data-skin] .deck-dialog input[type="text"],
 html[data-skin] .deck-dialog input:not([type]),

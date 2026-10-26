@@ -461,7 +461,7 @@ await test('减少动态：点另一格当场到位；按住、划过去也不�
 
 console.log('\nliquid glass — 透镜的动法（照录屏量出来的数）');
 
-const { createLensMotion } = await import('../src/ui/lens-motion.js');
+const { createLensMotion, travelAt } = await import('../src/ui/lens-motion.js');
 
 /** 推 ms 毫秒，每 1/120 秒一帧（平板的刷新率）。 */
 function simulate(m, ms, onFrame) {
@@ -495,6 +495,33 @@ await test('走一格：100ms 走一半、215ms 到九成、几乎不过冲（�
   assert.ok(Math.abs(t90 - 0.215) < 0.015, `到九成用了 ${t90}s`);
   assert.ok(peak < 1.01, `过冲 ${peak}`);
   assert.ok(m.settled(), '1.5 秒后该停了');
+});
+
+await test('解析解（工具栏那片镜片用的）和逐帧推的是同一根弹簧：半路换目标、带着速度也对得上', () => {
+  const CELL_C = { left: 340, top: 4, width: 80, height: 36 };
+  const m = createLensMotion();
+  m.set(CELL_A);
+  m.target(CELL_B);
+  const d = centreX(CELL_A) - centreX(CELL_B);
+  let worst = 0;
+  simulate(m, 100, (t, r) => {
+    worst = Math.max(worst, Math.abs(centreX(r) - centreX(CELL_B) - travelAt(d, 0, t).x));
+  });
+  // 逐帧推的那边每一步先改速度再挪，比解析解领先半步上下：差不到路程的百分之一。
+  assert.ok(worst < Math.abs(d) * 0.01, `从静止走：差得最多 ${worst}px`);
+  // 走到一半换去 C：解析解从这一刻的位置、速度接着算。
+  const now = travelAt(d, 0, 0.1);
+  m.target(CELL_C);
+  const d2 = centreX(CELL_B) + now.x - centreX(CELL_C);
+  worst = 0;
+  simulate(m, 600, (t, r) => {
+    worst = Math.max(worst, Math.abs(centreX(r) - centreX(CELL_C) - travelAt(d2, now.v, t).x));
+  });
+  assert.ok(worst < Math.abs(d2) * 0.01, `换了目标：差得最多 ${worst}px`);
+  // 录屏量出来的那三个点。
+  assert.ok(Math.abs(travelAt(1, 0, 0.1).x - 0.5) < 0.01);
+  assert.ok(Math.abs(travelAt(1, 0, 0.215).x - 0.1) < 0.01);
+  assert.ok(Math.abs(travelAt(1, 0, 0.3).x - 0.02) < 0.005);
 });
 
 await test('路上顺着方向拉长、慢半拍：最长长出一成以上，出现在跑得最快那一下之后', () => {

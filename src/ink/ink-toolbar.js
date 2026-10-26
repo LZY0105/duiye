@@ -65,6 +65,7 @@ import Logger from '../core/logger.js';
 import { INK_TOOLS } from './stroke.js';
 import { ERASER_MODES } from './ink-eraser.js';
 import { SHAPE_ORDER } from './shape-geometry.js';
+import { travelAt } from '../ui/lens-motion.js';
 
 const STORAGE_KEY = 'ls_ink_toolbar';
 
@@ -198,6 +199,10 @@ const DRAG_FOLD_MS = 200;
 /** 一张卡片退场演多久。和 ink-toolbar.css 里 ink-card-out 同一个数。 */
 const CARD_LEAVE_MS = 150;
 
+/** 换工具时选中那片镜片滑过去（见 _slideLens）：照那根弹簧每 1/120 秒取一帧（平板的刷新率），最长演这么久。 */
+const LENS_FRAME_S = 1 / 120;
+const LENS_SLIDE_MAX_S = 0.8;
+
 /**
  * 停在顶上那一排里时：点开、收起各演多久，和它最多缩到多小。
  *
@@ -274,6 +279,33 @@ function prefersReducedMotion() {
   } catch (_) {
     return false;
   }
+}
+
+/**
+ * 镜片从差 (dx, dy)、速度 (vx, vy) 的地方弹回自己那一格，取样成关键帧（帧间线性）。两个方向各走各的：连着换的时候
+ * 带过来的速度不一定顺着这一趟。走到差不到 0.2px、几乎不动了为止，最后一帧正好落在 0——演完摘掉动画时不跳。
+ */
+function lensSlideFrames(dx, dy, vx = 0, vy = 0) {
+  const at = [];
+  let t = 0;
+  for (;;) {
+    const x = travelAt(dx, vx, t);
+    const y = travelAt(dy, vy, t);
+    at.push([x.x, y.x]);
+    if (t >= LENS_SLIDE_MAX_S || (t > 0 && Math.hypot(x.x, y.x) < 0.2 && Math.hypot(x.v, y.v) < 5)) break;
+    t += LENS_FRAME_S;
+  }
+  const px = (n) => `${Math.round(n * 100) / 100}px`;
+  const last = at.length - 1;
+  return {
+    duration: Math.round(t * 1000),
+    keyframes: at.map(([x, y], i) => ({
+      translate: i === last ? '0px 0px' : `${px(x)} ${px(y)}`,
+      scale: '1',
+      opacity: 1,
+      offset: last ? i / last : 1,
+    })),
+  };
 }
 
 export class InkToolbar {
@@ -750,21 +782,82 @@ export class InkToolbar {
   /**
    * 横杠不重搭，只把「选中的是哪一个」刷一遍。和 _syncCard 是同一个道理。
    *
-   * 新选中的那一格加上 is-selected，它的镜片是新长出来的，入场动画照常播一次；
-   * 没换的那一格什么都不动，也就没有东西可重播。
+   * 换了工具：新选中的那一格的镜片从原来那一格滑过来（_slideLens）；没换的那一格什么都不动，也就没有东西可重播。
    */
   _syncBar() {
     const { state } = this;
+    // 先量原来那一格在哪，再换：换完它的镜片就没了。
+    const was = this.root.querySelector('.ink-tools [data-tool].is-selected');
+    const wasRect = was?.getBoundingClientRect?.();
     for (const button of this.root.querySelectorAll('[data-tool]')) {
       const on = button.dataset.tool === state.tool;
       button.classList.toggle('is-selected', on);
       button.setAttribute('aria-pressed', String(on));
     }
+    const now = this.root.querySelector('.ink-tools [data-tool].is-selected');
+    if (was && now && now !== was) this._slideLens(was, wasRect, now);
     for (const button of this.root.querySelectorAll('.ink-swatches [data-swatch]')) {
       const on = sameColor(button.dataset.swatch, state.color);
       button.classList.toggle('is-selected', on);
       button.setAttribute('aria-pressed', String(on));
     }
+  }
+
+  /**
+   * 换工具时，选中那片镜片从原来那一格滑到新那一格——人说「工具栏点击换工具时那个小dock不要突然消失
+   * 突然出现，要有滑过去的动画」。
+   *
+   * 镜片是每一格自己的 ::before：原来那一格一摘 is-selected，它那片当场就没了，新那一格当场长出一片。
+   * 所以是 FLIP：新那片先放回原来那一格的位置，再滑回自己格子里。走法和「练习 / 设置」那块透镜是同一根
+   * 弹簧（lens-motion.js 的 travel，照人给的录屏拟合的：100ms 走一半、215ms 到九成），取样成关键帧
+   * 交给 Web Animations。它本来那一下入场（ink-toolbar.css 的 ink-lens-in，从小、从透明长出来）让这一段
+   * 盖掉：同样是 scale、opacity，脚本的动画排在 CSS 的后面。
+   *
+   * 连着换：上一片还在半路上，就从它此刻在的地方、带着它此刻的速度接着走，不先跳回格子里、也不先停一下。
+   * 划着挑松手那一下不滑：手指底下那块玻璃已经把镜片带到这一格了（_installScrub）。
+   */
+  _slideLens(from, fromRect, to) {
+    // 上一片此刻离它那一格差多少、走多快：照那根弹簧按它演了多久算回来。
+    let carry = null;
+    const prev = this._lensSlide;
+    if (prev) {
+      const ms = prev.anim.currentTime;
+      if (prev.button === from && prev.anim.playState === 'running' && ms != null) {
+        const x = travelAt(prev.dx, prev.vx, ms / 1000);
+        const y = travelAt(prev.dy, prev.vy, ms / 1000);
+        carry = { x: x.x, y: y.x, vx: x.v, vy: y.v };
+      }
+      this._stopLensSlide();
+    }
+    if (!fromRect?.width || typeof to.animate !== 'function' || prefersReducedMotion()) return;
+    if (to.closest('.ink-tools')?.classList.contains('is-scrubbing')) return;
+    const toRect = to.getBoundingClientRect();
+    if (!toRect.width) return;
+    // 量的是屏幕上的距离。刚点的那一格这时可能还缩着（按压反馈 liquid-bulge-press 的 scale），镜片的
+    // translate 是在它里面走的：折回它自己的尺度。
+    const k = to.offsetWidth > 0 ? toRect.width / to.offsetWidth : 1;
+    const dx = ((fromRect.left + fromRect.width / 2) - (toRect.left + toRect.width / 2)) / k + (carry?.x ?? 0);
+    const dy = ((fromRect.top + fromRect.height / 2) - (toRect.top + toRect.height / 2)) / k + (carry?.y ?? 0);
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+    const vx = carry?.vx ?? 0;
+    const vy = carry?.vy ?? 0;
+    const { keyframes, duration } = lensSlideFrames(dx, dy, vx, vy);
+    const anim = to.animate(keyframes, { duration, easing: 'linear', pseudoElement: '::before' });
+    this._lensSlide = { anim, button: to, dx, dy, vx, vy };
+    const clear = () => { if (this._lensSlide?.anim === anim) this._lensSlide = null; };
+    if (anim?.finished) anim.finished.then(clear, clear);
+  }
+
+  /**
+   * 镜片不滑了，当场落回它自己那一格。
+   *
+   * 划着挑一开始要它让开（ink-toolbar.css：划着的时候选中那片透明）；可滑着的那一段把 opacity 定在 1，
+   * 刚点完就划的话，它会顶着「透明」那一条在半路上多待一会儿。
+   */
+  _stopLensSlide() {
+    const slide = this._lensSlide;
+    this._lensSlide = null;
+    slide?.anim?.cancel?.();
   }
 
   /**
@@ -2390,6 +2483,7 @@ export class InkToolbar {
       // 捕获在 root 上：抬手后浏览器补的那一下点击落在横杠自己身上，不会落到哪一格上。
       try { this.root.setPointerCapture(s.pointerId); } catch (_) { /* not capturable */ }
       s.group.classList.add('is-scrubbing');
+      if (s.kind === 'tool') this._stopLensSlide();
       // 按下去时那一格放出的那道水波纹（liquid-glass.js 的按压反馈）：划起来就不要了。它一路扩散，
       // 这一排玻璃就一路每帧重合成（见 ink-toolbar.css 划着的那几条）。
       for (const wave of s.group.querySelectorAll('.liquid-ripple-wave')) wave.remove();

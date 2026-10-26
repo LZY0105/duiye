@@ -48,6 +48,24 @@ export const PLAIN_LENS_MOTION = Object.freeze({
   arrived: LENS_MOTION.arrived,
 });
 
+/**
+ * 位置那根弹簧（travel）的解析解：一开始离终点差 d、速度 v（px、px/s，朝终点去时和 d 反号），t 秒后差多少、速度多少。
+ *
+ * 给不逐帧推、一下子交给 Web Animations 演完的地方用——工具栏选中那片镜片（ink-toolbar.js 的 _slideLens）。和
+ * createLensMotion 推出来的是同一条（那边是它的逐帧数值解）。travel 的阻尼比小于 1，按欠阻尼解。
+ */
+export function travelAt(d, v, t, { w, z } = LENS_MOTION.travel) {
+  const a = z * w;
+  const b = w * Math.sqrt(1 - z * z);
+  const e = Math.exp(-a * t);
+  const c = Math.cos(b * t);
+  const s = Math.sin(b * t);
+  return {
+    x: e * (d * c + ((v + a * d) / b) * s),
+    v: e * (v * c - ((w * w * d + a * v) / b) * s),
+  };
+}
+
 /** 一步最长多少秒：最硬的那两根（lift.in = 200、stretch 过阻尼的快根约 585）也稳得住。 */
 const MAX_STEP = 1 / 960;
 /**

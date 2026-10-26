@@ -9,6 +9,7 @@
 // gesture can be interrupted leaves both decks untouched.
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 
 let passed = 0;
@@ -44,7 +45,7 @@ dom.window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEv
 const { openOrganizer } = await import('../src/pdf/deck-organizer.js');
 const { ENTRY_KINDS, createDeck, createEntry } = await import('../src/pdf/deck-state.js');
 const { SLOTS } = await import('../src/pdf/workspace-state.js');
-const { initI18n } = await import('../src/core/i18n.js');
+const { initI18n, t } = await import('../src/core/i18n.js');
 await initI18n();
 
 /** Rectangles jsdom cannot compute, laid out as two stacked lists. */
@@ -147,6 +148,41 @@ test('the current entry is marked without the list being reordered', () => {
   assert.ok(rows[0].classList.contains('is-current'));
   assert.deepEqual(rows.map(r => r.querySelector('.organizer-name').textContent),
     ['A1', 'A2', 'B1'], 'saved order, not rotated');
+  assert.equal(rows[0].getAttribute('aria-current'), 'true', 'and a screen reader hears it too');
+  assert.equal(rows[1].getAttribute('aria-current'), null);
+});
+
+test('each head counts its entries and says what is showing on its own line', () => {
+  const o = makeOrganizer();
+  const heads = [...o.panel.querySelectorAll('.organizer-column-head')];
+  assert.equal(heads[0].querySelector('.organizer-count').textContent, t('deck.count', { count: 2 }));
+  assert.equal(heads[1].querySelector('.organizer-count').textContent, t('deck.count', { count: 1 }));
+  assert.equal(heads[0].querySelector('.organizer-what').textContent, t('deck.showing', { name: 'A1' }));
+});
+
+test('Move says where it goes, and the panel closes with Done', () => {
+  const o = makeOrganizer();
+  const labels = [...o.panel.querySelectorAll('[data-role="move"]')].map(b => b.textContent);
+  // 一按就到了，没有下一步要选：按钮上写去向，不带省略号。
+  assert.deepEqual(labels, [
+    t('deck.moveToSide', { side: 'Right' }),
+    t('deck.moveToSide', { side: 'Right' }),
+    t('deck.moveToSide', { side: 'Left' }),
+  ]);
+  assert.ok(labels.every(s => !s.includes('…')), labels.join(' | '));
+  // 每一次挪动都已经提交了，没有什么可以「取消」。
+  assert.equal(o.panel.querySelector('[data-role="close"]').textContent, t('deck.done'));
+  assert.equal(o.panel.querySelector('.deck-dialog-note').textContent, t('deck.organizeHint'));
+});
+
+test('a long name gets two lines before it is cut', () => {
+  // 「自由组合」一行两颗按钮，一行的话机上只露得出五个字。
+  const css = readFileSync(new URL('../src/styles/deck.css', import.meta.url), 'utf-8').replace(/\r\n/g, '\n');
+  const rule = css.slice(css.indexOf('.organizer-name {'));
+  const body = rule.slice(0, rule.indexOf('}'));
+  assert.match(body, /-webkit-line-clamp: 2;/);
+  assert.match(body, /-webkit-box-orient: vertical;/);
+  assert.doesNotMatch(body, /white-space: nowrap/);
 });
 
 // ═══════════════════════════════════════════════════════════════

@@ -718,7 +718,11 @@ async function withAnimations(bar, fn) {
   const oldAnimate = proto.animate;
   const oldGCS = globalThis.getComputedStyle;
   proto.animate = function (keyframes, opts = {}) {
-    const anim = { el: this, keyframes, opts, cancelled: false, finished: new Promise(() => {}), cancel() { this.cancelled = true; } };
+    // 演了多久（currentTime，毫秒）由测试说；没说就是刚开始。
+    const anim = {
+      el: this, keyframes, opts, cancelled: false, playState: 'running', currentTime: 0, finished: new Promise(() => {}),
+      cancel() { this.cancelled = true; this.playState = 'idle'; this.currentTime = null; },
+    };
     played.push(anim);
     return anim;
   };
@@ -1481,6 +1485,123 @@ await test('样式：两组什么手势都不让给浏览器；划着时镜片�
   const paper = noComments($read('src/styles/paper.css'));
   assert.match(paper, /html\[data-skin="minimal"\] \.ink-scrub-drop \{[^}]*--scrub-lift: 1;[^}]*backdrop-filter: none;/);
   assert.match(ink, /\.ink-scrub-drop\.is-on \{ opacity: 1; scale: var\(--scrub-lift, 1\.3\); \}/);
+});
+
+// 换工具时选中那片镜片（每一格自己的 ::before）滑过去，见 ink-toolbar.js 的 _slideLens。原来是旧那片当场
+// 没了、新那片当场从小长出来——人说「小dock不要突然消失突然出现，要有滑过去的动画」。
+
+const { travelAt } = await import('../src/ui/lens-motion.js');
+const lensSlides = (played) => played.filter((a) => a.opts.pseudoElement === '::before');
+/** 一帧关键帧里 translate 的两个数。 */
+const shift = (k) => k.translate.split(' ').map(parseFloat);
+/** 这一段演到 t 秒时镜片差多少（关键帧之间是直走的）。 */
+function shiftAt(a, t) {
+  const f = (t * 1000) / a.opts.duration;
+  const ks = a.keyframes;
+  const i = ks.findIndex((k) => k.offset >= f);
+  if (i <= 0) return shift(ks[Math.max(0, i)]);
+  const [x0, y0] = shift(ks[i - 1]);
+  const [x1, y1] = shift(ks[i]);
+  const u = (f - ks[i - 1].offset) / (ks[i].offset - ks[i - 1].offset);
+  return [x0 + (x1 - x0) * u, y0 + (y1 - y0) * u];
+}
+
+await test('点另一格：新那一格的镜片从原来那一格滑过来，走法和「练习 / 设置」那块透镜是同一根弹簧', async () => {
+  const { bar } = mount();
+  const L = layoutBar(bar);
+  await withAnimations(bar, async ({ played }) => {
+    const marker = bar.root.querySelector('[data-tool="marker"]');
+    marker.click();
+    assert.equal(bar.state.tool, 'marker');
+    const slides = lensSlides(played);
+    assert.equal(slides.length, 1);
+    const [a] = slides;
+    assert.equal(a.el, marker, '演在新那一格的镜片上');
+    // 竖着那一条：钢笔第 0 格、马克笔第 2 格，正中差两格。
+    const d = L.tool('pen').y - L.tool('marker').y;
+    assert.deepEqual(shift(a.keyframes[0]), [0, d]);
+    assert.equal(a.keyframes.at(-1).translate, '0px 0px', '最后一帧正好落定，摘掉动画时不跳');
+    assert.equal(a.opts.easing, 'linear', '曲线在关键帧里');
+    // 录屏里那块透镜：100ms 走一半、215ms 到九成、300ms 到九成八，几乎不过冲。
+    const left = (t) => shiftAt(a, t)[1] / d;
+    assert.ok(Math.abs(left(0.1) - 0.5) < 0.02, `100ms 还差 ${left(0.1)}`);
+    assert.ok(Math.abs(left(0.215) - 0.1) < 0.02, `215ms 还差 ${left(0.215)}`);
+    assert.ok(Math.abs(left(0.3) - 0.02) < 0.01, `300ms 还差 ${left(0.3)}`);
+    assert.ok(a.keyframes.every((k) => shift(k)[1] / d > -0.01), '冲过头不到百分之一');
+    assert.ok(a.opts.duration > 300 && a.opts.duration < 800, `演 ${a.opts.duration}ms`);
+    // 盖掉 CSS 那一下入场（ink-lens-in 动的就是 scale、opacity）：从头到尾整片、不透明。
+    assert.ok(a.keyframes.every((k) => k.scale === '1' && k.opacity === 1));
+  });
+});
+
+await test('连着点：上一片还在半路上，就从它此刻在的地方、带着它此刻的速度接着走', async () => {
+  const { bar } = mount();
+  const L = layoutBar(bar);
+  await withAnimations(bar, async ({ played }) => {
+    bar.root.querySelector('[data-tool="marker"]').click();
+    const [first] = lensSlides(played);
+    first.currentTime = 100;   // 演了 100ms：走了一半，正快着
+    const eraser = bar.root.querySelector('[data-tool="eraser"]');
+    eraser.click();
+    assert.equal(bar.state.tool, 'eraser');
+    assert.ok(first.cancelled, '上一段作罢');
+    const second = lensSlides(played)[1];
+    assert.equal(second.el, eraser);
+    const now = travelAt(L.tool('pen').y - L.tool('marker').y, 0, 0.1);   // 上一片此刻差多少、走多快
+    const d = L.tool('marker').y - L.tool('eraser').y + now.x;
+    assert.ok(Math.abs(shift(second.keyframes[0])[1] - d) < 0.01, '从它此刻在的地方起步，不先跳回马克笔那一格');
+    // 头一帧走的，和照那根弹簧带着这个速度走的一样——比从静止起步走得多，不先停一下。
+    const h = (second.keyframes[1].offset * second.opts.duration) / 1000;
+    const moved = shift(second.keyframes[1])[1] - shift(second.keyframes[0])[1];
+    assert.ok(Math.abs(moved - (travelAt(d, now.v, h).x - d)) < 0.03, `头一帧走了 ${moved}`);
+    assert.ok(moved > travelAt(d, 0, h).x - d + 0.5, '不是从静止起步');
+  });
+});
+
+await test('刚点的那一格还缩着（按压反馈）：屏幕上量的距离折回它自己的尺度', async () => {
+  const { bar } = mount();
+  const L = layoutBar(bar);
+  const marker = bar.root.querySelector('[data-tool="marker"]');
+  // 屏幕上 44、自己 88：夸张一点好算，缩成一半。
+  Object.defineProperty(marker, 'offsetWidth', { value: 88, configurable: true });
+  await withAnimations(bar, async ({ played }) => {
+    marker.click();
+    const [a] = lensSlides(played);
+    assert.equal(a.keyframes[0].translate, `0px ${(L.tool('pen').y - L.tool('marker').y) * 2}px`);
+  });
+});
+
+await test('划着挑：一划起来，滑着的那片当场落定让出去；松手那一下不滑（玻璃已经把它带到了）', async () => {
+  const { bar } = mount();
+  const L = layoutBar(bar);
+  await withAnimations(bar, async ({ played }) => {
+    bar.root.querySelector('[data-tool="pencil"]').click();
+    const [tap] = lensSlides(played);
+    assert.ok(tap && !tap.cancelled);
+    slide(bar, { name: 'pencil', ...L.tool('pencil') }, L.tool('marker'));
+    assert.ok(bar.root.querySelector('.ink-tools').classList.contains('is-scrubbing'));
+    // 滑着的那一段把 opacity 定在 1；不停下，「划着的时候选中那片透明」那一条要等它演完才管得着。
+    assert.ok(tap.cancelled);
+    touch('pointerup', L.tool('marker').x, L.tool('marker').y);
+    assert.equal(bar.state.tool, 'marker');
+    assert.equal(lensSlides(played).length, 1, '松手没有再演一段');
+  });
+});
+
+await test('系统里关了动画：直接换过去，不滑', async () => {
+  const { bar } = mount();
+  layoutBar(bar);
+  const mm = dom.window.matchMedia;
+  dom.window.matchMedia = (q) => ({ matches: /reduce/.test(q), addEventListener() {}, removeEventListener() {} });
+  try {
+    await withAnimations(bar, async ({ played }) => {
+      bar.root.querySelector('[data-tool="marker"]').click();
+      assert.equal(bar.state.tool, 'marker');
+      assert.equal(lensSlides(played).length, 0);
+    });
+  } finally {
+    dom.window.matchMedia = mm;
+  }
 });
 
 // ═══════════════════════════════════════════════════════════════

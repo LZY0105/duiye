@@ -338,6 +338,47 @@ html[data-glass="liquid"] .create-style-tile.is-selected.lgr {
   outline-offset: -2px;
 }
 
+/* 「整理内容」（deck-organizer.js）和照着它做的「自由组合」（.builder）：人发了液态玻璃里的截图说「请优化一下」。原来
+   每一行是一张不透明的白卡，几张连成一整块白，只有正在显示的那一行透着玻璃；把手、「移到…」都描着一圈灰框。这里只换
+   材质（尺寸、间距在 deck.css / liquid.css，三套一样大，换皮肤什么都不挪）：两栏是两块淡淡的格子，行是半透明的小格；
+   正在显示的那一行染一层主题色、描一道细边；把手、「移到…」不描框，「移到…」是主题色的字。 */
+html[data-glass="liquid"] .organizer .organizer-column {
+  border-color: transparent;
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.55), var(--lg-edge);
+}
+html[data-glass="liquid"] .organizer .organizer-column-head {
+  background: transparent;
+  border-bottom-color: var(--lg-separator);
+}
+html[data-glass="liquid"] .organizer .organizer-where,
+html[data-glass="liquid"] .organizer .organizer-name { color: var(--lg-label); }
+html[data-glass="liquid"] .organizer .organizer-count,
+html[data-glass="liquid"] .organizer .organizer-what,
+html[data-glass="liquid"] .organizer .deck-dialog-note { color: var(--lg-label-2); }
+html[data-glass="liquid"] .organizer .organizer-row {
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.7), 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+html[data-glass="liquid"] .organizer .organizer-row.is-current {
+  background: color-mix(in srgb, var(--lg-tint) 12%, rgba(255, 255, 255, 0.5));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--lg-tint) 32%, transparent), 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+html[data-glass="liquid"] .organizer .organizer-handle {
+  border-color: transparent;
+  color: var(--lg-label-3);
+}
+html[data-glass="liquid"] .organizer .organizer-row .deck-row-btn {
+  border-color: transparent;
+  background: var(--lg-tint-softer);
+  color: var(--lg-tint);
+}
+html[data-glass="liquid"] .organizer .organizer-row .deck-row-btn.is-danger {
+  background: var(--lg-red-soft);
+  color: var(--lg-red);
+}
+html[data-glass="liquid"] .organizer .organizer-row .deck-row-btn:not(.is-danger):active { background: var(--lg-tint-soft); }
+
 /* 文档库、说明书盖满整屏时，Agent 那一层是 visibility: hidden（liquid.css）——可 Chromium 照样合成藏着的元素上的
    backdrop-filter：那颗按钮的玻璃身子在说明书右边缘留下一块磨过的圆（浏览器里截图看得见，撤掉滤镜就没了）。藏着的时候
    连滤镜一起撤。 */

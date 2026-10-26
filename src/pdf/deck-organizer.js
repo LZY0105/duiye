@@ -92,25 +92,33 @@ export function openOrganizer({ getDecks, describe, positions, onMove }) {
 
     function render() {
       const decks = getDecks();
+      // 每一次挪动都是当场提交的（onMove），没有什么可以「取消」：关上它的那颗是「完成」。底下那句说怎么用——
+      // 原来抄的是新建、打开时那句「原内容保留在下层」，在这里不对题。
       panel.innerHTML = `
         <div class="organizer-head">
           <div class="deck-dialog-title">${escapeHtml(t('deck.organize'))}</div>
-          <button type="button" class="deck-dialog-btn" data-role="close"></button>
+          <button type="button" class="deck-dialog-btn is-primary" data-role="close"></button>
         </div>
         <div class="organizer-body"></div>
-        <p class="deck-dialog-note">${escapeHtml(t('deck.keptUnderneath'))}</p>`;
-      panel.querySelector('[data-role="close"]').textContent = t('deck.cancel');
+        <p class="deck-dialog-note">${escapeHtml(t('deck.organizeHint'))}</p>`;
+      panel.querySelector('[data-role="close"]').textContent = t('deck.done');
       panel.querySelector('[data-role="close"]').addEventListener('click', finish);
 
       const body = panel.querySelector('.organizer-body');
       for (const position of positions) {
         const deck = decks[position.slot];
+        const other = positions.find(p => p.slot !== position.slot);
         const column = document.createElement('div');
         column.className = 'organizer-column';
+        // 一行「哪一栏 · 几项」，一行「正在显示」的那份——名字长就省略，不折成两行（那一份在下面也是高亮的）。
         column.innerHTML = `
           <div class="organizer-column-head">
-            <span class="organizer-where">${escapeHtml(position.position)}</span>
-            <span class="organizer-what">${escapeHtml(position.current || t('deck.emptySlot'))}</span>
+            <div class="organizer-column-title">
+              <span class="organizer-where">${escapeHtml(position.position)}</span>
+              <span class="organizer-count">${escapeHtml(t('deck.count', { count: deck.entries.length }))}</span>
+            </div>
+            <span class="organizer-what">${escapeHtml(position.current
+    ? t('deck.showing', { name: position.current }) : t('deck.emptySlot'))}</span>
           </div>
           <div class="organizer-list" data-role="organizer-list" data-slot="${position.slot}"></div>`;
         const list = column.querySelector('.organizer-list');
@@ -128,6 +136,7 @@ export function openOrganizer({ getDecks, describe, positions, onMove }) {
           const described = describe(position.slot, entry);
           const row = document.createElement('div');
           row.className = `organizer-row${entry.id === deck.activeId ? ' is-current' : ''}`;
+          if (entry.id === deck.activeId) row.setAttribute('aria-current', 'true');
           row.dataset.entryId = entry.id;
           row.dataset.slot = position.slot;
           row.innerHTML = `
@@ -144,12 +153,12 @@ export function openOrganizer({ getDecks, describe, positions, onMove }) {
             <button type="button" class="deck-row-btn" data-role="move"></button>`;
           row.querySelector('.organizer-name').textContent = described.name || t('deck.untitled');
           const move = row.querySelector('[data-role="move"]');
-          move.textContent = t('deck.moveTo');
+          // 按钮上写去向：一按就挪过去了，没有下一步要选——原来的「移动到…」带着省略号，像是还要再问一句。
+          move.textContent = other ? t('deck.moveToSide', { side: other.position }) : t('deck.moveTo');
           // The click path, always present and always equivalent: it moves the
           // entry to the head of the other deck, which is the position the
           // dialog defaults to as well.
           move.addEventListener('click', async () => {
-            const other = positions.find(p => p.slot !== position.slot);
             if (!other) return;
             await onMove({
               from: position.slot,

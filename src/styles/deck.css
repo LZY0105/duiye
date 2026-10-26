@@ -598,39 +598,72 @@ body.is-scratch-focus .pdf-ws-swap { display: none !important; }
   flex-direction: column;
   min-height: 0;
   border: 1px solid var(--line, rgba(15, 23, 42, 0.1));
-  border-radius: 12px;
+  border-radius: 16px;
   overflow: hidden;
 }
 
 .organizer-column-head {
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
-  padding: 0.5rem 0.7rem;
+  gap: 2px;
+  padding: 10px 14px 8px;
   background: rgba(15, 23, 42, 0.03);
   border-bottom: 1px solid var(--line, rgba(15, 23, 42, 0.08));
 }
 
-.organizer-where { font-size: 0.8rem; font-weight: 700; color: var(--text); }
-.organizer-what { font-size: 0.72rem; color: var(--muted); }
+/* 「左栏 · 3 项」一行，「正在显示：……」一行。书名长，折成两行时栏头比一行内容还高——省略掉，那一份在下面也高亮着。 */
+.organizer-column-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.organizer-where { font-size: 0.94rem; font-weight: 700; color: var(--text); }
+.organizer-count {
+  flex: 0 0 auto;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.organizer-what {
+  min-width: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
+/* 行和行之间隔开一点：原来一行挨一行，几张白卡连成一整块，看不出哪儿是哪一行。 */
 .organizer-list {
   flex: 1 1 auto;
   min-height: 140px;
   overflow-y: auto;
-  padding: 0.3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
   /* The list scrolls itself; a drag near its edge must not scroll the page. */
   overscroll-behavior: contain;
 }
 
 .organizer-row {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 6px;
   min-height: 64px;
-  padding: 0.3rem;
-  border-radius: 10px;
+  padding: 4px 8px 4px 2px;
+  border-radius: 12px;
   background: var(--card, #fff);
+}
+
+/* 「移到右栏」：一颗小胶囊，不抢书名的地方（原来是一颗和行差不多高的方框按钮，书名常常被它挤得只剩半截）。 */
+.organizer-row .deck-row-btn {
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 0.8rem;
 }
 
 .organizer-row.is-current { background: color-mix(in srgb, var(--accent, #2563eb) 8%, transparent); }
@@ -664,14 +697,19 @@ body.is-scratch-focus .pdf-ws-swap { display: none !important; }
   touch-action: none;
 }
 
+/* 两行封顶，再长才省略。原来一行：书名动不动就是「谢惠民《数学分析习题课讲义》第二版全册…」，「自由组合」一行
+   两颗按钮，机上只露得出五个字，分不出是哪一本。两行在 64 高的行里放得下，行不变高。 */
 .organizer-name {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 0.82rem;
+  font-size: 0.94rem;
   font-weight: 600;
-  white-space: nowrap;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* The insertion line carries its meaning in words as well as in position, so
