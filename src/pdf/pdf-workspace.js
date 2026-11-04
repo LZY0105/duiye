@@ -228,6 +228,55 @@ function describeUnusable(index, what) {
 }
 
 /**
+ * 每份文档读出来的全部文字，按适配器对象缓存，读一次全书共用。
+ *
+ * 存的是那个 Promise 而不是结果：两次查询几乎同时发起（连点两下、两栏查同一本
+ * 答案册）时，第二次等的是第一次那一趟，而不是自己再读一遍。读失败的那一趟不
+ * 留着——留下一个永远失败的 Promise，这本书就再也查不了答案了。
+ *
+ * WeakMap 而不是挂在 pane 上：后台打开的答案册没有 pane，书一关、适配器一放手，
+ * 这份文字跟着就能回收。
+ */
+const documentLines = new WeakMap();
+
+function readLines(doc) {
+  let pending = documentLines.get(doc);
+  if (!pending) {
+    pending = Promise.resolve(doc.extractText({})).then(lines => lines ?? []);
+    documentLines.set(doc, pending);
+    pending.catch(() => {
+      if (documentLines.get(doc) === pending) documentLines.delete(doc);
+    });
+  }
+  return pending;
+}
+
+/**
+ * 一份文档，带上它已经读出来的文字。
+ *
+ * verifyPair 的年份和学科两道硬闸读的是 doc.lines，而 PDF 适配器没有这个属性——
+ * 直接交 pane.doc 进去，两道闸扫的是一个空数组。目录是平的书（只有例题叶子、没有
+ * 章节标题）年份和学科只印在正文里，于是 2024 的习题册配 2019 的答案册判成了
+ * VERIFIED_PAIR，放行自动答案。matching-engine 那条路的 readDocument 一直带着
+ * lines，所以出事的只有产品自己排的这一条。
+ *
+ * extractText 也从同一份文字里取，索引器拿到的就是这份，不会为了让闸门通电再读
+ * 一遍整本——首次查询里最贵的就是整本提取。
+ *
+ * 用原型继承而不是展开：outline 是适配器上的 getter，展开会在这一刻把它定死；
+ * 其余方法（pageText、渲染）原样继承。
+ */
+function withLines(doc, lines) {
+  return Object.create(doc, {
+    lines: { value: lines },
+    extractText: {
+      value: async ({ from = 1, to = doc.numPages } = {}) =>
+        lines.filter(l => l.page >= from && l.page <= to),
+    },
+  });
+}
+
+/**
  * 取助手名称的插值变量，而不是拼好的一句话。
  *
  * 名称出现在句子中间（"关闭页问后…"），成品句子在这里取一次就把语言定死了，
@@ -3678,8 +3727,12 @@ export class PdfWorkspace {
       // what caught the missing cmaps: a Chinese textbook extracting with no
       // Chinese in it means the READER is misconfigured, not that the book is.
       const opts = { expectScript: 'han' };
-      if (!pane.questionIndex) pane.questionIndex = await indexQuestionDocument(pane.doc, opts);
-      if (!other.answerIndex) other.answerIndex = await indexAnswerDocument(other.doc, opts);
+      // 两本书的文字各读一次，索引和下面的配对核验共用同一份——核验要的年份和
+      // 学科只印在正文里。见 withLines。
+      const exerciseDoc = withLines(pane.doc, await readLines(pane.doc));
+      const answerDoc = withLines(other.doc, await readLines(other.doc));
+      if (!pane.questionIndex) pane.questionIndex = await indexQuestionDocument(exerciseDoc, opts);
+      if (!other.answerIndex) other.answerIndex = await indexAnswerDocument(answerDoc, opts);
 
       // A book can fail to index in several ways that need different messages
       // and have different remedies. OPAQUE is NOT one of them — the text is
@@ -3727,10 +3780,14 @@ export class PdfWorkspace {
       //
       // So the verdict is computed once per pair from the two indexes we
       // already hold, and passed in. A rejected pair never reaches matching.
+      //
+      // 交进去的是带着正文的那两份，不是 pane.doc：年份和学科两道闸读的是
+      // doc.lines，PDF 适配器没有这个属性。原来直接交适配器，两道闸扫的是空数组，
+      // 2024 的习题册配 2019 的答案册判成了 VERIFIED。
       if (!pane.pairVerdict) {
         pane.pairVerdict = verifyPair({
-          exerciseDoc: pane.doc,
-          answerDoc: other.doc,
+          exerciseDoc,
+          answerDoc,
           exerciseIndex: pane.questionIndex,
           answerIndex: other.answerIndex,
         });
